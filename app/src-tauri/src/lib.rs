@@ -31,6 +31,23 @@ pub struct Event {
     pub kind: EventKind,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+}
+
+impl MouseButton {
+    const ALL: [Self; 2] = [Self::Left, Self::Right];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => 1,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum EventKind {
     Key {
@@ -40,7 +57,7 @@ pub enum EventKind {
         down: bool,
     },
     Mouse {
-        button: u8,
+        button: MouseButton,
         down: bool,
         x: i32,
         y: i32,
@@ -64,7 +81,7 @@ struct Inner {
     events: Vec<Event>,
     duration: Duration,
     message: String,
-    held_buttons: u8,
+    held_buttons: [bool; 2],
     drag_move_count: usize,
     last_release: Option<(i32, i32)>,
     last_replay_release: Option<(i32, i32)>,
@@ -100,7 +117,7 @@ impl Engine {
                 events: Vec::new(),
                 duration: Duration::ZERO,
                 message: "Ready. F9 records in another application.".into(),
-                held_buttons: 0,
+                held_buttons: [false; 2],
                 drag_move_count: 0,
                 last_release: None,
                 last_replay_release: None,
@@ -185,7 +202,7 @@ impl Engine {
             inner.start = Some(Instant::now());
             inner.events.clear();
             inner.duration = Duration::ZERO;
-            inner.held_buttons = 0;
+            inner.held_buttons = [false; 2];
             inner.drag_move_count = 0;
             inner.last_release = None;
             inner.last_replay_release = None;
@@ -231,11 +248,9 @@ impl Engine {
                 }
             }
             EventKind::Mouse { button, down, .. } => {
+                inner.held_buttons[button.index()] = *down;
                 if *down {
-                    inner.held_buttons |= *button;
                     inner.last_move_at = None;
-                } else {
-                    inner.held_buttons &= !button;
                 }
                 if let EventKind::Mouse {
                     down: false, x, y, ..
@@ -245,7 +260,7 @@ impl Engine {
                 }
             }
             EventKind::Move { .. } => {
-                if inner.held_buttons == 0 {
+                if !inner.held_buttons.iter().any(|held| *held) {
                     return;
                 }
                 if inner
@@ -291,8 +306,8 @@ impl Engine {
                 },
             });
         }
-        for button in [1, 2] {
-            if inner.held_buttons & button != 0 {
+        for button in MouseButton::ALL {
+            if inner.held_buttons[button.index()] {
                 inner.events.push(Event {
                     at,
                     kind: EventKind::Mouse {
@@ -409,7 +424,7 @@ impl Engine {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Held {
     Key(u16, u16, bool),
-    Button(u8),
+    Button(MouseButton),
 }
 
 fn update_held(held: &mut Vec<Held>, item: Held, down: bool) {
