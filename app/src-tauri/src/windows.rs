@@ -1,4 +1,4 @@
-use crate::{Engine, EventKind, Held};
+use crate::{Engine, EventKind, Held, MouseButton};
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::sync::{Arc, OnceLock};
@@ -186,25 +186,25 @@ unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -
         if input.dwExtraInfo != EXTRA_INFO && !own_point(input.pt) {
             let kind = match message as u32 {
                 WM_LBUTTONDOWN => Some(EventKind::Mouse {
-                    button: 1,
+                    button: MouseButton::Left,
                     down: true,
                     x: input.pt.x,
                     y: input.pt.y,
                 }),
                 WM_LBUTTONUP => Some(EventKind::Mouse {
-                    button: 1,
+                    button: MouseButton::Left,
                     down: false,
                     x: input.pt.x,
                     y: input.pt.y,
                 }),
                 WM_RBUTTONDOWN => Some(EventKind::Mouse {
-                    button: 2,
+                    button: MouseButton::Right,
                     down: true,
                     x: input.pt.x,
                     y: input.pt.y,
                 }),
                 WM_RBUTTONUP => Some(EventKind::Mouse {
-                    button: 2,
+                    button: MouseButton::Right,
                     down: false,
                     x: input.pt.x,
                     y: input.pt.y,
@@ -269,12 +269,12 @@ mod tests {
     }
 }
 
-fn mouse_button(button: u8, down: bool) -> INPUT {
+fn mouse_button(button: MouseButton, down: bool) -> INPUT {
     let flags = match (button, down) {
-        (1, true) => MOUSEEVENTF_LEFTDOWN,
-        (1, false) => MOUSEEVENTF_LEFTUP,
-        (2, true) => MOUSEEVENTF_RIGHTDOWN,
-        _ => MOUSEEVENTF_RIGHTUP,
+        (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
+        (MouseButton::Left, false) => MOUSEEVENTF_LEFTUP,
+        (MouseButton::Right, true) => MOUSEEVENTF_RIGHTDOWN,
+        (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
     };
     INPUT {
         r#type: INPUT_MOUSE,
