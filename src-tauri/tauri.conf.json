@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MacroLoom prototype",
+  "version": "0.1.0",
+  "identifier": "com.macroloom.prototype",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "MacroLoom prototype", "width": 500, "height": 400, "resizable": true }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false }
+}
