@@ -11,11 +11,11 @@ The initial release targets Windows 11. See the [product requirements](docs/agen
 
 ## Develop on Windows 11 x64
 
-Install Node.js and the [Tauri 2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/) (Rust with the MSVC target, Microsoft C++ Build Tools, and WebView2). From the repository root, run:
+Follow the [pinned toolchain and dependency setup](docs/agents/quality-gate.md#reproducible-setup), including the [Tauri 2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/) (Rust with the MSVC target, Microsoft C++ Build Tools, and WebView2). From the repository root, run:
 
 ```powershell
 cd app
-npm.cmd install
+npm.cmd ci
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 npm.cmd run tauri -- dev
 ```
@@ -27,3 +27,8 @@ npm.cmd run tauri -- build --no-bundle
 ```
 
 The executable is written to `app/src-tauri/target/release/macroloom.exe`, relative to the repository root.
+
+Before completing a code task, run `npm.cmd --prefix app run verify` from the
+repository root. It fetches `origin` and runs the source-preserving quality checks.
+See the [quality gate](docs/agents/quality-gate.md) for individual commands,
+complexity rules, base overrides, and owner-approved exceptions.

@@ -3,3 +3,7 @@ dist/
 app/src-tauri/target/
 app/src-tauri/gen/schemas/
 *.log
+.venv/
+__pycache__/
+*.pyc
+.quality-output/

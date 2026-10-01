@@ -1,0 +1,6 @@
+lizard==1.24.0
+pathspec==1.1.1
+Pygments==2.21.0
+tree-sitter==0.25.2
+tree-sitter-rust==0.24.2
+tree-sitter-typescript==0.23.2

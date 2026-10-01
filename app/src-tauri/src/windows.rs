@@ -29,6 +29,7 @@ const STOP_HOTKEY: i32 = 2;
 const EXTRA_INFO: usize = 0x4D4C_3038;
 
 pub fn enable_physical_dpi() {
+    // SAFETY: this process-wide Win32 call takes a documented constant, with no borrowed pointers.
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
@@ -49,6 +50,8 @@ impl WindowState {
 
     pub fn compact(&mut self, compact: bool) -> Result<(), String> {
         let hwnd = self.hwnd as HWND;
+        // SAFETY: hwnd comes from Tauri's live main window. RECT storage is initialized
+        // before reading it; SetWindowPos receives values, and failures are propagated.
         unsafe {
             if compact {
                 if self.original.is_some() {
@@ -95,6 +98,8 @@ impl WindowState {
 
 pub fn start_hooks(engine: Arc<Engine>) {
     let _ = ENGINE.set(engine.clone());
+    // SAFETY: hooks use static callbacks; message storage is initialized and all
+    // successfully installed hooks/hotkeys are released on message-loop exit.
     std::thread::spawn(move || unsafe {
         let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), null_mut(), 0);
         let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), null_mut(), 0);
@@ -103,17 +108,7 @@ pub fn start_hooks(engine: Arc<Engine>) {
         engine.set_hotkeys(f9, f8 && !keyboard.is_null() && !mouse.is_null());
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            if msg.message == WM_HOTKEY {
-                if msg.wParam == RECORD_HOTKEY as usize {
-                    let _ = engine.start_recording();
-                }
-                if msg.wParam == STOP_HOTKEY as usize {
-                    let _ = engine.stop();
-                }
-            } else {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+            handle_hook_message(&engine, &msg);
         }
         if f9 {
             UnregisterHotKey(null_mut(), RECORD_HOTKEY);
@@ -130,7 +125,23 @@ pub fn start_hooks(engine: Arc<Engine>) {
     });
 }
 
+unsafe fn handle_hook_message(engine: &Engine, message: &MSG) {
+    // SAFETY: the caller supplies an initialized MSG returned by GetMessageW.
+    if message.message == WM_HOTKEY {
+        if message.wParam == RECORD_HOTKEY as usize {
+            let _ = engine.start_recording();
+        }
+        if message.wParam == STOP_HOTKEY as usize {
+            let _ = engine.stop();
+        }
+    } else {
+        TranslateMessage(message);
+        DispatchMessageW(message);
+    }
+}
+
 fn own_window_focused() -> bool {
+    // SAFETY: foreground HWND is OS-owned; process output points to live local storage.
     unsafe {
         let foreground = GetForegroundWindow();
         let mut process = 0;
@@ -142,6 +153,7 @@ fn own_window_focused() -> bool {
 }
 
 fn own_point(point: POINT) -> bool {
+    // SAFETY: hwnd is held by Tauri and rect points to initialized local storage.
     unsafe {
         let Some(engine) = ENGINE.get() else {
             return false;
@@ -157,12 +169,11 @@ fn own_point(point: POINT) -> bool {
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
+    // SAFETY: for a nonnegative hook code Windows supplies a KBDLLHOOKSTRUCT
+    // valid for this callback. We never retain its pointer, and always chain the hook.
     if code >= 0 && !own_window_focused() {
         let input = &*(data as *const KBDLLHOOKSTRUCT);
-        if input.dwExtraInfo != EXTRA_INFO
-            && input.vkCode != VK_F8 as u32
-            && input.vkCode != VK_F9 as u32
-        {
+        if is_capture_key(input) {
             let down = message == WM_KEYDOWN as usize || message == WM_SYSKEYDOWN as usize;
             let up = message == WM_KEYUP as usize || message == WM_SYSKEYUP as usize;
             if down || up {
@@ -180,7 +191,13 @@ unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM
     CallNextHookEx(null_mut(), code, message, data)
 }
 
+fn is_capture_key(input: &KBDLLHOOKSTRUCT) -> bool {
+    input.dwExtraInfo != EXTRA_INFO && input.vkCode != VK_F8 as u32 && input.vkCode != VK_F9 as u32
+}
+
 unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
+    // SAFETY: a nonnegative mouse-hook code supplies a live MSLLHOOKSTRUCT.
+    // Its data is copied into owned events before this callback returns.
     if code >= 0 {
         let input = &*(data as *const MSLLHOOKSTRUCT);
         if input.dwExtraInfo != EXTRA_INFO && !own_point(input.pt) {
@@ -225,6 +242,7 @@ unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -
 
 pub fn cursor_position() -> (i32, i32) {
     let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: the OS writes to an initialized, live POINT on this stack.
     unsafe {
         GetCursorPos(&mut point);
     }
@@ -232,6 +250,7 @@ pub fn cursor_position() -> (i32, i32) {
 }
 
 fn mouse_move(x: i32, y: i32) -> INPUT {
+    // SAFETY: GetSystemMetrics takes only documented metric identifiers.
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
     let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) }.max(1);
@@ -255,18 +274,6 @@ fn mouse_move(x: i32, y: i32) -> INPUT {
 
 fn normalize_pixel(pixel: i32, origin: i32, span: i32) -> i32 {
     ((pixel as i64 - origin as i64) * 65535 / (span - 1).max(1) as i64).clamp(0, 65535) as i32
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_pixel;
-
-    #[test]
-    fn maps_negative_virtual_desktop_coordinates_to_absolute_input() {
-        assert_eq!(normalize_pixel(-1920, -1920, 3840), 0);
-        assert_eq!(normalize_pixel(1919, -1920, 3840), 65535);
-        assert!(normalize_pixel(-1, -1920, 3840) < normalize_pixel(0, -1920, 3840));
-    }
 }
 
 fn mouse_button(button: MouseButton, down: bool) -> INPUT {
@@ -314,6 +321,8 @@ fn keyboard(vk: u16, scan: u16, extended: bool, down: bool) -> INPUT {
 }
 
 fn send(inputs: &[INPUT]) -> Result<(), String> {
+    // SAFETY: inputs is a live contiguous slice of initialized INPUT values;
+    // its count and size describe exactly that slice for the duration of the call.
     let count = unsafe {
         SendInput(
             inputs.len() as u32,
@@ -347,5 +356,32 @@ pub fn release(held: Held) -> Result<(), String> {
     match held {
         Held::Key(vk, scan, extended) => send(&[keyboard(vk, scan, extended, false)]),
         Held::Button(button) => send(&[mouse_button(button, false)]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_negative_virtual_desktop_coordinates_to_absolute_input() {
+        assert_eq!(normalize_pixel(-1920, -1920, 3840), 0);
+        assert_eq!(normalize_pixel(1919, -1920, 3840), 65535);
+        assert!(normalize_pixel(-1, -1920, 3840) < normalize_pixel(0, -1920, 3840));
+    }
+
+    #[test]
+    fn capture_excludes_control_keys_and_our_injected_input() {
+        let input = |vk_code, extra| KBDLLHOOKSTRUCT {
+            vkCode: vk_code,
+            scanCode: 0,
+            flags: 0,
+            time: 0,
+            dwExtraInfo: extra,
+        };
+        assert!(is_capture_key(&input(65, 0)));
+        assert!(!is_capture_key(&input(VK_F8 as u32, 0)));
+        assert!(!is_capture_key(&input(VK_F9 as u32, 0)));
+        assert!(!is_capture_key(&input(65, EXTRA_INFO)));
     }
 }
