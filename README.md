@@ -2,11 +2,14 @@
 
 ML-8 is a Windows input feasibility prototype. It records keyboard input, positioned left/right clicks, and held-button movement from another desktop application, then replays the take from memory. The shell shrinks and stays on top during a session without activating itself over the target.
 
+The runnable desktop project lives in `app/` (React/TypeScript frontend and Tauri/Rust backend). Repository planning and validation documents live in `docs/`.
+
 ## Run on Windows 11 x64
 
 Install Node.js and the [Tauri 2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/) (Rust with the MSVC target, Microsoft C++ Build Tools, and WebView2). Then:
 
 ```powershell
+cd app
 npm.cmd install
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 npm.cmd run tauri -- dev
@@ -18,7 +21,7 @@ To build an executable with the frontend embedded:
 npm.cmd run tauri -- build --no-bundle
 ```
 
-The result is `src-tauri/target/release/macroloom.exe`. This prototype does not save recordings or package a portable ZIP.
+From the repository root, the result is `app/src-tauri/target/release/macroloom.exe`. This prototype does not save recordings or package a portable ZIP.
 
 ## Try a take
 

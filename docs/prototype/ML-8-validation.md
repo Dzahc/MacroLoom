@@ -4,7 +4,7 @@
 
 Tested September 30, 2026 on Windows 11 Home x64, build 10.0.26200, with an Intel Core i7-11700F (16 logical processors) and 31.9 GiB RAM. The available setup had one 2560 × 1440 logical display at 150% scaling, giving a 3840 × 2160 physical virtual desktop. MacroLoom and Notepad ran at the same privilege level. A PowerShell Win32 input probe supplied repeatable input; the Notepad editor and MacroLoom status were read through Windows UI Automation.
 
-`npm.cmd run build`, `cargo check`, `cargo test`, `cargo build`, and `npm.cmd run tauri -- build --no-bundle` passed. The production build yielded a runnable x64 executable with the frontend embedded. The native test covers conversion of signed virtual-desktop pixel coordinates to the absolute `SendInput` range. Tauri's debug executable requires Vite at `127.0.0.1:1420`.
+`npm.cmd run build`, `cargo check`, `cargo test`, `cargo build`, and `npm.cmd run tauri -- build --no-bundle` passed. Run npm commands from `app/` and Cargo commands from `app/src-tauri/`; the implementation moved into `app/` after this validation. The production build yielded a runnable x64 executable with the frontend embedded. The native test covers conversion of signed virtual-desktop pixel coordinates to the absolute `SendInput` range. Tauri's debug executable requires Vite at `127.0.0.1:1420`.
 
 ## Observations
 
