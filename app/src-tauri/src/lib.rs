@@ -1,4 +1,7 @@
+mod app_mode;
 mod windows;
+
+use app_mode::AppMode;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -6,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+const DESKTOP_START_FAILURE: &str = "failed to run MacroLoom desktop event loop";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -453,24 +458,32 @@ fn wait_until(deadline: Instant, cancel: &AtomicBool) -> bool {
 }
 
 #[tauri::command]
+fn app_mode() -> AppMode {
+    AppMode::current()
+}
+
+#[tauri::command]
 fn snapshot(engine: State<'_, Arc<Engine>>) -> Snapshot {
     engine.snapshot()
 }
 
 #[tauri::command]
 fn start_recording(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
+    AppMode::current().require_input()?;
     engine.start_recording()?;
     Ok(engine.snapshot())
 }
 
 #[tauri::command]
 fn stop(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
+    AppMode::current().require_input()?;
     engine.stop()?;
     Ok(engine.snapshot())
 }
 
 #[tauri::command]
 fn play(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
+    AppMode::current().require_input()?;
     engine.play()?;
     Ok(engine.snapshot())
 }
@@ -480,18 +493,22 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let engine = Engine::new(app.handle().clone())?;
-            windows::start_hooks(engine.clone());
+            if AppMode::current().input_prototype {
+                windows::start_hooks(engine.clone());
+            }
             app.manage(engine);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_mode,
             snapshot,
             start_recording,
             stop,
             play
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run MacroLoom prototype");
+        // Event-loop startup failure is fatal: no running window exists to recover through.
+        .expect(DESKTOP_START_FAILURE);
 }
 
 #[cfg(test)]

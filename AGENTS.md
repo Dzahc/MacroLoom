@@ -22,6 +22,7 @@ Single-context layout: a root glossary and repo-wide ADRs. See `docs/agents/doma
 
 ## Code and Windows safety
 
+- Always add and maintain documentation for every class, function, and method, including private and internal helpers. Use JSDoc in TypeScript and doc comments in Rust; describe purpose, parameters and return values, and relevant side effects, failure conditions, or invariants.
 - Use named constants instead of hardcoded strings or magic numbers in both source and test files.
 - Use explicit Rust `Result`/`Option` handling at fallible boundaries. Explain invariants behind panic paths; keep owned session data and synchronization lifetimes clear. Put `unsafe` around the smallest necessary operations and document pointer/handle validity, initialization, and lifetime assumptions.
 - Keep input callbacks short; run storage and long work away from the UI/native event loops. Allow one active session; recording and playback never overlap. Preserve monotonic deadlines and equal-timestamp ordering. Stop stays effective through waits, holds, drags, and repeat intervals; completion, failure, cancellation, and exit release session-owned input. Injection failure stops playback; resume never bursts overdue input.

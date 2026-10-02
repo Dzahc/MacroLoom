@@ -1,64 +1,52 @@
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { LibraryApp } from './library-app';
 import './style.css';
-import { PrototypeView, type Command, type Snapshot } from './prototype-view';
+
+type AppMode = { inputPrototype: boolean };
+const LIBRARY_MODE: AppMode = { inputPrototype: false };
+const MODE_COMMAND = 'app_mode';
+const ROOT_ID = 'root';
+const STARTING = 'Starting MacroLoom…';
+const START_FAILED = 'Could not start MacroLoom.';
+const PrototypeApp = lazy(() =>
+  import('./prototype-app').then((module) => ({
+    default: module.PrototypeApp,
+  })),
+);
 
 function App() {
-  const [state, setState] = useState<Snapshot | null>(null);
+  const [mode, setMode] = useState<AppMode | null>(() =>
+    isTauri() ? null : LIBRARY_MODE,
+  );
   const [error, setError] = useState('');
-  const [uiResponse, setUiResponse] = useState<number | null>(null);
-
   useEffect(() => {
+    if (!isTauri()) return;
     let disposed = false;
-    const off = listen<Snapshot>('prototype-state', (event) => {
-      if (!disposed) setState(event.payload);
-    });
-    void invoke<Snapshot>('snapshot')
+    void invoke<AppMode>(MODE_COMMAND)
       .then((value) => {
-        if (!disposed) setState(value);
+        if (!disposed) setMode(value);
       })
-      .catch((reason) => setError(String(reason)));
-    const timer = window.setInterval(() => {
-      void invoke<Snapshot>('snapshot')
-        .then((value) => {
-          if (!disposed) setState(value);
-        })
-        .catch(() => {});
-    }, 100);
+      .catch((reason: unknown) => {
+        if (!disposed) setError(`${START_FAILED} ${String(reason)}`);
+      });
     return () => {
       disposed = true;
-      window.clearInterval(timer);
-      void off.then((unlisten) => unlisten());
     };
   }, []);
-
-  async function action(command: Command) {
-    const start = performance.now();
-    setError('');
-    try {
-      const next = await invoke<Snapshot>(command);
-      setState(next);
-      requestAnimationFrame(() =>
-        setUiResponse(Math.round(performance.now() - start)),
-      );
-    } catch (reason) {
-      setError(String(reason));
-    }
-  }
-
-  return (
-    <PrototypeView
-      state={state}
-      error={error}
-      uiResponse={uiResponse}
-      onAction={action}
-    />
-  );
+  if (error) return <p role="alert">{error}</p>;
+  if (!mode) return <p role="status">{STARTING}</p>;
+  if (mode.inputPrototype)
+    return (
+      <Suspense fallback={<p role="status">{STARTING}</p>}>
+        <PrototypeApp />
+      </Suspense>
+    );
+  return <LibraryApp />;
 }
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById(ROOT_ID)!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,
