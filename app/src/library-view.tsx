@@ -32,6 +32,11 @@ type ViewProps = LibraryCallbacks & {
 type MenuAnchor = { macroId: string; x: number; y: number };
 const MENU_GAP = 8;
 const MENU_ACTIONS = [ACTION.configure, ACTION.delete] as const;
+const MENU_EVENT = {
+  pointerDown: 'pointerdown',
+  blur: 'blur',
+  resize: 'resize',
+} as const;
 
 /**
  * Sends an available action request to the host without changing library state.
@@ -140,14 +145,14 @@ function ContextMenu({
         )
           close();
       }
-      document.addEventListener('pointerdown', outside);
-      window.addEventListener('blur', close);
-      window.addEventListener('resize', close);
+      document.addEventListener(MENU_EVENT.pointerDown, outside);
+      window.addEventListener(MENU_EVENT.blur, close);
+      window.addEventListener(MENU_EVENT.resize, close);
       /** Removes all menu dismissal listeners when the anchor/owner changes or unmounts. */
       return () => {
-        document.removeEventListener('pointerdown', outside);
-        window.removeEventListener('blur', close);
-        window.removeEventListener('resize', close);
+        document.removeEventListener(MENU_EVENT.pointerDown, outside);
+        window.removeEventListener(MENU_EVENT.blur, close);
+        window.removeEventListener(MENU_EVENT.resize, close);
       };
     },
     [close],
