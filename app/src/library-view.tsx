@@ -51,7 +51,7 @@ function emit(
   if (request) props.onAction(request);
 }
 
-/** @param props State/callbacks controlling availability. @returns Icon-only actions with accessible names. */
+/** @param props State/callbacks controlling availability. @returns Icon-only actions with shortcut-aware names. */
 function Toolbar(props: ViewProps) {
   return (
     <nav className="library-toolbar" aria-label={LABEL.controls}>
@@ -62,7 +62,7 @@ function Toolbar(props: ViewProps) {
             type="button"
             key={action}
             className={`icon-button action-${action}`}
-            aria-label={LABEL[action]}
+            aria-label={TOOLTIP[action]}
             title={TOOLTIP[action]}
             disabled={!canRequest(props.snapshot, action)}
             onClick={

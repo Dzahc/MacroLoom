@@ -27,7 +27,7 @@ recovery, and global shortcut integration remain in subsequent stories.
   double-click emits one Play request for the clicked ID.
 - Operation toasts are serialized in arrival order with four seconds of visible
   time, explicit dismissal, and accessible announcements. Hover, focus, and
-  document invisibility pause their remaining lifetime. Timer/listener cleanup
+  document invisibility or a partially/fully offscreen toast pause their remaining lifetime. Timer/listener cleanup
   runs on unmount. Toasts occupy space below the banner and cannot cover Stop.
 - The backend exposes typed `app_mode` metadata. Only the explicit debug
   `input-prototype` feature starts live hooks and F9/F8 registration; live commands
@@ -72,8 +72,27 @@ Native tests cover live-command mode gating alongside the existing prototype tes
 The required command is `npm.cmd --prefix app run verify`. The final result is
 recorded in GitHub issue #9 after the checks complete.
 
-## Documentation review follow-up — October 2, 2026
+## PR review follow-up — October 2, 2026
 
-Added JSDoc for the ML-9 components, internal helpers, callbacks, and queue
-lifetime/subscription methods, plus Rust documentation for mode metadata and
-command preconditions.
+- Added JSDoc for the ML-9 components, internal helpers, callbacks, and queue
+  lifetime/subscription methods, plus Rust documentation for mode metadata and
+  command preconditions.
+- Record and Stop use the same F9/F8-aware text for accessible names and tooltips.
+- Toast presentation observes full intersection with the viewport and scrolling
+  ancestors. Expiration stays paused until visibility is confirmed, pauses when
+  clipped/offscreen, and resumes the remaining time on re-entry. Replacing or
+  unmounting a toast disconnects the observer and document listener.
+- Focused regressions failed before the fixes: shortcut names omitted F9/F8,
+  and document-only visibility allowed an offscreen toast to expire unseen.
+  Deterministic tests cover initial offscreen state, scrolling out/back in,
+  overlapping pause reasons, successor dismissal, host observer thresholds, and
+  subscription cleanup.
+- Browser automation exposed no available browser in this session. The reported
+  600 × 480 interaction was therefore checked through controlled intersection
+  reports and the real browser adapter, rather than a new visual walkthrough.
+
+`npm.cmd --prefix app run verify` **PASS** on October 2, 2026: all formatting,
+static analysis, production build, and pinned-environment checks passed; 21
+frontend/tooling tests, 7 Rust tests, and 33 Python quality fixtures passed.
+Complexity checked 369 functions across index/worktree against refreshed
+`origin/develop`, with limit 10 and zero failures or exceptions.

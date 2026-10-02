@@ -12,6 +12,7 @@ import {
   PHASE,
   SOURCE,
   TOOLBAR,
+  TOOLTIP,
   TIME,
   canRequest,
   formatDuration,
@@ -151,7 +152,7 @@ void test('duration formatting handles subsecond values, whole minutes and hours
   );
 });
 
-void test('view puts icon-only actions above status and list with accessible names, titles and selection' /** Checks rendered action ordering, accessible names, icon-only content, and selection text. */, () => {
+void test('view puts icon-only actions above status and list with accessible names, titles and selection' /** Checks rendered action ordering, shortcut-aware accessible names, icon-only content, and selection text. */, () => {
   const markup = render(snapshot({ selectedId: SELECTED.id }));
   assert.ok(markup.indexOf('<nav') < markup.indexOf('role="status"'));
   assert.ok(markup.indexOf('role="status"') < markup.indexOf('<ul'));
@@ -166,8 +167,8 @@ void test('view puts icon-only actions above status and list with accessible nam
   assert.deepEqual(
     labels,
     TOOLBAR.map(
-      /** @param action Ordered action. @returns Its source-defined name for the action. */
-      (action) => LABEL[action],
+      /** @param action Ordered action. @returns Its source-defined name including any shortcut hint. */
+      (action) => TOOLTIP[action],
     ),
   );
   assert.doesNotMatch(toolbar, /<span/);

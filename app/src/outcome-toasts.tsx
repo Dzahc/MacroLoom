@@ -1,11 +1,12 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { ActionIcon } from './action-icon';
 import { LABEL } from './library-model';
 import { OutcomeQueue, PAUSE } from './outcome-queue';
+import { BROWSER_VISIBILITY, observeToastVisibility } from './toast-visibility';
 
 /**
  * Presents only the queue head and announces each identity through a polite live region.
- * @param props Owner-managed queue; document/hover/focus pause expiration.
+ * @param props Owner-managed queue; document/intersection/hover/focus pause expiration.
  * @returns A nonmodal toast slot with accessible dismissal. Visibility subscriptions
  * disconnect on replacement/unmount; the owner remains responsible for queue disposal.
  */
@@ -16,20 +17,14 @@ export function OutcomeToasts({ queue }: { queue: OutcomeQueue }) {
     queue.getSnapshot,
   );
   const current = outcomes[0];
-  useEffect(
-    /** Subscribes document visibility changes and returns listener cleanup. */
+  const toast = useRef<HTMLElement>(null);
+  useLayoutEffect(
+    /** Pauses before paint until full intersection is confirmed; returns subscription cleanup. */
     () => {
-      /** Updates the hidden-document pause reason without changing hover/focus. */
-      function visibility() {
-        if (document.hidden) queue.pause(PAUSE.hidden);
-        else queue.resume(PAUSE.hidden);
-      }
-      visibility();
-      document.addEventListener('visibilitychange', visibility);
-      /** Removes the document listener on unmount or queue replacement. */
-      return () => document.removeEventListener('visibilitychange', visibility);
+      if (!current || !toast.current) return;
+      return observeToastVisibility(queue, toast.current, BROWSER_VISIBILITY);
     },
-    [queue],
+    [queue, current],
   );
   return (
     <div className="toast-slot">
@@ -43,6 +38,7 @@ export function OutcomeToasts({ queue }: { queue: OutcomeQueue }) {
       </div>
       {current && (
         <aside
+          ref={toast}
           key={current.id}
           className={`outcome-toast ${current.kind}`}
           onMouseEnter={

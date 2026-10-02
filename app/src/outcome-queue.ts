@@ -4,6 +4,7 @@ export const PAUSE = {
   hover: 'hover',
   focus: 'focus',
   hidden: 'hidden',
+  offscreen: 'offscreen',
 } as const;
 type PauseReason = (typeof PAUSE)[keyof typeof PAUSE];
 type Timer = ReturnType<typeof setTimeout>;
@@ -78,7 +79,7 @@ export class OutcomeQueue {
 
   /**
    * Removes the current outcome and gives its successor a full lifetime.
-   * Clears element-local hover/focus pauses; document pauses persist.
+   * Clears element-local hover/focus pauses; document/offscreen pauses persist.
    * @returns Nothing; cancels the old timer and synchronously notifies subscribers.
    */
   dismiss = (): void => {
