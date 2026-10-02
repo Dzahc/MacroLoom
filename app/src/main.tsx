@@ -10,31 +10,53 @@ const MODE_COMMAND = 'app_mode';
 const ROOT_ID = 'root';
 const STARTING = 'Starting MacroLoom…';
 const START_FAILED = 'Could not start MacroLoom.';
-const PrototypeApp = lazy(() =>
-  import('./prototype-app').then((module) => ({
-    default: module.PrototypeApp,
-  })),
+const PrototypeApp = lazy(
+  /** @returns The optional prototype module promise; loading failures propagate to React. */
+  () =>
+    import('./prototype-app').then(
+      /** @param module Loaded prototype module. @returns React's lazy default-export shape. */
+      (module) => ({
+        default: module.PrototypeApp,
+      }),
+    ),
 );
 
+/**
+ * Resolves typed native launch metadata and selects the library or explicit prototype.
+ * @returns Loading/error presentation until mode resolves, then the selected application.
+ * Pending mode results are ignored after unmount; browser previews use library mode directly.
+ */
 function App() {
-  const [mode, setMode] = useState<AppMode | null>(() =>
-    isTauri() ? null : LIBRARY_MODE,
+  const [mode, setMode] = useState<AppMode | null>(
+    /** @returns Browser library mode, or null while native launch metadata is pending. */
+    () => (isTauri() ? null : LIBRARY_MODE),
   );
   const [error, setError] = useState('');
-  useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    void invoke<AppMode>(MODE_COMMAND)
-      .then((value) => {
-        if (!disposed) setMode(value);
-      })
-      .catch((reason: unknown) => {
-        if (!disposed) setError(`${START_FAILED} ${String(reason)}`);
-      });
-    return () => {
-      disposed = true;
-    };
-  }, []);
+  useEffect(
+    /** Resolves native mode once and returns cleanup suppressing post-unmount updates. */
+    () => {
+      if (!isTauri()) return;
+      let disposed = false;
+      void invoke<AppMode>(MODE_COMMAND)
+        .then(
+          /** @param value Typed native mode applied only to the mounted app. @returns Nothing. */
+          (value) => {
+            if (!disposed) setMode(value);
+          },
+        )
+        .catch(
+          /** @param reason Mode-command failure reported while mounted. @returns Nothing. */
+          (reason: unknown) => {
+            if (!disposed) setError(`${START_FAILED} ${String(reason)}`);
+          },
+        );
+      /** Marks the pending request disposed; does not cancel backend work. */
+      return () => {
+        disposed = true;
+      };
+    },
+    [],
+  );
   if (error) return <p role="alert">{error}</p>;
   if (!mode) return <p role="status">{STARTING}</p>;
   if (mode.inputPrototype)

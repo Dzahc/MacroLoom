@@ -71,3 +71,9 @@ Native tests cover live-command mode gating alongside the existing prototype tes
 
 The required command is `npm.cmd --prefix app run verify`. The final result is
 recorded in GitHub issue #9 after the checks complete.
+
+## Documentation review follow-up — October 2, 2026
+
+Added JSDoc for the ML-9 components, internal helpers, callbacks, and queue
+lifetime/subscription methods, plus Rust documentation for mode metadata and
+command preconditions.

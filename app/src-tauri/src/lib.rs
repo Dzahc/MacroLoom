@@ -458,16 +458,20 @@ fn wait_until(deadline: Instant, cancel: &AtomicBool) -> bool {
 }
 
 #[tauri::command]
+/// Returns serialized compile-time mode metadata without enabling native input.
 fn app_mode() -> AppMode {
     AppMode::current()
 }
 
 #[tauri::command]
+/// Returns the managed engine's current presentation snapshot without changing its session.
 fn snapshot(engine: State<'_, Arc<Engine>>) -> Snapshot {
     engine.snapshot()
 }
 
 #[tauri::command]
+/// Starts capture through the managed engine and returns its resulting snapshot.
+/// Rejects library mode, active sessions, unavailable Stop, or failed compact transitions.
 fn start_recording(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
     AppMode::current().require_input()?;
     engine.start_recording()?;
@@ -475,6 +479,8 @@ fn start_recording(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
+/// Stops capture or requests playback cancellation and returns the managed engine snapshot.
+/// Rejects library mode; propagates window restoration errors from stopping capture.
 fn stop(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
     AppMode::current().require_input()?;
     engine.stop()?;
@@ -482,12 +488,16 @@ fn stop(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
+/// Starts the managed engine's in-memory playback and returns its immediate snapshot.
+/// Rejects library mode or engine preconditions; playback owns cancellation and input cleanup.
 fn play(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
     AppMode::current().require_input()?;
     engine.play()?;
     Ok(engine.snapshot())
 }
 
+/// Runs the desktop event loop, registering live hooks only in explicit debug prototype mode.
+/// Initializes DPI and the managed engine; startup failure panics because no window can recover.
 pub fn run() {
     windows::enable_physical_dpi();
     tauri::Builder::default()

@@ -33,21 +33,25 @@ const DURATION_CASES = [
   [SAMPLE_MACROS[2].durationMs, '1:02:17'],
 ] as const;
 
-before(async () => {
-  const output = join(process.cwd(), '.quality-output/library-view.mjs');
-  await mkdir(join(process.cwd(), '.quality-output'), { recursive: true });
-  await build({
-    entryPoints: [join(process.cwd(), 'src/library-view.tsx')],
-    outfile: output,
-    bundle: true,
-    platform: 'node',
-    format: 'esm',
-    packages: 'external',
-    jsx: 'automatic',
-  });
-  view = (await import(pathToFileURL(output).href)) as typeof view;
-});
+before(
+  /** Bundles the real TSX view for Node rendering; build/import failures fail the test setup. */
+  async () => {
+    const output = join(process.cwd(), '.quality-output/library-view.mjs');
+    await mkdir(join(process.cwd(), '.quality-output'), { recursive: true });
+    await build({
+      entryPoints: [join(process.cwd(), 'src/library-view.tsx')],
+      outfile: output,
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      packages: 'external',
+      jsx: 'automatic',
+    });
+    view = (await import(pathToFileURL(output).href)) as typeof view;
+  },
+);
 
+/** @param overrides State fields replacing the idle sample fixture. @returns A typed test snapshot. */
 function snapshot(overrides: Partial<LibrarySnapshot> = {}): LibrarySnapshot {
   return {
     macros: SAMPLE_MACROS,
@@ -58,20 +62,26 @@ function snapshot(overrides: Partial<LibrarySnapshot> = {}): LibrarySnapshot {
   };
 }
 
+/** @param state Supplied library state. @returns Static markup with inert host callbacks. */
 function render(state: LibrarySnapshot): string {
   return renderToStaticMarkup(
     createElement(view.LibraryView, {
       snapshot: state,
-      onSelect: () => {},
-      onAction: () => {},
+      onSelect:
+        /** Ignores selection requests during static rendering. */ () => {},
+      onAction:
+        /** Ignores action requests during static rendering. */ () => {},
     }),
   );
 }
 
-void test('idle toolbar availability depends on valid selection; Stop is unavailable', () => {
+void test('idle toolbar availability depends on valid selection; Stop is unavailable' /** Checks allowed idle actions for absent, valid, and stale selections. */, () => {
   const emptySelection = snapshot();
   assert.equal(canRequest(emptySelection, ACTION.record), true);
-  for (const action of TOOLBAR.filter((name) => name !== ACTION.record))
+  for (const action of TOOLBAR.filter(
+    /** @param name Ordered action. @returns Whether it requires selection or active-session state. */
+    (name) => name !== ACTION.record,
+  ))
     assert.equal(canRequest(emptySelection, action), false);
   const selected = snapshot({ selectedId: SELECTED.id });
   for (const action of [
@@ -88,7 +98,7 @@ void test('idle toolbar availability depends on valid selection; Stop is unavail
   );
 });
 
-void test('busy snapshots cannot emit mutating requests even with a selection', () => {
+void test('busy snapshots cannot emit mutating requests even with a selection' /** Checks busy-phase requests and Stop availability across every supplied phase. */, () => {
   for (const phase of [
     PHASE.saving,
     PHASE.recording,
@@ -108,7 +118,7 @@ void test('busy snapshots cannot emit mutating requests even with a selection', 
   }
 });
 
-void test('double click and context actions address the clicked ID without waiting for selection updates', () => {
+void test('double click and context actions address the clicked ID without waiting for selection updates' /** Checks explicit clicked IDs take precedence over previous selection while missing IDs are rejected. */, () => {
   const oldSelection = snapshot({ selectedId: SELECTED.id });
   assert.deepEqual(
     requestAction(oldSelection, ACTION.play, SOURCE.doubleClick, OTHER.id),
@@ -124,7 +134,7 @@ void test('double click and context actions address the clicked ID without waiti
   );
 });
 
-void test('selection follows stable identity and clears on removal instead of choosing a successor', () => {
+void test('selection follows stable identity and clears on removal instead of choosing a successor' /** Checks reorder/removal/empty transitions preserve only an existing stable ID. */, () => {
   assert.equal(reconcileSelection(SAMPLE_MACROS, null), null);
   assert.equal(
     reconcileSelection([...SAMPLE_MACROS].reverse(), SELECTED.id),
@@ -134,13 +144,14 @@ void test('selection follows stable identity and clears on removal instead of ch
   assert.equal(reconcileSelection([], SELECTED.id), null);
 });
 
-void test('duration formatting handles subsecond values, whole minutes and hours', () => {
-  DURATION_CASES.forEach(([duration, expected]) =>
-    assert.equal(formatDuration(duration), expected),
+void test('duration formatting handles subsecond values, whole minutes and hours' /** Checks representative boundaries without rounding partial seconds upward. */, () => {
+  DURATION_CASES.forEach(
+    /** @param pair Duration milliseconds and expected display text; asserts the formatter result. @returns Nothing. */
+    ([duration, expected]) => assert.equal(formatDuration(duration), expected),
   );
 });
 
-void test('view puts icon-only actions above status and list with accessible names, titles and selection', () => {
+void test('view puts icon-only actions above status and list with accessible names, titles and selection' /** Checks rendered action ordering, accessible names, icon-only content, and selection text. */, () => {
   const markup = render(snapshot({ selectedId: SELECTED.id }));
   assert.ok(markup.indexOf('<nav') < markup.indexOf('role="status"'));
   assert.ok(markup.indexOf('role="status"') < markup.indexOf('<ul'));
@@ -149,11 +160,15 @@ void test('view puts icon-only actions above status and list with accessible nam
     markup.indexOf('</nav>'),
   );
   const labels = [...toolbar.matchAll(/aria-label="([^"]+)" title=/g)].map(
+    /** @param match Rendered label capture. @returns Its accessible-name text. */
     (match) => match[1],
   );
   assert.deepEqual(
     labels,
-    TOOLBAR.map((action) => LABEL[action]),
+    TOOLBAR.map(
+      /** @param action Ordered action. @returns Its source-defined name for the action. */
+      (action) => LABEL[action],
+    ),
   );
   assert.doesNotMatch(toolbar, /<span/);
   assert.match(markup, /aria-pressed="true"/);
@@ -161,13 +176,14 @@ void test('view puts icon-only actions above status and list with accessible nam
   assert.ok(markup.includes(formatDuration(SELECTED.durationMs)));
 });
 
-void test('empty and failed-load samples omit failed rows without adding a product error', () => {
+void test('empty and failed-load samples omit failed rows without adding a product error' /** Checks empty-state text and logging-only failure scenarios retain valid rows without displaying diagnostics. */, () => {
   assert.ok(render(snapshot({ macros: [] })).includes(LABEL.empty));
   const sample = SCENARIOS[SCENARIO.failedLoad];
   assert.ok(sample.failures.length > 0);
   const markup = render(snapshot({ ...sample }));
-  sample.failures.forEach((failure) =>
-    assert.equal(markup.includes(failure), false),
+  sample.failures.forEach(
+    /** @param failure Log-only diagnostic; asserts it is absent from product markup. @returns Nothing. */
+    (failure) => assert.equal(markup.includes(failure), false),
   );
   assert.ok(markup.includes(SELECTED.name));
 });

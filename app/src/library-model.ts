@@ -95,12 +95,27 @@ export type Outcome = Readonly<{
   message: string;
 }>;
 
+/**
+ * Resolves stable selection against the supplied library without mutating it.
+ * @param snapshot Current macros and selected identity.
+ * @returns The selected macro, or undefined for absent/stale selection.
+ */
 export function selectedMacro(
   snapshot: LibrarySnapshot,
 ): MacroSummary | undefined {
-  return snapshot.macros.find((macro) => macro.id === snapshot.selectedId);
+  return snapshot.macros.find(
+    /** @param macro Candidate entry. @returns Whether its ID matches selection. */
+    (macro) => macro.id === snapshot.selectedId,
+  );
 }
 
+/**
+ * Evaluates presentation availability; backend commands still enforce their own preconditions.
+ * @param snapshot Supplied library phase and macros.
+ * @param action Requested toolbar/context action.
+ * @param macroId Explicit clicked identity, defaulting to the current selection.
+ * @returns Whether this action can be requested in the supplied state.
+ */
 export function canRequest(
   snapshot: LibrarySnapshot,
   action: ActionName,
@@ -108,13 +123,25 @@ export function canRequest(
 ): boolean {
   if (action === ACTION.stop)
     return [PHASE.recording, PHASE.playing, PHASE.stopping].some(
+      /** @param phase Stop-capable phase. @returns Whether the current phase matches. */
       (phase) => phase === snapshot.phase,
     );
   if (snapshot.phase !== PHASE.idle) return false;
   if (action === ACTION.record) return true;
-  return snapshot.macros.some((macro) => macro.id === macroId);
+  return snapshot.macros.some(
+    /** @param macro Candidate entry. @returns Whether the requested ID exists. */
+    (macro) => macro.id === macroId,
+  );
 }
 
+/**
+ * Constructs a typed request only when presentation preconditions hold.
+ * @param snapshot Supplied state used to reject busy or stale requests.
+ * @param action Operation to request.
+ * @param source Interaction that initiated the request.
+ * @param macroId Clicked identity, defaulting to selection; ignored for Record/Stop.
+ * @returns Request with required macro identity, or null when unavailable.
+ */
 export function requestAction(
   snapshot: LibrarySnapshot,
   action: ActionName,
@@ -128,13 +155,29 @@ export function requestAction(
   return { action, macroId, source };
 }
 
+/**
+ * Retains selection by identity instead of selecting a successor after removal.
+ * @param macros Current valid library entries.
+ * @param selectedId Previous selection or null.
+ * @returns The same identity while present, otherwise null.
+ */
 export function reconcileSelection(
   macros: readonly MacroSummary[],
   selectedId: string | null,
 ): string | null {
-  return macros.some((macro) => macro.id === selectedId) ? selectedId : null;
+  return macros.some(
+    /** @param macro Candidate entry. @returns Whether the previous selection still exists. */
+    (macro) => macro.id === selectedId,
+  )
+    ? selectedId
+    : null;
 }
 
+/**
+ * Formats duration without rounding partial seconds upward.
+ * @param durationMs Finite duration in milliseconds; negative values display zero.
+ * @returns mm:ss below one hour, otherwise h:mm:ss.
+ */
 export function formatDuration(durationMs: number): string {
   const total = Math.max(0, Math.floor(durationMs / TIME.millisecond));
   const seconds = String(total % TIME.minute).padStart(TIME.pad, '0');

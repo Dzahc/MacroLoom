@@ -33,6 +33,14 @@ type MenuAnchor = { macroId: string; x: number; y: number };
 const MENU_GAP = 8;
 const MENU_ACTIONS = [ACTION.configure, ACTION.delete] as const;
 
+/**
+ * Sends an available action request to the host without changing library state.
+ * @param props Supplied snapshot and host callbacks.
+ * @param action Operation to request.
+ * @param source Initiating interaction.
+ * @param macroId Explicit clicked ID, defaulting to selection.
+ * @returns Nothing; unavailable requests are ignored and callback failures propagate.
+ */
 function emit(
   props: ViewProps,
   action: ActionName,
@@ -43,26 +51,34 @@ function emit(
   if (request) props.onAction(request);
 }
 
+/** @param props State/callbacks controlling availability. @returns Icon-only actions with accessible names. */
 function Toolbar(props: ViewProps) {
   return (
     <nav className="library-toolbar" aria-label={LABEL.controls}>
-      {TOOLBAR.map((action) => (
-        <button
-          type="button"
-          key={action}
-          className={`icon-button action-${action}`}
-          aria-label={LABEL[action]}
-          title={TOOLTIP[action]}
-          disabled={!canRequest(props.snapshot, action)}
-          onClick={() => emit(props, action, SOURCE.toolbar)}
-        >
-          <ActionIcon action={action} />
-        </button>
-      ))}
+      {TOOLBAR.map(
+        /** @param action Ordered toolbar operation. @returns Its icon button and guarded callback. */
+        (action) => (
+          <button
+            type="button"
+            key={action}
+            className={`icon-button action-${action}`}
+            aria-label={LABEL[action]}
+            title={TOOLTIP[action]}
+            disabled={!canRequest(props.snapshot, action)}
+            onClick={
+              /** Emits this toolbar action only when available. */ () =>
+                emit(props, action, SOURCE.toolbar)
+            }
+          >
+            <ActionIcon action={action} />
+          </button>
+        ),
+      )}
     </nav>
   );
 }
 
+/** @param props Supplied status snapshot. @returns A polite text status and fixed shortcut hints. */
 function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
   const busy = snapshot.phase !== PHASE.idle;
   return (
@@ -83,35 +99,59 @@ function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
   );
 }
 
+/**
+ * Clamps a measured menu to the viewport while retaining an edge gap.
+ * @param element Mounted menu whose inline left/top positions are changed.
+ * @param anchor Requested pointer coordinates in CSS viewport pixels.
+ * @returns Nothing; must run after layout so menu dimensions are available.
+ */
 function placeMenu(element: HTMLDivElement, anchor: MenuAnchor) {
   const bounds = element.getBoundingClientRect();
   element.style.left = `${Math.max(MENU_GAP, Math.min(anchor.x, window.innerWidth - bounds.width - MENU_GAP))}px`;
   element.style.top = `${Math.max(MENU_GAP, Math.min(anchor.y, window.innerHeight - bounds.height - MENU_GAP))}px`;
 }
 
+/**
+ * Portals Configure/Delete actions for the clicked macro into the document body.
+ * @param props Snapshot/callbacks, pointer anchor, and menu-close callback.
+ * @returns A clamped context menu; pointer/blur/resize listeners are removed on cleanup.
+ */
 function ContextMenu({
   anchor,
   close,
   ...props
 }: ViewProps & { anchor: MenuAnchor; close: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (ref.current) placeMenu(ref.current, anchor);
-  }, [anchor]);
-  useEffect(() => {
-    function outside(event: PointerEvent) {
-      if (event.target instanceof Node && !ref.current?.contains(event.target))
-        close();
-    }
-    document.addEventListener('pointerdown', outside);
-    window.addEventListener('blur', close);
-    window.addEventListener('resize', close);
-    return () => {
-      document.removeEventListener('pointerdown', outside);
-      window.removeEventListener('blur', close);
-      window.removeEventListener('resize', close);
-    };
-  }, [close]);
+  useLayoutEffect(
+    /** Measures the mounted menu and clamps it before painting. */
+    () => {
+      if (ref.current) placeMenu(ref.current, anchor);
+    },
+    [anchor],
+  );
+  useEffect(
+    /** Registers menu dismissal listeners and returns their cleanup. */
+    () => {
+      /** @param event Pointer interaction closing the menu when outside its mounted node. @returns Nothing. */
+      function outside(event: PointerEvent) {
+        if (
+          event.target instanceof Node &&
+          !ref.current?.contains(event.target)
+        )
+          close();
+      }
+      document.addEventListener('pointerdown', outside);
+      window.addEventListener('blur', close);
+      window.addEventListener('resize', close);
+      /** Removes all menu dismissal listeners when the anchor/owner changes or unmounts. */
+      return () => {
+        document.removeEventListener('pointerdown', outside);
+        window.removeEventListener('blur', close);
+        window.removeEventListener('resize', close);
+      };
+    },
+    [close],
+  );
   return createPortal(
     <div
       ref={ref}
@@ -120,26 +160,37 @@ function ContextMenu({
       aria-label={LABEL.controls}
       style={{ left: anchor.x, top: anchor.y }}
     >
-      {MENU_ACTIONS.map((action) => (
-        <button
-          type="button"
-          role="menuitem"
-          key={action}
-          disabled={!canRequest(props.snapshot, action, anchor.macroId)}
-          onClick={() => {
-            emit(props, action, SOURCE.context, anchor.macroId);
-            close();
-          }}
-        >
-          <ActionIcon action={action} />
-          <span>{LABEL[action]}</span>
-        </button>
-      ))}
+      {MENU_ACTIONS.map(
+        /** @param action Context operation. @returns A menu item using the anchored macro ID. */
+        (action) => (
+          <button
+            type="button"
+            role="menuitem"
+            key={action}
+            disabled={!canRequest(props.snapshot, action, anchor.macroId)}
+            onClick={
+              /** Emits the anchored request and closes the menu after dispatch. */
+              () => {
+                emit(props, action, SOURCE.context, anchor.macroId);
+                close();
+              }
+            }
+          >
+            <ActionIcon action={action} />
+            <span>{LABEL[action]}</span>
+          </button>
+        ),
+      )}
     </div>,
     document.body,
   );
 }
 
+/**
+ * Renders one macro with stable-ID selection and explicit clicked-ID actions.
+ * @param props Macro, supplied state/callbacks, and context-menu opener.
+ * @returns A selectable row disabled while busy; full names remain accessible.
+ */
 function MacroRow({
   macro,
   openMenu,
@@ -149,9 +200,11 @@ function MacroRow({
   openMenu: (event: MouseEvent, id: string) => void;
 }) {
   const selected = macro.id === props.snapshot.selectedId;
+  /** Sends this row's identity/source to the host; does not mutate the supplied snapshot. */
   function select() {
     props.onSelect({ macroId: macro.id, source: SOURCE.row });
   }
+  /** Selects this row and emits one available Play request without waiting for selection updates. */
   function play() {
     props.onSelect({ macroId: macro.id, source: SOURCE.doubleClick });
     emit(props, ACTION.play, SOURCE.doubleClick, macro.id);
@@ -164,7 +217,11 @@ function MacroRow({
         aria-pressed={selected}
         disabled={props.snapshot.phase !== PHASE.idle}
         onClick={select}
-        onContextMenu={(event) => openMenu(event, macro.id)}
+        onContextMenu={
+          /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */ (
+            event,
+          ) => openMenu(event, macro.id)
+        }
         onDoubleClick={play}
         title={macro.name}
       >
@@ -177,8 +234,19 @@ function MacroRow({
   );
 }
 
+/**
+ * Renders the production library from supplied state; owns only transient context-menu state.
+ * @param props Snapshot, selection/action callbacks, and optional notification content.
+ * @returns Toolbar, status, notifications, and independently scrollable macro list.
+ */
 export function LibraryView(props: ViewProps) {
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  /**
+   * Selects a valid idle row and opens its menu at the pointer, suppressing the browser menu.
+   * @param event Context interaction carrying viewport coordinates.
+   * @param macroId Stable identity of the clicked row.
+   * @returns Nothing; unavailable requests leave the application menu closed.
+   */
   function openMenu(event: MouseEvent, macroId: string) {
     event.preventDefault();
     if (!canRequest(props.snapshot, ACTION.configure, macroId)) return;
@@ -188,7 +256,13 @@ export function LibraryView(props: ViewProps) {
   const menuVisible =
     menu !== null && canRequest(props.snapshot, ACTION.configure, menu.macroId);
   return (
-    <main className="library-window" onScrollCapture={() => setMenu(null)}>
+    <main
+      className="library-window"
+      onScrollCapture={
+        /** Closes the anchored menu when library content scrolls. */ () =>
+          setMenu(null)
+      }
+    >
       <Toolbar {...props} />
       <MessageBanner snapshot={props.snapshot} />
       {props.notifications}
@@ -204,19 +278,26 @@ export function LibraryView(props: ViewProps) {
           </div>
         ) : (
           <ul className="macro-list">
-            {props.snapshot.macros.map((macro) => (
-              <MacroRow
-                key={macro.id}
-                macro={macro}
-                openMenu={openMenu}
-                {...props}
-              />
-            ))}
+            {props.snapshot.macros.map(
+              /** @param macro Valid entry. @returns Its row keyed by stable identity. */
+              (macro) => (
+                <MacroRow
+                  key={macro.id}
+                  macro={macro}
+                  openMenu={openMenu}
+                  {...props}
+                />
+              ),
+            )}
           </ul>
         )}
       </section>
       {menuVisible && (
-        <ContextMenu {...props} anchor={menu} close={() => setMenu(null)} />
+        <ContextMenu
+          {...props}
+          anchor={menu}
+          close={/** Clears transient menu state. */ () => setMenu(null)}
+        />
       )}
     </main>
   );

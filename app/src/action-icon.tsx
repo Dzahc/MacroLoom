@@ -11,6 +11,11 @@ const PATH = {
   failure: 'M12 7v6m0 4v.1M12 3 2 21h20Z',
 } as const;
 
+/**
+ * Renders the decorative icon for a library action or notification.
+ * @param props Action identifying the SVG glyph; the parent supplies its accessible name.
+ * @returns An aria-hidden SVG with no listeners or external effects.
+ */
 export function ActionIcon({
   action,
 }: {
