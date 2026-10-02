@@ -10,7 +10,14 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "MacroLoom prototype", "width": 500, "height": 400, "resizable": true }],
+    "windows": [
+      {
+        "title": "MacroLoom prototype",
+        "width": 500,
+        "height": 400,
+        "resizable": true
+      }
+    ],
     "security": { "csp": null }
   },
   "bundle": { "active": false }

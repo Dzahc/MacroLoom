@@ -1,10 +1,10 @@
 # MacroLoom — Product Requirements Document
 
-| Document | Value |
-| --- | --- |
-| Version | 0.12 |
-| Date | September 29, 2026 |
-| Status | Draft for review; v1 scope and distribution defined, technical defaults remain proposed |
+| Document | Value                                                                                   |
+| -------- | --------------------------------------------------------------------------------------- |
+| Version  | 0.12                                                                                    |
+| Date     | September 29, 2026                                                                      |
+| Status   | Draft for review; v1 scope and distribution defined, technical defaults remain proposed |
 
 ## Table of contents
 
@@ -50,32 +50,32 @@ Responsiveness is a primary product requirement. The user is comfortable with mu
 
 This document distinguishes requirements supplied by the user from recommendations made during brainstorming. Recommended defaults make the draft actionable and can be revised without reopening the core scope.
 
-| Item | Decision or working default | Basis |
-| --- | --- | --- |
-| Initial operating system | Windows 11; first packaged build targets x64 | Windows 11 is the user's priority; x64 is a proposed packaging default |
-| Input scope | Positioned left/right clicks, double clicks, vertical scrolling, basic click-and-drag, and keyboard input | Original requirements and subsequent clarification |
-| Click meaning | A click includes its pixel position; the proposed system-input backend moves the shared cursor there before clicking | User clarified positioned clicks and deferred independent playback from v1 |
-| Movement scope | Record timed cursor positions while a supported mouse button is held for basic dragging; free cursor paths, hover replay, and drawing precision remain deferred | Latest user instruction permits basic dragging in v1 when it is a straightforward extension |
-| User's technology experience | Mostly Java, TypeScript, and Python; some C# experience from longer ago | Explicit user clarification |
-| Technology priority | Quick response; no required programming language | Explicit user clarification |
-| Selected stack | Tauri 2, TypeScript, React, Vite, and a Rust backend, subject to prototype validation | User accepted the stack and confirmed prototype validation as the first ticket work |
-| Timing format | Millisecond offsets from recording start, measured with a monotonic clock | Recommendation from timing research |
-| Coordinate reference | Absolute physical screen pixels in v1; window-relative mode and its window selector deferred to v2 | Explicit user decision to keep v1 simple |
-| Typical workload | A macro usually stays within one application window; several instances of the same application may be open | User described use including four Google Play Games windows |
-| Playback concurrency | One active macro in v1; architecture supports distinct future playback sessions | Original requirements |
-| Input independence | V1 shares the desktop cursor and keyboard focus; independent/background playback and ghost-pointer input are outside v1 | Explicit user decision after discussing isolation requirements |
-| Virtualization | V1 requires no VM software or hypervisor configuration; VM integration is outside scope | Explicit user decision to omit the isolated-playback approach from v1 |
-| Storage | A fixed `macros` directory beside the executable | Original requested save location |
-| Distribution | Portable ZIP for v1; setup executable in a later release | Explicit user decision |
-| Global Stop | Fixed global Stop shortcut in v1; F8 is the proposed key assignment | User approved the feature; exact key remains a recommended default |
-| Global Record | Fixed global Record shortcut in v1; F9 is the proposed key assignment | User requested a Record shortcut; global behavior and exact key are recommended defaults |
-| Playback startup | No added startup countdown in v1; optional three-second countdown in a later release | Explicit user decision |
-| Playback focus | Include a click into the intended window before typing in the recording; playback replays that click. No global Play shortcut or automatic previous-window focus restoration in v1 | Explicit user decision |
-| Active-session window | Hide the macro list and shrink the window to the toolbar and message banner during recording/playback; keep this compact view on top | Explicit user direction |
-| Main layout | Icon toolbar, then message banner, then macro list | Explicit user decision |
-| Operation feedback | Brief success/failure toasts for saving recordings, saving property changes, and deleting macros | Explicit user decision |
-| Delivery workflow | Convert the PRD into numbered Epics and Stories first; the user manually assigns implementation Stories to agents | Explicit user decision |
-| Visual defaults | Follow the OS light/dark preference; restrained neutral surfaces and one accent color | Proposed design direction |
+| Item                         | Decision or working default                                                                                                                                                        | Basis                                                                                       |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Initial operating system     | Windows 11; first packaged build targets x64                                                                                                                                       | Windows 11 is the user's priority; x64 is a proposed packaging default                      |
+| Input scope                  | Positioned left/right clicks, double clicks, vertical scrolling, basic click-and-drag, and keyboard input                                                                          | Original requirements and subsequent clarification                                          |
+| Click meaning                | A click includes its pixel position; the proposed system-input backend moves the shared cursor there before clicking                                                               | User clarified positioned clicks and deferred independent playback from v1                  |
+| Movement scope               | Record timed cursor positions while a supported mouse button is held for basic dragging; free cursor paths, hover replay, and drawing precision remain deferred                    | Latest user instruction permits basic dragging in v1 when it is a straightforward extension |
+| User's technology experience | Mostly Java, TypeScript, and Python; some C# experience from longer ago                                                                                                            | Explicit user clarification                                                                 |
+| Technology priority          | Quick response; no required programming language                                                                                                                                   | Explicit user clarification                                                                 |
+| Selected stack               | Tauri 2, TypeScript, React, Vite, and a Rust backend, subject to prototype validation                                                                                              | User accepted the stack and confirmed prototype validation as the first ticket work         |
+| Timing format                | Millisecond offsets from recording start, measured with a monotonic clock                                                                                                          | Recommendation from timing research                                                         |
+| Coordinate reference         | Absolute physical screen pixels in v1; window-relative mode and its window selector deferred to v2                                                                                 | Explicit user decision to keep v1 simple                                                    |
+| Typical workload             | A macro usually stays within one application window; several instances of the same application may be open                                                                         | User described use including four Google Play Games windows                                 |
+| Playback concurrency         | One active macro in v1; architecture supports distinct future playback sessions                                                                                                    | Original requirements                                                                       |
+| Input independence           | V1 shares the desktop cursor and keyboard focus; independent/background playback and ghost-pointer input are outside v1                                                            | Explicit user decision after discussing isolation requirements                              |
+| Virtualization               | V1 requires no VM software or hypervisor configuration; VM integration is outside scope                                                                                            | Explicit user decision to omit the isolated-playback approach from v1                       |
+| Storage                      | A fixed `macros` directory beside the executable                                                                                                                                   | Original requested save location                                                            |
+| Distribution                 | Portable ZIP for v1; setup executable in a later release                                                                                                                           | Explicit user decision                                                                      |
+| Global Stop                  | Fixed global Stop shortcut in v1; F8 is the proposed key assignment                                                                                                                | User approved the feature; exact key remains a recommended default                          |
+| Global Record                | Fixed global Record shortcut in v1; F9 is the proposed key assignment                                                                                                              | User requested a Record shortcut; global behavior and exact key are recommended defaults    |
+| Playback startup             | No added startup countdown in v1; optional three-second countdown in a later release                                                                                               | Explicit user decision                                                                      |
+| Playback focus               | Include a click into the intended window before typing in the recording; playback replays that click. No global Play shortcut or automatic previous-window focus restoration in v1 | Explicit user decision                                                                      |
+| Active-session window        | Hide the macro list and shrink the window to the toolbar and message banner during recording/playback; keep this compact view on top                                               | Explicit user direction                                                                     |
+| Main layout                  | Icon toolbar, then message banner, then macro list                                                                                                                                 | Explicit user decision                                                                      |
+| Operation feedback           | Brief success/failure toasts for saving recordings, saving property changes, and deleting macros                                                                                   | Explicit user decision                                                                      |
+| Delivery workflow            | Convert the PRD into numbered Epics and Stories first; the user manually assigns implementation Stories to agents                                                                  | Explicit user decision                                                                      |
+| Visual defaults              | Follow the OS light/dark preference; restrained neutral surfaces and one accent color                                                                                              | Proposed design direction                                                                   |
 
 ## 3. Release scope
 
@@ -98,19 +98,19 @@ This document distinguishes requirements supplied by the user from recommendatio
 
 ### Later releases
 
-| Area | Deferred capability |
-| --- | --- |
-| Input | Cursor paths with no button held, hover replay, precision drawing/path fidelity, middle/extra buttons, and horizontal scrolling |
-| Editing | Individual event editing, event insertion/deletion, timeline trimming, and pause/resume |
-| Window-relative targeting (v2) | Window-relative coordinates and selection of a specific playback window, including multiple instances of the same application |
-| Targeting | Automatic target-window activation, optional automatic focus restoration to the previously active window, and adapting to changed display layouts |
-| Automation | Waiting for application state, image recognition, conditions, and macro composition |
-| Organization | Search, folders, tags, import/export workflows, and a file browser |
-| Preferences | Custom save directories, configurable shortcuts, explicit theme selection, and a general options menu |
-| Platforms | macOS and Linux input backends; Windows ARM64 packaging |
-| Execution | Optional three-second playback startup countdown, scheduling, queues, and coordinated concurrent playback |
-| Independent playback | Application-specific background automation or isolated execution; possible later investigation, with no committed release |
-| Distribution | Setup executable, automatic updates, and additional distribution channels |
+| Area                           | Deferred capability                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input                          | Cursor paths with no button held, hover replay, precision drawing/path fidelity, middle/extra buttons, and horizontal scrolling                   |
+| Editing                        | Individual event editing, event insertion/deletion, timeline trimming, and pause/resume                                                           |
+| Window-relative targeting (v2) | Window-relative coordinates and selection of a specific playback window, including multiple instances of the same application                     |
+| Targeting                      | Automatic target-window activation, optional automatic focus restoration to the previously active window, and adapting to changed display layouts |
+| Automation                     | Waiting for application state, image recognition, conditions, and macro composition                                                               |
+| Organization                   | Search, folders, tags, import/export workflows, and a file browser                                                                                |
+| Preferences                    | Custom save directories, configurable shortcuts, explicit theme selection, and a general options menu                                             |
+| Platforms                      | macOS and Linux input backends; Windows ARM64 packaging                                                                                           |
+| Execution                      | Optional three-second playback startup countdown, scheduling, queues, and coordinated concurrent playback                                         |
+| Independent playback           | Application-specific background automation or isolated execution; possible later investigation, with no committed release                         |
+| Distribution                   | Setup executable, automatic updates, and additional distribution channels                                                                         |
 
 Direct copying of compatible macro files between local folders remains possible; dedicated import/export UI is deferred.
 
@@ -187,13 +187,13 @@ For a macro that types into another application, the user includes a click into 
 
 Configure opens a separate owned window for the selected macro. The main toolbar and context menu open the same window.
 
-| Field | Initial value | Behavior |
-| --- | --- | --- |
-| Name | Generated recording name | Editable, trimmed, 1–120 characters; reject empty values and control characters |
-| Playback speed | 1× | Presets: 0.25×, 0.5×, 1×, 2×, 4× |
-| Repeat mode | Once | Once, fixed count, or indefinitely |
-| Total runs | 1 | Enabled for fixed count; a positive integer; includes the first run |
-| Interval between runs | 0 seconds | Enabled for fixed/infinite modes; finite nonnegative seconds, up to millisecond precision |
+| Field                 | Initial value            | Behavior                                                                                  |
+| --------------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
+| Name                  | Generated recording name | Editable, trimmed, 1–120 characters; reject empty values and control characters           |
+| Playback speed        | 1×                       | Presets: 0.25×, 0.5×, 1×, 2×, 4×                                                          |
+| Repeat mode           | Once                     | Once, fixed count, or indefinitely                                                        |
+| Total runs            | 1                        | Enabled for fixed count; a positive integer; includes the first run                       |
+| Interval between runs | 0 seconds                | Enabled for fixed/infinite modes; finite nonnegative seconds, up to millisecond precision |
 
 Save validates and persists the complete property change before updating the list, then shows a brief success toast naming the macro. Cancel, Escape, or closing the configuration window discards edits. Renaming changes metadata without changing the ID or filename. An unsuccessful Save shows a brief failure toast and leaves the prior persisted properties intact; keep the edits and actionable field/storage errors visible for correction or retry.
 
@@ -301,15 +301,15 @@ Keep the toolbar order consistent between views; unavailable actions are disable
 
 Use neutral backgrounds, readable typography, modest corner radii, subtle separators, and consistent spacing. Follow the system light/dark setting. Use a restrained accent for selection and primary actions, red for recording, and a small busy indicator for playback/saving. Avoid decorative animation and large dashboard panels.
 
-| State | Window view | Toolbar and message banner behavior |
-| --- | --- | --- |
-| Idle, no selection | Full library, normal topmost state | Record enabled; Play, Configure, Delete, and Stop disabled |
-| Idle, selected macro | Full library, normal topmost state | Record, Play, Configure, and Delete enabled; Stop disabled |
-| Recording | Compact, topmost | Stop enabled; recording indicator and elapsed time; other mutating actions disabled |
-| Saving | Full library, normal topmost state | Saving status; prevent new sessions and show Retry/Discard if saving fails |
-| Playing | Compact, topmost | Stop enabled; run counter and elapsed time |
-| Between runs | Compact, topmost | Stop enabled; next-run countdown and elapsed time |
-| Stopping | Compact, topmost until cleanup completes | Show stopping status until held input and resources are cleaned up |
+| State                | Window view                              | Toolbar and message banner behavior                                                 |
+| -------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
+| Idle, no selection   | Full library, normal topmost state       | Record enabled; Play, Configure, Delete, and Stop disabled                          |
+| Idle, selected macro | Full library, normal topmost state       | Record, Play, Configure, and Delete enabled; Stop disabled                          |
+| Recording            | Compact, topmost                         | Stop enabled; recording indicator and elapsed time; other mutating actions disabled |
+| Saving               | Full library, normal topmost state       | Saving status; prevent new sessions and show Retry/Discard if saving fails          |
+| Playing              | Compact, topmost                         | Stop enabled; run counter and elapsed time                                          |
+| Between runs         | Compact, topmost                         | Stop enabled; next-run countdown and elapsed time                                   |
+| Stopping             | Compact, topmost until cleanup completes | Show stopping status until held input and resources are cleaned up                  |
 
 Use keyboard navigation, visible focus indicators, scalable text, and sufficient contrast. Honor reduced-motion preferences for decorative animation. Empty states and errors should describe the next useful action without exposing implementation details.
 
@@ -321,15 +321,15 @@ The initial prototype must demonstrate a responsive shell and native input/timin
 
 Evaluate the selected stack against the response targets in section 10. If the prototype exposes a substantial unresolved limitation, revisit the selection before broader implementation; **C# + Avalonia** is the previously discussed alternative. Its UI thread also requires long-running work to be scheduled elsewhere. [Avalonia threading documentation](https://docs.avaloniaui.net/docs/app-development/threading).
 
-| Component | Responsibility |
-| --- | --- |
-| TypeScript UI | Macro list, selection, toolbar, compact/full view transitions, message banner, configuration window, deletion confirmation, and outcome toasts |
-| Application service | Valid state transitions, command validation, and enforcing one active session in v1 |
-| Recorder | Event ordering, timing, input normalization, control exclusions, and unsupported-gesture handling |
-| Playback engine | Per-session clock, speed scaling, repetitions, cancellable waits, and held-input ownership |
-| Macro repository | Directory resolution, schema validation, atomic writes, loading, property updates, and deletion |
-| Platform input backend | OS capture, input injection, physical-coordinate conversion, and native lifecycle notifications |
-| Desktop input coordinator | Grants input ownership to the active session; boundary for future coordination |
+| Component                 | Responsibility                                                                                                                                 |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript UI             | Macro list, selection, toolbar, compact/full view transitions, message banner, configuration window, deletion confirmation, and outcome toasts |
+| Application service       | Valid state transitions, command validation, and enforcing one active session in v1                                                            |
+| Recorder                  | Event ordering, timing, input normalization, control exclusions, and unsupported-gesture handling                                              |
+| Playback engine           | Per-session clock, speed scaling, repetitions, cancellable waits, and held-input ownership                                                     |
+| Macro repository          | Directory resolution, schema validation, atomic writes, loading, property updates, and deletion                                                |
+| Platform input backend    | OS capture, input injection, physical-coordinate conversion, and native lifecycle notifications                                                |
+| Desktop input coordinator | Grants input ownership to the active session; boundary for future coordination                                                                 |
 
 Use Windows capture APIs through a Windows-specific Rust adapter and `SendInput` for replay. Keep capture callbacks short, timestamp and enqueue events promptly, and perform file/UI work elsewhere. Microsoft notes that slow low-level keyboard hooks can be silently removed and recommends a dedicated thread for such hooks. [Microsoft low-level keyboard hook documentation](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc).
 
@@ -378,12 +378,41 @@ Illustrative shape; finalize exact key-normalization and display-metadata fields
     "intervalMs": 0
   },
   "events": [
-    { "atMs": 100, "type": "mouse_down", "button": "left", "x": 1040, "y": 620 },
+    {
+      "atMs": 100,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 1040,
+      "y": 620
+    },
     { "atMs": 200, "type": "mouse_up", "button": "left", "x": 1040, "y": 620 },
-    { "atMs": 400, "type": "key_down", "key": "KeyA", "native": { "scanCode": 30, "virtualKey": 65, "extended": false } },
-    { "atMs": 450, "type": "key_up", "key": "KeyA", "native": { "scanCode": 30, "virtualKey": 65, "extended": false } },
-    { "atMs": 800, "type": "mouse_wheel", "axis": "vertical", "delta": 120, "x": 1040, "y": 620 },
-    { "atMs": 1000, "type": "mouse_down", "button": "left", "x": 400, "y": 350 },
+    {
+      "atMs": 400,
+      "type": "key_down",
+      "key": "KeyA",
+      "native": { "scanCode": 30, "virtualKey": 65, "extended": false }
+    },
+    {
+      "atMs": 450,
+      "type": "key_up",
+      "key": "KeyA",
+      "native": { "scanCode": 30, "virtualKey": 65, "extended": false }
+    },
+    {
+      "atMs": 800,
+      "type": "mouse_wheel",
+      "axis": "vertical",
+      "delta": 120,
+      "x": 1040,
+      "y": 620
+    },
+    {
+      "atMs": 1000,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 400,
+      "y": 350
+    },
     { "atMs": 1100, "type": "mouse_move", "x": 450, "y": 350 },
     { "atMs": 1200, "type": "mouse_move", "x": 500, "y": 420 },
     { "atMs": 1300, "type": "mouse_move", "x": 700, "y": 500 },
@@ -402,13 +431,13 @@ Progress updates may be throttled to approximately 10 per second; frontend updat
 
 These are proposed performance budgets for the implementation, not measurements of an existing application:
 
-| Interaction | Target |
-| --- | --- |
-| Selection, toolbar feedback, and opening a context menu | Visible response within 100 ms at the 95th percentile |
-| Starting recording or playback | Recording or playing status visible within 100 ms at the 95th percentile; no added startup countdown, with recorded event timing preserved |
-| Global Stop | Cancellation and release of session-owned held input within 100 ms at the 95th percentile under normal desktop conditions |
-| Cold launch | Usable main window and library within 2 seconds at the 95th percentile with 100 macros of up to 1,000 events each on local SSD storage |
-| Active-session interaction | Moving/resizing the window and using Stop remain responsive throughout recording, playback, and repeat waits |
+| Interaction                                             | Target                                                                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Selection, toolbar feedback, and opening a context menu | Visible response within 100 ms at the 95th percentile                                                                                      |
+| Starting recording or playback                          | Recording or playing status visible within 100 ms at the 95th percentile; no added startup countdown, with recorded event timing preserved |
+| Global Stop                                             | Cancellation and release of session-owned held input within 100 ms at the 95th percentile under normal desktop conditions                  |
+| Cold launch                                             | Usable main window and library within 2 seconds at the 95th percentile with 100 macros of up to 1,000 events each on local SSD storage     |
+| Active-session interaction                              | Moving/resizing the window and using Stop remain responsive throughout recording, playback, and repeat waits                               |
 
 Document the reference Windows 11 x64 hardware and benchmark conditions with the first working build. Measure these targets while the engine is active and assess any failures before adding visual polish or more features. File operations may take longer than 100 ms; immediate progress feedback is required while they complete. Capture resolution, playback dispatch lateness, and UI response time are separate measurements.
 
@@ -424,31 +453,31 @@ A setup executable is deferred to a later release. Before implementing it, revis
 
 ## 11. Acceptance criteria and validation
 
-| Area | Required evidence for the initial release |
-| --- | --- |
-| Startup and library | Launch with an empty library, load several valid files, and load valid files alongside a malformed/unsupported one without modifying the bad file |
-| Record and replay | Record and reproduce left/right positioned clicks, a double click at 1×, vertical wheel amounts, text keystrokes, modifiers, a shortcut, a held key, and observed key repetition in ordinary Windows applications |
-| Coordinates | Verify cursor landing at recorded physical pixels at 100%, 125%, and 150% scaling and on a second monitor with negative coordinates under an unchanged display layout |
-| Basic dragging | Record and replay a drag-and-drop, text selection, slider adjustment, and window movement/resize; preserve movement timing, the drop/release pixel, left/right button state, and modifier transitions where the target application supports them |
-| Movement sampling | Coalescing preserves first/final positions and button/key/wheel ordering; verify a curved drag and a drag with a pause; moving with no button held creates no movement-path events |
-| Global Record | Start recording with the proposed F9 shortcut while another application has focus; preserve that focus and use the same validation as the Record button. Holding or pressing it again during capture creates no additional session; a registration conflict is explained |
-| Control exclusion | Record and Stop controls and reserved F9/F8 key sequences, including repeats and releases, are absent from saved input; playback cannot trigger MacroLoom controls through recorded mouse targets |
-| Automatic save | Stop creates one committed file and a selected list entry; immediate subsequent recordings receive distinct default names/IDs; an empty recording saves nothing |
-| Timing | Verify deadline scaling and tie ordering deterministically with a controllable clock; measure dispatch lateness on Windows and confirm processing overhead does not accumulate into schedule drift |
-| Playback startup | Play and double click start a session without an added three-second delay; preserve any recorded initial wait and the configured intervals between runs |
-| Speed and repetition | Validate each speed preset, exactly three runs for a count of 3, indefinite playback until Stop, preserved trailing duration, and an unscaled interval with no interval after the final run |
-| Stop and cleanup | Stop during a long event wait, key hold, active drag, and repeat interval, including via the global shortcut while another application has focus; under normal desktop conditions, target cancellation response within 100 ms and prevent further ordinary input dispatch after cleanup. Stopping recording mid-drag must still produce playback that releases its held button by the end of the run |
-| Compact view and layout | Toolbar → message banner → macro list in the full view. Recording, playback, repeat waits, and cleanup hide the list and shrink the window to the toolbar/banner. Restore the full view, prior size/position, selection, and scroll position on stopping/completion/error; saving uses the full view. Check collisions against the compact window's actual visible bounds |
-| Focus and status | Only the compact active-session view stays on top; entering/restoring views and progress updates preserve target focus; run number and elapsed time match the defined semantics |
-| Recorded focus click | Record a click into an external application's input field followed by typing. Starting with Play or double click reproduces the click and sends the typing to that field while the compact toolbar remains visible. Confirm this with several instances of the same application open. No global Play shortcut or automatic previous-window focus restoration is required in v1 |
-| Shared input | General system-input playback uses the shared Windows cursor; physical input remains enabled, with the reserved Stop shortcut as the control exception. Do not claim independent manual computer use for this mode |
-| Responsiveness | Measure visible interaction response and cold launch against the section 10 budgets; repeat interaction checks while recording/playback workers and persistence are active |
-| Configuration | Save valid changes and verify them after restart; Cancel preserves old values; invalid fields are explained; failed persistence preserves the prior file and editable draft |
-| Deletion | Cancel preserves the file and entry; successful Delete removes both; simulated deletion failure preserves the entry and shows an error |
-| Outcome toasts | Successful and failed recording saves, property saves, and deletes each show an action-specific toast after the outcome is known. No false success on cancellation/failure; successful Retry reports success. Toasts dismiss automatically, preserve focus and access to Stop, and announce accessible text; failures retain their actionable messages/recovery controls after dismissal |
-| Storage failure | Unwritable storage prevents recording start; a mid-save failure retains the recording for Retry/Discard and does not corrupt an existing valid file |
-| Lifecycle | Closing while recording saves or retains a failed save; closing while playing releases session-owned input; suspend/resume produces no burst of overdue playback |
-| Packaging | Extract the portable ZIP and launch its executable on a clean Windows 11 x64 environment with the documented WebView2 dependency, without installing programming languages or development tools. Verify all required resources are included and macro storage resolves beside the executable regardless of the launch working directory. Normal operation requires no VM software, enabled hypervisor feature, or firmware virtualization change |
+| Area                    | Required evidence for the initial release                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Startup and library     | Launch with an empty library, load several valid files, and load valid files alongside a malformed/unsupported one without modifying the bad file                                                                                                                                                                                                                                                                                                |
+| Record and replay       | Record and reproduce left/right positioned clicks, a double click at 1×, vertical wheel amounts, text keystrokes, modifiers, a shortcut, a held key, and observed key repetition in ordinary Windows applications                                                                                                                                                                                                                                |
+| Coordinates             | Verify cursor landing at recorded physical pixels at 100%, 125%, and 150% scaling and on a second monitor with negative coordinates under an unchanged display layout                                                                                                                                                                                                                                                                            |
+| Basic dragging          | Record and replay a drag-and-drop, text selection, slider adjustment, and window movement/resize; preserve movement timing, the drop/release pixel, left/right button state, and modifier transitions where the target application supports them                                                                                                                                                                                                 |
+| Movement sampling       | Coalescing preserves first/final positions and button/key/wheel ordering; verify a curved drag and a drag with a pause; moving with no button held creates no movement-path events                                                                                                                                                                                                                                                               |
+| Global Record           | Start recording with the proposed F9 shortcut while another application has focus; preserve that focus and use the same validation as the Record button. Holding or pressing it again during capture creates no additional session; a registration conflict is explained                                                                                                                                                                         |
+| Control exclusion       | Record and Stop controls and reserved F9/F8 key sequences, including repeats and releases, are absent from saved input; playback cannot trigger MacroLoom controls through recorded mouse targets                                                                                                                                                                                                                                                |
+| Automatic save          | Stop creates one committed file and a selected list entry; immediate subsequent recordings receive distinct default names/IDs; an empty recording saves nothing                                                                                                                                                                                                                                                                                  |
+| Timing                  | Verify deadline scaling and tie ordering deterministically with a controllable clock; measure dispatch lateness on Windows and confirm processing overhead does not accumulate into schedule drift                                                                                                                                                                                                                                               |
+| Playback startup        | Play and double click start a session without an added three-second delay; preserve any recorded initial wait and the configured intervals between runs                                                                                                                                                                                                                                                                                          |
+| Speed and repetition    | Validate each speed preset, exactly three runs for a count of 3, indefinite playback until Stop, preserved trailing duration, and an unscaled interval with no interval after the final run                                                                                                                                                                                                                                                      |
+| Stop and cleanup        | Stop during a long event wait, key hold, active drag, and repeat interval, including via the global shortcut while another application has focus; under normal desktop conditions, target cancellation response within 100 ms and prevent further ordinary input dispatch after cleanup. Stopping recording mid-drag must still produce playback that releases its held button by the end of the run                                             |
+| Compact view and layout | Toolbar → message banner → macro list in the full view. Recording, playback, repeat waits, and cleanup hide the list and shrink the window to the toolbar/banner. Restore the full view, prior size/position, selection, and scroll position on stopping/completion/error; saving uses the full view. Check collisions against the compact window's actual visible bounds                                                                        |
+| Focus and status        | Only the compact active-session view stays on top; entering/restoring views and progress updates preserve target focus; run number and elapsed time match the defined semantics                                                                                                                                                                                                                                                                  |
+| Recorded focus click    | Record a click into an external application's input field followed by typing. Starting with Play or double click reproduces the click and sends the typing to that field while the compact toolbar remains visible. Confirm this with several instances of the same application open. No global Play shortcut or automatic previous-window focus restoration is required in v1                                                                   |
+| Shared input            | General system-input playback uses the shared Windows cursor; physical input remains enabled, with the reserved Stop shortcut as the control exception. Do not claim independent manual computer use for this mode                                                                                                                                                                                                                               |
+| Responsiveness          | Measure visible interaction response and cold launch against the section 10 budgets; repeat interaction checks while recording/playback workers and persistence are active                                                                                                                                                                                                                                                                       |
+| Configuration           | Save valid changes and verify them after restart; Cancel preserves old values; invalid fields are explained; failed persistence preserves the prior file and editable draft                                                                                                                                                                                                                                                                      |
+| Deletion                | Cancel preserves the file and entry; successful Delete removes both; simulated deletion failure preserves the entry and shows an error                                                                                                                                                                                                                                                                                                           |
+| Outcome toasts          | Successful and failed recording saves, property saves, and deletes each show an action-specific toast after the outcome is known. No false success on cancellation/failure; successful Retry reports success. Toasts dismiss automatically, preserve focus and access to Stop, and announce accessible text; failures retain their actionable messages/recovery controls after dismissal                                                         |
+| Storage failure         | Unwritable storage prevents recording start; a mid-save failure retains the recording for Retry/Discard and does not corrupt an existing valid file                                                                                                                                                                                                                                                                                              |
+| Lifecycle               | Closing while recording saves or retains a failed save; closing while playing releases session-owned input; suspend/resume produces no burst of overdue playback                                                                                                                                                                                                                                                                                 |
+| Packaging               | Extract the portable ZIP and launch its executable on a clean Windows 11 x64 environment with the documented WebView2 dependency, without installing programming languages or development tools. Verify all required resources are included and macro storage resolves beside the executable regardless of the launch working directory. Normal operation requires no VM software, enabled hypervisor feature, or firmware virtualization change |
 
 The 100 ms Stop response is a proposed usability target, not a hard real-time guarantee. Separate deterministic engine validation from Windows integration checks and manual target-application checks. No tests are required for this PRD itself; the criteria govern the future implementation.
 
@@ -508,17 +537,17 @@ Create the Story branch when implementation begins after the user's assignment. 
 
 ### 12.3 Suggested feature implementation order
 
-| Order | Epic / feature area | Suggested Story breakdown and dependency rationale |
-| --- | --- | --- |
-| 1 | Application foundation and Windows feasibility | Scaffold the selected desktop shell; prototype native capture/injection, timing/cancellation, focus handling, and compact-view transitions; measure responsiveness. Validate the accepted stack and basic dragging before broader implementation |
-| 2 | Macro storage and library | Finalize the versioned format; implement executable-relative storage, validation, atomic writes, startup loading, list selection, and invalid-file handling. Later save/configure/delete features depend on this repository |
-| 3 | Toolbar, message banner, compact view, and toasts | Implement the toolbar → banner → list layout, backend-driven UI states, actual window shrinking/restoration, accessible status, and reusable outcome toasts. Exercise state transitions with controlled session events before connecting live input |
-| 4 | Global shortcuts and session lifecycle | Implement Record/Stop registration, conflict feedback, one-session enforcement, focus preservation, cancellation, and held-input cleanup. Establish Stop behavior before end-to-end playback |
-| 5 | Recording and automatic save | Capture keyboard and positioned mouse events, held-button movement and sampling, control exclusions, unique naming, automatic persistence, and Retry/Discard with outcome toasts. Integrate storage, shortcuts, and compact recording status |
-| 6 | Single-run playback | Implement session snapshots, immediate startup, monotonic deadlines, coordinate conversion, input injection, drag replay, collision checks, cancellation/error handling, and compact playback status. Validate real record → save → replay workflows at 1× |
-| 7 | Macro configuration and repeat playback | Build property editing/persistence and toasts; add speed scaling, finite/infinite repetition, unscaled intervals, and run/elapsed status. Extend validated single-run playback |
-| 8 | Macro deletion | Implement confirmation, file/list removal, failure preservation, and outcome toasts. This can be assigned earlier once storage, selection, and notifications are integrated |
-| 9 | Release validation and portable ZIP | Validate DPI/display layouts, focus, input cleanup, suspend/exit, failures, accessibility, and performance; package the executable/resources and verify on a clean Windows 11 environment |
+| Order | Epic / feature area                               | Suggested Story breakdown and dependency rationale                                                                                                                                                                                                         |
+| ----- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Application foundation and Windows feasibility    | Scaffold the selected desktop shell; prototype native capture/injection, timing/cancellation, focus handling, and compact-view transitions; measure responsiveness. Validate the accepted stack and basic dragging before broader implementation           |
+| 2     | Macro storage and library                         | Finalize the versioned format; implement executable-relative storage, validation, atomic writes, startup loading, list selection, and invalid-file handling. Later save/configure/delete features depend on this repository                                |
+| 3     | Toolbar, message banner, compact view, and toasts | Implement the toolbar → banner → list layout, backend-driven UI states, actual window shrinking/restoration, accessible status, and reusable outcome toasts. Exercise state transitions with controlled session events before connecting live input        |
+| 4     | Global shortcuts and session lifecycle            | Implement Record/Stop registration, conflict feedback, one-session enforcement, focus preservation, cancellation, and held-input cleanup. Establish Stop behavior before end-to-end playback                                                               |
+| 5     | Recording and automatic save                      | Capture keyboard and positioned mouse events, held-button movement and sampling, control exclusions, unique naming, automatic persistence, and Retry/Discard with outcome toasts. Integrate storage, shortcuts, and compact recording status               |
+| 6     | Single-run playback                               | Implement session snapshots, immediate startup, monotonic deadlines, coordinate conversion, input injection, drag replay, collision checks, cancellation/error handling, and compact playback status. Validate real record → save → replay workflows at 1× |
+| 7     | Macro configuration and repeat playback           | Build property editing/persistence and toasts; add speed scaling, finite/infinite repetition, unscaled intervals, and run/elapsed status. Extend validated single-run playback                                                                             |
+| 8     | Macro deletion                                    | Implement confirmation, file/list removal, failure preservation, and outcome toasts. This can be assigned earlier once storage, selection, and notifications are integrated                                                                                |
+| 9     | Release validation and portable ZIP               | Validate DPI/display layouts, focus, input cleanup, suspend/exit, failures, accessibility, and performance; package the executable/resources and verify on a clean Windows 11 environment                                                                  |
 
 This order is a recommendation for Story dependencies and integration. The user chooses assignments; independent Stories may proceed concurrently once their shared dependencies are available on `develop`.
 

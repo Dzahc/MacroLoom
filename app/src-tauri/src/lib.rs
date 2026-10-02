@@ -379,18 +379,7 @@ impl Engine {
                 if let EventKind::Mouse { down: false, .. } = &event.kind {
                     last_replay_release = Some(windows::cursor_position());
                 }
-                match &event.kind {
-                    EventKind::Key {
-                        vk,
-                        scan,
-                        extended,
-                        down,
-                    } => update_held(&mut held, Held::Key(*vk, *scan, *extended), *down),
-                    EventKind::Mouse { button, down, .. } => {
-                        update_held(&mut held, Held::Button(*button), *down)
-                    }
-                    EventKind::Move { .. } => {}
-                }
+                track_held(&mut held, &event.kind);
             }
             if !cancel.load(Ordering::Acquire) && error.is_none() {
                 let _ = wait_until(start + duration, &cancel);
@@ -404,13 +393,7 @@ impl Engine {
             inner.cancel = None;
             inner.lateness = lateness;
             inner.last_replay_release = last_replay_release;
-            inner.message = match error {
-                Some(e) => format!("Playback failed: {e}"),
-                None if cancel.load(Ordering::Acquire) => {
-                    "Playback cancelled and held input released.".into()
-                }
-                None => "Playback complete.".into(),
-            };
+            inner.message = playback_message(error, cancel.load(Ordering::Acquire));
             drop(inner);
             if let Err(e) = engine.window.lock().unwrap().compact(false) {
                 engine.inner.lock().unwrap().message = format!("Could not restore window: {e}");
@@ -425,6 +408,27 @@ impl Engine {
 pub enum Held {
     Key(u16, u16, bool),
     Button(MouseButton),
+}
+
+fn track_held(held: &mut Vec<Held>, kind: &EventKind) {
+    match kind {
+        EventKind::Key {
+            vk,
+            scan,
+            extended,
+            down,
+        } => update_held(held, Held::Key(*vk, *scan, *extended), *down),
+        EventKind::Mouse { button, down, .. } => update_held(held, Held::Button(*button), *down),
+        EventKind::Move { .. } => {}
+    }
+}
+
+fn playback_message(error: Option<String>, cancelled: bool) -> String {
+    match error {
+        Some(error) => format!("Playback failed: {error}"),
+        None if cancelled => "Playback cancelled and held input released.".into(),
+        None => "Playback complete.".into(),
+    }
 }
 
 fn update_held(held: &mut Vec<Held>, item: Held, down: bool) {
@@ -488,4 +492,48 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MacroLoom prototype");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_tracking_keeps_only_inputs_still_held() {
+        let mut held = Vec::new();
+        let key = |down| EventKind::Key {
+            vk: 65,
+            scan: 30,
+            extended: false,
+            down,
+        };
+        let button = |down| EventKind::Mouse {
+            button: MouseButton::Left,
+            down,
+            x: -20,
+            y: 100,
+        };
+        track_held(&mut held, &key(true));
+        track_held(&mut held, &key(true));
+        track_held(&mut held, &button(true));
+        track_held(&mut held, &EventKind::Move { x: -10, y: 100 });
+        assert_eq!(held.len(), 2);
+        track_held(&mut held, &key(false));
+        assert!(held == vec![Held::Button(MouseButton::Left)]);
+        track_held(&mut held, &button(false));
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn playback_feedback_prioritizes_failure_over_cancellation() {
+        assert_eq!(
+            playback_message(Some("injection rejected".into()), true),
+            "Playback failed: injection rejected"
+        );
+        assert_eq!(
+            playback_message(None, true),
+            "Playback cancelled and held input released."
+        );
+        assert_eq!(playback_message(None, false), "Playback complete.");
+    }
 }
