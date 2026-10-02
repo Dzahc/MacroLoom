@@ -3,7 +3,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.quality.analyzer import AnalysisError, analyze, check_versions
-from scripts.quality.changes import touched
 
 
 def decisions(count, rust=False):
@@ -54,26 +53,11 @@ class AnalyzerTests(unittest.TestCase):
             source = "function work(value = [" + ",".join("yes ? 1 : 0" for _ in range(score - 1)) + "]) {}"
             self.assertEqual(analyze("f.ts", source)[0].score, score)
 
-    def test_nested_functions_score_independently_and_recheck_parent(self):
+    def test_nested_functions_score_independently(self):
         old = "function outer() {\n function inner() {\n  return 0;\n }\n return inner();\n}"
         new = old.replace("return 0;", "if (yes) return 1; return 0;")
-        before, after = analyze("f.ts", old), analyze("f.ts", new)
+        after = analyze("f.ts", new)
         self.assertEqual({f.name: f.score for f in after}, {"outer": 1, "outer::inner": 2})
-        self.assertEqual(touched(old, new, before, after), {"outer", "outer::inner"})
-
-    def test_deletion_in_anonymous_function_rechecks_it_and_parent(self):
-        old = "function outer() {\n return () => {\n  if (ready) run();\n  return 0;\n };\n}"
-        new = old.replace("  if (ready) run();\n", "")
-        before, after = analyze("f.ts", old), analyze("f.ts", new)
-        self.assertEqual(touched(old, new, before, after), {f.name for f in after})
-
-    def test_deleting_whole_callback_does_not_touch_unchanged_sibling(self):
-        removed = " run(() => {\n  return 1;\n });\n"
-        sibling = " run(() => {\n  if (ready) run();\n  return 2;\n });\n"
-        old = "function outer() {\n" + removed + sibling + "}"
-        new = "function outer() {\n" + sibling + "}"
-        before, after = analyze("f.ts", old), analyze("f.ts", new)
-        self.assertEqual(touched(old, new, before, after), {"outer"})
 
     def test_react_jsx_callbacks_template_text_and_optional_operators(self):
         source = '''function App() {

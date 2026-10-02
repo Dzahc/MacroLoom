@@ -1,6 +1,5 @@
-"""Git snapshots and line-based changed-function selection."""
+"""Git snapshots and file rename detection."""
 
-from difflib import SequenceMatcher
 from pathlib import PurePosixPath
 import subprocess
 
@@ -59,56 +58,3 @@ def snapshots(root, base):
         if maintained(path) and (root / path).is_file():
             work[path] = (root / path).read_text(encoding="utf-8")
     return original, index, work
-
-
-def overlaps(function, start, end):
-    return start <= function.end and end >= function.start
-
-
-def touched(old_source, new_source, old_functions, new_functions, renamed=False):
-    if renamed or old_source is None:
-        return {function.name for function in new_functions}
-    selected = set()
-    current_names = {function.name for function in new_functions}
-    shared = current_names.intersection(function.name for function in old_functions)
-    old_order = [function.name for function in old_functions if function.name in shared]
-    new_order = [function.name for function in new_functions if function.name in shared]
-    # A line diff can align a large moved body and report its smaller neighbour
-    # as the move. Relative-order changes must still recheck the large function.
-    selected.update(name for position, name in enumerate(old_order)
-                    if new_order[position] != name)
-    matcher = SequenceMatcher(None, old_source.splitlines(), new_source.splitlines(), autojunk=False)
-    unchanged_lines = {}
-    old_lines = old_source.splitlines()
-    for block in matcher.get_matching_blocks():
-        for offset in range(block.size):
-            if old_lines[block.a + offset].strip():
-                unchanged_lines[block.a + offset + 1] = block.b + offset + 1
-    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
-        if tag == "equal":
-            continue
-        if new_end > new_start:
-            selected.update(function.name for function in new_functions
-                            if overlaps(function, new_start + 1, new_end))
-        if old_end > old_start:
-            selected.update(function.name for function in old_functions
-                            if function.name in current_names and overlaps(function, old_start + 1, old_end))
-            for previous in old_functions:
-                if previous.name in current_names or not overlaps(previous, old_start + 1, old_end):
-                    continue
-                # Anonymous identities include source hashes. A deletion can
-                # change the hash without adding any current lines. Surviving
-                # lines anchor the same function; fully deleted bodies vanish.
-                anchors = [new_line for old_line, new_line in unchanged_lines.items()
-                           if previous.start <= old_line <= previous.end]
-                if not anchors:
-                    continue
-                candidates = [function for function in new_functions
-                              if function.kind == previous.kind
-                              and function.start <= min(anchors) and function.end >= max(anchors)]
-                if candidates:
-                    candidate = min(candidates, key=lambda function: function.end - function.start)
-                    selected.add(candidate.name)
-                else:
-                    raise AnalysisError(f"cannot map edited function {previous.name} after deleted lines")
-    return selected

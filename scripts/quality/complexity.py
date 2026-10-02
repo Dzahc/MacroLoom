@@ -1,4 +1,4 @@
-"""Fail closed on changed functions above the reviewed cyclomatic limit."""
+"""Fail closed on functions in changed files above the reviewed cyclomatic limit."""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ import re
 import sys
 
 from .analyzer import AnalysisError, analyze, check_versions
-from .changes import git, maintained, renames, snapshots, touched
+from .changes import git, maintained, renames, snapshots
 
 
 LIMIT = 10
@@ -70,12 +70,7 @@ def check_snapshot(original, sources, rename_map, entries, label):
         old_source = original.get(previous)
         if old_source == source and path not in rename_map:
             continue
-        current = analyze(path, source)
-        old = analyze(previous, old_source) if old_source is not None else []
-        selected = touched(old_source, source, old, current, path in rename_map)
-        for function in current:
-            if function.name not in selected:
-                continue
+        for function in analyze(path, source):
             checked += 1
             maximum = entries.get((path, function.name), {}).get("max_score", LIMIT)
             if function.score > maximum:
@@ -100,7 +95,7 @@ def run(root, base_ref, allowlist_path):
         count += checked
     for error in errors:
         print(error, file=sys.stderr)
-    print(f"Complexity: {count} changed function checks across index/worktree; limit {LIMIT}; {len(errors)} failures")
+    print(f"Complexity: {count} function checks in changed files across index/worktree; limit {LIMIT}; {len(errors)} failures")
     return 1 if errors else 0
 
 

@@ -47,9 +47,7 @@ class AnalysisError(ValueError):
 class Function:
     name: str
     start: int
-    end: int
     score: int
-    kind: str = "function"
 
 
 def check_versions():
@@ -179,7 +177,7 @@ def analyze(path, source):
             owners = (*owners, label)
             name = "::".join(owners)
             score = score_body(path, body, data, parameter_values(node))
-            functions.append(Function(name, function_start(node), node.end_point.row + 1, score, node.type))
+            functions.append(Function(name, function_start(node), score))
         for child in node.named_children:
             visit(child, owners)
 

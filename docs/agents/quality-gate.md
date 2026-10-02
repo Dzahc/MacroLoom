@@ -73,7 +73,7 @@ additional frontend test framework is introduced. Tauri installer packaging rema
 a separate release command. Independent failures are collected into a final summary;
 dependent checks are omitted only after their prerequisite has failed visibly.
 
-## Changed functions and cyclomatic scores
+## Changed files and cyclomatic scores
 
 The default comparison is the merge base of `HEAD` and refreshed `origin/develop`.
 An explicit `--base-ref` changes that reference, without skipping the fetch.
@@ -81,20 +81,24 @@ Both index and final working-tree snapshots are checked against the base. This
 includes committed branch changes, staged/unstaged edits, and new untracked source.
 A staged violation cannot be hidden by an unstaged fix: restage the fix before
 completion. Conflicts, unavailable refs, decoding failures, parse errors, and
-ambiguous function mappings fail with diagnostics.
+ambiguous function identities fail with diagnostics.
 
 Maintained `.ts`, `.tsx`, and `.rs` files are in scope, including config, build,
 test, and task code. Dependencies, `dist`, Rust `target`, `.venv`, and generated
 Tauri schemas are excluded. Artificial complexity fixtures are strings in tests,
 so they cannot become accidental application-source exceptions.
 
-A changed line intersecting a function's signature, attached Rust attributes,
-or body brings the function into scope, including comments and formatting edits.
-Nested definitions are scored independently; editing one also selects all its
-enclosing functions. Calling another function adds no complexity. Untouched legacy
-functions above 10 are exempt. Renames and moves trigger rechecking even when code
-is unchanged. Fully deleted functions have no current score. Removed lines within
-a surviving function still select it.
+Every function, method, and closure in an added or changed file is checked,
+including functions whose own text is unchanged. Changes to comments, formatting,
+constants, or binding names bring the entire file into scope. File renames and
+moves also bring every function into scope even when file content is unchanged.
+Files unchanged from the comparison base remain exempt, including legacy functions
+above 10. Fully deleted files/functions have no current score; remaining functions
+in a changed file are checked. This file-level policy avoids line-diff movement
+and function-identity matching heuristics.
+
+Nested definitions are scored independently. Calling another function adds no
+complexity, and nested function bodies do not increase their enclosing score.
 
 The limit is **10 inclusive**. Scores start at 1. Add one for each `if`, loop,
 catch, conditional expression, short-circuit `&&`/`||`/`??` (including logical
@@ -161,8 +165,9 @@ enforce this repository's contract.
 
 The fixture suite proves 10 passes/11 fails in TS, TSX React components and arrows,
 Rust functions, methods, extern hooks and closures; nested scores and parent scope;
-operator/match rules; literal/type exclusion; all Git work states; touched/untouched
-legacy code; moves, renames, deletions; exact exceptions, growth and staleness;
+operator/match rules; literal/type exclusion; all Git work states; changed-file
+coverage and unchanged-file exemption; moves across constants, multiline binding
+renames, deletions; exact exceptions, growth and staleness;
 and clear rejection of unsupported syntax. Record the final gate command and
 output in the implementation issue or PR. Manual Windows focus/input/timing and
 packaging validation remain governed by PRD section 11.

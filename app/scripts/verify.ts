@@ -7,6 +7,7 @@ import { frontendEnvironment, nativeEnvironment } from './prerequisites.ts';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const app = join(root, 'app');
 const cargoArgs = ['--manifest-path', join(app, 'src-tauri/Cargo.toml')];
+const complexityCheckName = 'Complexity in changed files';
 
 function baseRef(args: string[]): string {
   if (args.length === 0) return 'origin/develop';
@@ -111,7 +112,7 @@ export function verify(base: string): boolean {
       if (fetched.ok) {
         results.push(
           execute(
-            'Changed-function complexity',
+            complexityCheckName,
             python,
             ['-m', 'scripts.quality.complexity', '--base-ref', base],
             root,
@@ -119,7 +120,7 @@ export function verify(base: string): boolean {
         );
       } else {
         console.error(
-          'SKIP Changed-function complexity: origin fetch failed; no stale-base result accepted.',
+          `SKIP ${complexityCheckName}: origin fetch failed; no stale-base result accepted.`,
         );
       }
     }

@@ -4,6 +4,8 @@
 
 Engineering issues and specs live in GitHub Issues. See `docs/agents/issue-tracker.md`.
 
+When changes apply to a ticket, include its `ML-<number>` identifier in every commit message (for example, `ML-25 Fix complexity checks`).
+
 ### Triage labels
 
 Use the five canonical triage labels. See `docs/agents/triage-labels.md`.
@@ -47,4 +49,4 @@ From the repository root: `npm --prefix app ci`; create a Python 3.12.14 `.venv`
 | Rust tests           | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline --all-targets`                  | `cargo test --locked --offline --all-targets` in `app/src-tauri/`                  |
 | Completion           | `npm --prefix app run verify`                                                                           | `npm run verify` in `app/`                                                         |
 
-On PowerShell use `npm.cmd` when execution policy blocks `npm.ps1`. **Before declaring a code task complete, pass `npm --prefix app run verify` and record its command/result in the issue or PR.** It fetches `origin`, then checks formatting, static analysis, production frontend build, every maintained test suite, and cyclomatic complexity ≤10 for added/touched `.ts`/`.tsx`/`.rs` functions, methods, and closures. Nested definitions have independent scores; their edits also recheck enclosing functions. Formatting edits, moves, and renames count as touches. Default base: merge base with refreshed `origin/develop`; override with `npm --prefix app run verify -- --base-ref <ref>`. Index/worktree and untracked files are covered. Exceptions require the owner's explicit approval and a narrowly keyed entry. Checks leave source unchanged and fail clearly on missing prerequisites or unsupported mapping. Hooks and CI are outside ML-25.
+On PowerShell use `npm.cmd` when execution policy blocks `npm.ps1`. **Before declaring a code task complete, pass `npm --prefix app run verify` and record its command/result in the issue or PR.** It fetches `origin`, then checks formatting, static analysis, production frontend build, every maintained test suite, and cyclomatic complexity ≤10 for every function, method, and closure in added/changed `.ts`/`.tsx`/`.rs` files. Nested definitions have independent scores. Comments, formatting, constants, binding renames, and file moves/renames bring the entire file into scope; unchanged files remain exempt. Default base: merge base with refreshed `origin/develop`; override with `npm --prefix app run verify -- --base-ref <ref>`. Index/worktree and untracked files are covered. Exceptions require the owner's explicit approval and a narrowly keyed entry. Checks leave source unchanged and fail clearly on missing prerequisites or unsupported mapping. Hooks and CI are outside ML-25.
