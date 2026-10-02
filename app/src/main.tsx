@@ -1,64 +1,74 @@
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { LibraryApp } from './library-app';
 import './style.css';
-import { PrototypeView, type Command, type Snapshot } from './prototype-view';
 
+type AppMode = { inputPrototype: boolean };
+const LIBRARY_MODE: AppMode = { inputPrototype: false };
+const MODE_COMMAND = 'app_mode';
+const ROOT_ID = 'root';
+const STARTING = 'Starting MacroLoom…';
+const START_FAILED = 'Could not start MacroLoom.';
+const PrototypeApp = lazy(
+  /** @returns The optional prototype module promise; loading failures propagate to React. */
+  () =>
+    import('./prototype-app').then(
+      /** @param module Loaded prototype module. @returns React's lazy default-export shape. */
+      (module) => ({
+        default: module.PrototypeApp,
+      }),
+    ),
+);
+
+/**
+ * Resolves typed native launch metadata and selects the library or explicit prototype.
+ * @returns Loading/error presentation until mode resolves, then the selected application.
+ * Pending mode results are ignored after unmount; browser previews use library mode directly.
+ */
 function App() {
-  const [state, setState] = useState<Snapshot | null>(null);
-  const [error, setError] = useState('');
-  const [uiResponse, setUiResponse] = useState<number | null>(null);
-
-  useEffect(() => {
-    let disposed = false;
-    const off = listen<Snapshot>('prototype-state', (event) => {
-      if (!disposed) setState(event.payload);
-    });
-    void invoke<Snapshot>('snapshot')
-      .then((value) => {
-        if (!disposed) setState(value);
-      })
-      .catch((reason) => setError(String(reason)));
-    const timer = window.setInterval(() => {
-      void invoke<Snapshot>('snapshot')
-        .then((value) => {
-          if (!disposed) setState(value);
-        })
-        .catch(() => {});
-    }, 100);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-      void off.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  async function action(command: Command) {
-    const start = performance.now();
-    setError('');
-    try {
-      const next = await invoke<Snapshot>(command);
-      setState(next);
-      requestAnimationFrame(() =>
-        setUiResponse(Math.round(performance.now() - start)),
-      );
-    } catch (reason) {
-      setError(String(reason));
-    }
-  }
-
-  return (
-    <PrototypeView
-      state={state}
-      error={error}
-      uiResponse={uiResponse}
-      onAction={action}
-    />
+  const [mode, setMode] = useState<AppMode | null>(
+    /** @returns Browser library mode, or null while native launch metadata is pending. */
+    () => (isTauri() ? null : LIBRARY_MODE),
   );
+  const [error, setError] = useState('');
+  useEffect(
+    /** Resolves native mode once and returns cleanup suppressing post-unmount updates. */
+    () => {
+      if (!isTauri()) return;
+      let disposed = false;
+      void invoke<AppMode>(MODE_COMMAND)
+        .then(
+          /** @param value Typed native mode applied only to the mounted app. @returns Nothing. */
+          (value) => {
+            if (!disposed) setMode(value);
+          },
+        )
+        .catch(
+          /** @param reason Mode-command failure reported while mounted. @returns Nothing. */
+          (reason: unknown) => {
+            if (!disposed) setError(`${START_FAILED} ${String(reason)}`);
+          },
+        );
+      /** Marks the pending request disposed; does not cancel backend work. */
+      return () => {
+        disposed = true;
+      };
+    },
+    [],
+  );
+  if (error) return <p role="alert">{error}</p>;
+  if (!mode) return <p role="status">{STARTING}</p>;
+  if (mode.inputPrototype)
+    return (
+      <Suspense fallback={<p role="status">{STARTING}</p>}>
+        <PrototypeApp />
+      </Suspense>
+    );
+  return <LibraryApp />;
 }
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById(ROOT_ID)!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,

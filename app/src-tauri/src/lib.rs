@@ -1,4 +1,7 @@
+mod app_mode;
 mod windows;
+
+use app_mode::AppMode;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -6,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+const DESKTOP_START_FAILURE: &str = "failed to run MacroLoom desktop event loop";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -453,45 +458,67 @@ fn wait_until(deadline: Instant, cancel: &AtomicBool) -> bool {
 }
 
 #[tauri::command]
+/// Returns serialized compile-time mode metadata without enabling native input.
+fn app_mode() -> AppMode {
+    AppMode::current()
+}
+
+#[tauri::command]
+/// Returns the managed engine's current presentation snapshot without changing its session.
 fn snapshot(engine: State<'_, Arc<Engine>>) -> Snapshot {
     engine.snapshot()
 }
 
 #[tauri::command]
+/// Starts capture through the managed engine and returns its resulting snapshot.
+/// Rejects library mode, active sessions, unavailable Stop, or failed compact transitions.
 fn start_recording(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
+    AppMode::current().require_input()?;
     engine.start_recording()?;
     Ok(engine.snapshot())
 }
 
 #[tauri::command]
+/// Stops capture or requests playback cancellation and returns the managed engine snapshot.
+/// Rejects library mode; propagates window restoration errors from stopping capture.
 fn stop(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
+    AppMode::current().require_input()?;
     engine.stop()?;
     Ok(engine.snapshot())
 }
 
 #[tauri::command]
+/// Starts the managed engine's in-memory playback and returns its immediate snapshot.
+/// Rejects library mode or engine preconditions; playback owns cancellation and input cleanup.
 fn play(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
+    AppMode::current().require_input()?;
     engine.play()?;
     Ok(engine.snapshot())
 }
 
+/// Runs the desktop event loop, registering live hooks only in explicit debug prototype mode.
+/// Initializes DPI and the managed engine; startup failure panics because no window can recover.
 pub fn run() {
     windows::enable_physical_dpi();
     tauri::Builder::default()
         .setup(|app| {
             let engine = Engine::new(app.handle().clone())?;
-            windows::start_hooks(engine.clone());
+            if AppMode::current().input_prototype {
+                windows::start_hooks(engine.clone());
+            }
             app.manage(engine);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_mode,
             snapshot,
             start_recording,
             stop,
             play
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run MacroLoom prototype");
+        // Event-loop startup failure is fatal: no running window exists to recover through.
+        .expect(DESKTOP_START_FAILURE);
 }
 
 #[cfg(test)]
