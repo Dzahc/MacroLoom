@@ -20,12 +20,20 @@ import {
   requestAction,
   type LibrarySnapshot,
 } from '../src/library-model.ts';
-import { SAMPLE_MACROS, SCENARIOS, SCENARIO } from '../src/library-samples.ts';
+import {
+  SAMPLE_MACROS,
+  SCENARIOS,
+  SCENARIO,
+  OUTCOME_EXAMPLES,
+} from '../src/library-samples.ts';
+import { OutcomeQueue } from '../src/outcome-queue.ts';
 
 let view: typeof import('../src/library-view.tsx');
+let toastView: typeof import('../src/outcome-toasts.tsx');
 const SELECTED = SAMPLE_MACROS[0];
 const OTHER = SAMPLE_MACROS[1];
 const MISSING_ID = 'missing-macro';
+const OUTCOME_ID = { first: 1, second: 2 } as const;
 const DURATION_CASES = [
   [0, '00:00'],
   [TIME.millisecond - 1, '00:00'],
@@ -49,6 +57,22 @@ before(
       jsx: 'automatic',
     });
     view = (await import(pathToFileURL(output).href)) as typeof view;
+    const toastOutput = join(
+      process.cwd(),
+      '.quality-output/outcome-toasts.mjs',
+    );
+    await build({
+      entryPoints: [join(process.cwd(), 'src/outcome-toasts.tsx')],
+      outfile: toastOutput,
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      packages: 'external',
+      jsx: 'automatic',
+    });
+    toastView = (await import(
+      pathToFileURL(toastOutput).href
+    )) as typeof toastView;
   },
 );
 
@@ -75,6 +99,41 @@ function render(state: LibrarySnapshot): string {
     }),
   );
 }
+
+/** @param queue Owner-managed outcome state. @returns Static overlay markup with real queue-head selection. */
+function renderToast(queue: OutcomeQueue): string {
+  return renderToStaticMarkup(
+    createElement(toastView.OutcomeToasts, { queue }),
+  );
+}
+
+/** Checks the fixed-overlay presentation retains one polite announcement, labeled dismissal, and outcome styling. */
+void test('toast overlay presents only the queue head and retains accessible dismissal and announcements', () => {
+  const queue = new OutcomeQueue();
+  try {
+    const empty = renderToast(queue);
+    assert.match(empty, /class="toast-overlay"/);
+    assert.match(empty, /role="status" aria-live="polite" aria-atomic="true"/);
+    assert.doesNotMatch(empty, /<aside/);
+    const success = OUTCOME_EXAMPLES[0];
+    const failure = OUTCOME_EXAMPLES[1];
+    queue.enqueue({ ...success, id: OUTCOME_ID.first });
+    queue.enqueue({ ...failure, id: OUTCOME_ID.second });
+    const first = renderToast(queue);
+    assert.match(first, /class="outcome-toast success"/);
+    assert.ok(first.includes(success.message));
+    assert.equal(first.includes(failure.message), false);
+    assert.ok(first.includes(`aria-label="${LABEL.dismiss}"`));
+    assert.doesNotMatch(first, /aria-modal/);
+    queue.dismiss();
+    const next = renderToast(queue);
+    assert.match(next, /class="outcome-toast failure"/);
+    assert.ok(next.includes(failure.message));
+    assert.equal(next.includes(success.message), false);
+  } finally {
+    queue.dispose();
+  }
+});
 
 void test('idle toolbar availability depends on valid selection; Stop is unavailable' /** Checks allowed idle actions for absent, valid, and stale selections. */, () => {
   const emptySelection = snapshot();

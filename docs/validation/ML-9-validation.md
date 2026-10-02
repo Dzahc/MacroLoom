@@ -11,6 +11,10 @@ error/recovery demonstrations. The user's final scope confirmation preceded impl
 Subsequent UI review removed the sample-data label from the main window. The
 development pane retains its explanation of controlled sample scenarios.
 
+On October 2, 2026, the user changed toast presentation to a slightly translucent
+floating overlay near the bottom of the window. This supersedes the previous
+below-banner placement and intersection-based timing implementation.
+
 The sample library is the default application. A separate development pane
 controls scenarios and operation toasts and displays callback/failure logs.
 Sample actions do not simulate recording, playback, saving, configuration, or
@@ -27,8 +31,10 @@ recovery, and global shortcut integration remain in subsequent stories.
   double-click emits one Play request for the clicked ID.
 - Operation toasts are serialized in arrival order with four seconds of visible
   time, explicit dismissal, and accessible announcements. Hover, focus, and
-  document invisibility or a partially/fully offscreen toast pause their remaining lifetime. Timer/listener cleanup
-  runs on unmount. Toasts occupy space below the banner and cannot cover Stop.
+  document invisibility pause their remaining lifetime. Timer/listener cleanup
+  runs on unmount. Toasts are fixed near the viewport bottom, with a translucent
+  background and opaque text/icons, and do not move the macro list. The toolbar
+  stacks above the overlay so its controls remain accessible in a tight layout.
 - The backend exposes typed `app_mode` metadata. Only the explicit debug
   `input-prototype` feature starts live hooks and F9/F8 registration; live commands
   reject calls in normal library mode. Release builds cannot enable the prototype.
@@ -74,6 +80,8 @@ recorded in GitHub issue #9 after the checks complete.
 
 ## PR review follow-up — October 2, 2026
 
+The following records the earlier fixes before the user's overlay decision.
+
 - Added JSDoc for the ML-9 components, internal helpers, callbacks, and queue
   lifetime/subscription methods, plus Rust documentation for mode metadata and
   command preconditions.
@@ -96,3 +104,27 @@ static analysis, production build, and pinned-environment checks passed; 21
 frontend/tooling tests, 7 Rust tests, and 33 Python quality fixtures passed.
 Complexity checked 369 functions across index/worktree against refreshed
 `origin/develop`, with limit 10 and zero failures or exceptions.
+
+## Bottom overlay follow-up — October 2, 2026
+
+- Replaced the inline toast block with a fixed bottom overlay. Transparent space
+  around the card passes pointer events through to the application; the card's
+  dismiss button remains interactive. Light/dark surfaces use a 94% opaque
+  background with fully opaque text/icons. Forced colors use a solid system
+  surface and reduced-motion preference disables the entrance animation.
+- Removed intersection observers, element refs, and offscreen pause state.
+  The queue retains four-second expiration, hover/focus pauses, hidden-document
+  pauses, serialized outcomes, and manual dismissal.
+- Updated regression coverage for document lifecycle cleanup and rendered
+  overlay announcements, accessible dismissal, and queue-head success/failure
+  presentation. The obsolete scroll-intersection tests were removed.
+- Browser automation still reports no available browser. Layout, minimum-size,
+  and scaled-text visual walkthroughs were not performed during this follow-up.
+
+`npm.cmd --prefix app run verify` **PASS** for the bottom-overlay implementation:
+21 frontend/tooling tests, 7 Rust tests, and 33 Python fixtures passed, along with
+all formatting, static analysis, production build, and environment checks.
+Final staged verification checked 364 functions across index/worktree against refreshed
+`origin/develop`, with limit 10 and zero failures or exceptions.
+
+The user reviewed the bottom overlay and approved committing and pushing it.

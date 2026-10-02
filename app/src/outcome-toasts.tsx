@@ -1,14 +1,14 @@
-import { useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { ActionIcon } from './action-icon';
 import { LABEL } from './library-model';
 import { OutcomeQueue, PAUSE } from './outcome-queue';
-import { BROWSER_VISIBILITY, observeToastVisibility } from './toast-visibility';
+import { subscribeDocumentVisibility } from './document-visibility';
 
 /**
  * Presents only the queue head and announces each identity through a polite live region.
- * @param props Owner-managed queue; document/intersection/hover/focus pause expiration.
- * @returns A nonmodal toast slot with accessible dismissal. Visibility subscriptions
- * disconnect on replacement/unmount; the owner remains responsible for queue disposal.
+ * @param props Owner-managed queue; document/hover/focus pause expiration.
+ * @returns A fixed bottom overlay with accessible dismissal and no layout displacement.
+ * Document subscriptions disconnect on unmount; the owner disposes the queue.
  */
 export function OutcomeToasts({ queue }: { queue: OutcomeQueue }) {
   const outcomes = useSyncExternalStore(
@@ -17,17 +17,13 @@ export function OutcomeToasts({ queue }: { queue: OutcomeQueue }) {
     queue.getSnapshot,
   );
   const current = outcomes[0];
-  const toast = useRef<HTMLElement>(null);
-  useLayoutEffect(
-    /** Pauses before paint until full intersection is confirmed; returns subscription cleanup. */
-    () => {
-      if (!current || !toast.current) return;
-      return observeToastVisibility(queue, toast.current, BROWSER_VISIBILITY);
-    },
-    [queue, current],
+  useEffect(
+    /** Subscribes hidden-document pauses independently of scroll position; returns cleanup. */
+    () => subscribeDocumentVisibility(queue, document),
+    [queue],
   );
   return (
-    <div className="toast-slot">
+    <div className="toast-overlay">
       <div
         className="sr-only"
         role="status"
@@ -38,7 +34,6 @@ export function OutcomeToasts({ queue }: { queue: OutcomeQueue }) {
       </div>
       {current && (
         <aside
-          ref={toast}
           key={current.id}
           className={`outcome-toast ${current.kind}`}
           onMouseEnter={

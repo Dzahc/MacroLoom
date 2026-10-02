@@ -76,6 +76,8 @@ svg {
   padding: 1rem 1.25rem 1.25rem;
 }
 .library-toolbar {
+  position: relative;
+  z-index: 3;
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -256,11 +258,16 @@ svg {
 .macro-menu button:hover {
   background: var(--hover);
 }
-.toast-slot:has(.outcome-toast) {
-  flex-shrink: 0;
-}
-.toast-slot:not(:has(.outcome-toast)) {
-  margin-top: -0.85rem;
+.toast-overlay {
+  position: fixed;
+  z-index: 2;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  width: calc(100% - 2rem);
+  max-width: 28rem;
+  margin-inline: auto;
+  pointer-events: none;
 }
 .outcome-toast {
   display: flex;
@@ -271,6 +278,13 @@ svg {
   border-left: 3px solid var(--success);
   border-radius: 0.5rem;
   background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0.4rem 1.4rem #0003;
+  pointer-events: auto;
+  max-height: calc(100dvh - 8rem);
+  overflow-y: auto;
+  animation: toast-enter 160ms ease-out;
 }
 .outcome-toast > svg {
   color: var(--success);
@@ -366,6 +380,16 @@ svg {
     transform: rotate(360deg);
   }
 }
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.4rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 @media (max-width: 760px) {
   .app-layout.with-development {
     flex-direction: column;
@@ -399,8 +423,16 @@ svg {
   .status-dot.busy {
     animation: none;
   }
+  .outcome-toast {
+    animation: none;
+  }
 }
 @media (forced-colors: active) {
+  .outcome-toast {
+    background: Canvas;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
   .macro-row.selected {
     border: 2px solid Highlight;
   }
