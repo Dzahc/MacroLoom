@@ -17,12 +17,24 @@ Follow the [pinned toolchain and dependency setup](docs/agents/quality-gate.md#r
 npm.cmd --prefix app ci
 ```
 
-Start the desktop app from the repository root:
+**Recommended: run the full desktop app** from the repository root:
 
 ```powershell
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 npm.cmd --prefix app run tauri -- dev
 ```
+
+This starts Vite, compiles the Rust backend, and opens the Tauri application
+window. From `app/`, the equivalent command is `npm.cmd run tauri -- dev`.
+
+For a **browser-only frontend preview**, run from the repository root:
+
+```powershell
+npm.cmd --prefix app run dev
+```
+
+Open `http://127.0.0.1:1420` in your browser. This starts Vite only; native backend
+features require the full desktop app.
 
 To build an executable with the frontend embedded, run from `app/`:
 
@@ -39,10 +51,6 @@ context menu, and double-click actions expose requests for later stories; no inp
 is captured or replayed and no macro files are changed. Live storage, dialogs,
 compact transitions, recovery, and
 native Record/Stop integration belong to their subsequent stories.
-
-For a browser preview, run `npm.cmd --prefix app run dev` from the repository root
-and open `http://127.0.0.1:1420`. This command starts only the frontend; use it
-instead of the desktop command above, since both use port 1420.
 
 In development, **Open development pane** exposes empty,
 populated, saving, and logged load-failure examples, six operation-toast examples,
