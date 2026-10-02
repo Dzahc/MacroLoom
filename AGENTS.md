@@ -20,11 +20,13 @@ Single-context layout: a root glossary and repo-wide ADRs. See `docs/agents/doma
 
 ## Code and Windows safety
 
+- Use named constants instead of hardcoded strings or magic numbers in both source and test files.
 - Use explicit Rust `Result`/`Option` handling at fallible boundaries. Explain invariants behind panic paths; keep owned session data and synchronization lifetimes clear. Put `unsafe` around the smallest necessary operations and document pointer/handle validity, initialization, and lifetime assumptions.
 - Keep input callbacks short; run storage and long work away from the UI/native event loops. Allow one active session; recording and playback never overlap. Preserve monotonic deadlines and equal-timestamp ordering. Stop stays effective through waits, holds, drags, and repeat intervals; completion, failure, cancellation, and exit release session-owned input. Injection failure stops playback; resume never bursts overdue input.
 - Preserve target focus on compact-view transitions and status updates. Exclude control shortcuts from recorded input. Check actual compact-window bounds before mouse injection; use signed physical screen pixels and compatible DPI handling.
 - Validate schema versions, timestamps, ranges, and drag state. Persist atomically, retaining the previous valid file on failure. Failed recording saves retain recoverable data for Retry/Discard; discard needs the user's explicit action. Remove list entries only after disk deletion succeeds; failed property writes preserve persisted values and editable drafts. Read `docs/agents/PRD.md` sections 6–11 before changing session, window, input, timing, or persistence behavior.
 - Add behavior-focused tests for changed logic. Keep deterministic tests distinct from Windows integration and manual target-application evidence. Preserve the glossary/ADR workflow above; read applicable domain documents before code exploration.
+- Favor tests that reference constants from source code instead of redefining them.
 
 ## Setup, commands, and completion
 
