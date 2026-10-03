@@ -135,7 +135,8 @@ export class OutcomeQueue {
     if (
       this.outcomes.length === 0 ||
       this.pauses.size !== 0 ||
-      this.timer !== null
+      this.timer !== null ||
+      this.outcomes[0]?.persistent === true
     )
       return;
     this.startedAt = this.clock.now();

@@ -44,17 +44,23 @@ npm.cmd run tauri -- build --no-bundle
 
 The executable is written to `app/src-tauri/target/release/macroloom.exe`, relative to the repository root.
 
-## Main library preview (ML-9)
+## Saved macro library (ML-13)
 
-The default window displays controlled sample macros. Its icon toolbar, selection,
-context menu, and double-click actions expose requests for later stories; no input
-is captured or replayed and no macro files are changed. Live storage, dialogs,
-compact transitions, recovery, and
-native Record/Stop integration belong to their subsequent stories.
+The desktop window loads version-one JSON macros from `macros` beside the running
+executable, independently of the launch working directory. Valid entries appear
+progressively, newest first, with stable-ID selection. Invalid files remain
+untouched and produce individually dismissed toasts naming the file and failing
+field or part. Temporary `.json.tmp` files are ignored. Event data loads on demand;
+external file changes require a restart before the affected action can proceed.
+
+Configure, Delete, and Play prepare validated snapshots for their later stories;
+dialogs, persistence mutations, and native Record/Stop/Play integration remain
+outside ML-13. The loader never executes saved input. Browser-only previews retain
+the ML-9 controlled samples because they cannot access native storage.
 
 In development, **Open development pane** exposes empty,
 populated, saving, and logged load-failure examples, six operation-toast examples,
-and a callback log. The development pane is omitted from production builds.
+and a callback log in the browser preview. The development pane is omitted from production builds.
 
 The ML-8 live input prototype remains available explicitly in a debug build:
 
