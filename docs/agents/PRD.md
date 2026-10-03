@@ -2,8 +2,8 @@
 
 | Document | Value                                                                                   |
 | -------- | --------------------------------------------------------------------------------------- |
-| Version  | 0.12                                                                                    |
-| Date     | September 29, 2026                                                                      |
+| Version  | 0.13                                                                                    |
+| Date     | October 3, 2026                                                                         |
 | Status   | Draft for review; v1 scope and distribution defined, technical defaults remain proposed |
 
 ## Table of contents
@@ -144,7 +144,7 @@ Limit movement volume through modest sampling/coalescing, with an initial target
 2. Release capture resources promptly, restore the full library view and normal window size/topmost state, and show “Saving…” in the banner until persistence completes. Restoring the view must not activate the window or take focus from another application.
 3. Save nonempty recordings automatically to `<executable_directory>/macros/` with no Save As dialog.
 4. Generate a default display name such as `Macro 2026-09-28 14-32-08`; append a numeric suffix when needed to keep generated names unique.
-5. Assign a stable macro ID and use it for the filename, independently of the display name.
+5. Assign a stable UUID independently of the filename. Derive the initial filename from the display name, replacing whitespace and Windows-prohibited characters with underscores, handling reserved device names and trailing periods/spaces, and using `macro` if the resulting stem is empty. Resolve case-insensitive collisions with `_2`, `_3`, and subsequent numeric suffixes; never replace another macro.
 6. Write the file through a temporary file and atomic commit where supported, so an interrupted write does not replace a valid file with partial JSON.
 7. After successful save, add the macro to the list, select it, show a brief success toast naming the saved macro, and return to idle.
 8. An empty recording produces “No input recorded” and no macro file.
@@ -160,8 +160,11 @@ Resolve the storage path from the executable's directory, never the process's cu
 3. Clicking an entry selects it. Right clicking an entry selects that entry and opens Configure and Delete actions.
 4. Double clicking an entry starts that macro through the same playback workflow as Play.
 5. When no macros exist, show “No macros yet. Record your first macro.”
-6. Ignore temporary save files. Unsupported or malformed files must not prevent other macros from loading. Show an actionable load-error message identifying affected filenames and preserve those files.
-7. Reload the library on the next launch. Live watching of externally changed files is deferred.
+6. Ignore temporary save files. Unsupported or malformed files must not prevent other macros from loading. Immediately enqueue one manually dismissed error toast per failed file, naming its filename, failing field or part, reason, and correction/restart guidance. Preserve those files. When no valid entries remain, use the usual first-recording empty state even if files failed validation.
+7. Validate committed files sequentially in deterministic alphabetical filename order. Add each valid macro immediately in display order; loaded entries are usable while discovery continues and selection follows stable ID. The first valid file for a duplicated ID wins; later duplicates remain untouched and produce error toasts. If discovery is interrupted, retain validated entries and explain the incomplete scan; restart retries discovery.
+8. Keep summaries, properties, file associations, and content fingerprints in memory. Load full events only for an action and validate the same bytes used by that action. Unexpected external changes reject the action with restart guidance; successful application saves refresh cached properties and fingerprints. No lifetime file locks or polling are required. Playback retains its own stable session snapshot.
+9. Readable but unwritable storage still permits loading and playback; operations requiring writes fail with an explanation. Never silently switch storage directories. Show loading feedback until discovery completes; reserve the first-recording state until a completed scan has no valid entries.
+10. Reload the library on the next launch. Live watching of externally changed files is deferred.
 
 ### 4.4 Play a macro
 
@@ -343,7 +346,9 @@ The portable data model and UI do not imply automatic cross-platform input suppo
 
 ## 9. Saved macro format
 
-Use one versioned JSON file per macro. The filename is `<macro-id>.json`; the display name lives in metadata. No database or account service is required for v1.
+Use one versioned JSON file per macro. Initial filenames derive from display names as specified in section 4.2; the embedded UUID supplies stable identity. A valid JSON file can be manually renamed without changing its identity. Configuration renames change metadata without changing the existing filename. No database or account service is required for v1.
+
+Version one requires canonical lowercase UUIDs and UTC RFC 3339 creation/update timestamps with at most millisecond precision; creation must not follow update. Unknown metadata fields are permitted and preserved for later property saves. Each file is limited to 16 MiB and 100,000 events, with no fixed library-count cap. Reject empty event arrays; allow zero duration when all events occur at zero. Integer millisecond durations, event offsets, run counts and intervals must fit JavaScript's safe integer range. Current monitor/layout differences do not make structurally valid recording metadata malformed; playback checks compatibility separately.
 
 Required information:
 

@@ -34,6 +34,7 @@ const SELECTED = SAMPLE_MACROS[0];
 const OTHER = SAMPLE_MACROS[1];
 const MISSING_ID = 'missing-macro';
 const OUTCOME_ID = { first: 1, second: 2 } as const;
+const READ_ONLY = false;
 const DURATION_CASES = [
   [0, '00:00'],
   [TIME.millisecond - 1, '00:00'],
@@ -176,6 +177,24 @@ void test('busy snapshots cannot emit mutating requests even with a selection' /
     }
     assert.equal(canRequest(busy, ACTION.stop), phase !== PHASE.saving);
   }
+});
+
+void test('loading uses progress text and read-only storage preserves selection, playback and property inspection', /** Checks the real view and request boundary while storage writes are unavailable. */ () => {
+  const loading = snapshot({ macros: [], loading: true, writable: READ_ONLY });
+  assert.ok(render(loading).includes(LABEL.loading));
+  assert.equal(render(loading).includes(LABEL.empty), false);
+  const readable = snapshot({
+    selectedId: SELECTED.id,
+    loading: true,
+    writable: READ_ONLY,
+  });
+  assert.equal(canRequest(readable, ACTION.record), false);
+  assert.equal(canRequest(readable, ACTION.delete), false);
+  assert.equal(canRequest(readable, ACTION.play), true);
+  assert.equal(canRequest(readable, ACTION.configure), true);
+  assert.ok(
+    render(snapshot({ macros: [], loading: false })).includes(LABEL.empty),
+  );
 });
 
 void test('double click and context actions address the clicked ID without waiting for selection updates' /** Checks explicit clicked IDs take precedence over previous selection while missing IDs are rejected. */, () => {

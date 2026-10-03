@@ -14,6 +14,8 @@ import {
 } from './library-samples';
 import { OutcomeQueue } from './outcome-queue';
 import { OutcomeToasts } from './outcome-toasts';
+import { isTauri } from '@tauri-apps/api/core';
+import { LiveLibraryApp } from './live-library-app';
 
 const DevelopmentPane = import.meta.env.DEV
   ? lazy(
@@ -33,7 +35,7 @@ const DevelopmentPane = import.meta.env.DEV
  * @returns The library plus an optional development pane; no live input or disk effects occur.
  * Queue timers are disposed on unmount and the log retains only its bounded tail.
  */
-export function LibraryApp() {
+function SampleLibraryApp() {
   const [scenario, setScenario] = useState<ScenarioName>(SCENARIO.populated);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showDev, setShowDev] = useState(false);
@@ -142,4 +144,9 @@ export function LibraryApp() {
       )}
     </div>
   );
+}
+
+/** @returns Live native storage, or controlled samples for the browser-only development preview. */
+export function LibraryApp() {
+  return isTauri() ? <LiveLibraryApp /> : <SampleLibraryApp />;
 }

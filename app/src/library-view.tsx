@@ -278,8 +278,7 @@ export function LibraryView(props: ViewProps) {
         </div>
         {props.snapshot.macros.length === 0 ? (
           <div className="empty-library">
-            <ActionIcon action={ACTION.record} />
-            <p>{LABEL.empty}</p>
+            <p>{props.snapshot.loading ? LABEL.loading : LABEL.empty}</p>
           </div>
         ) : (
           <ul className="macro-list">

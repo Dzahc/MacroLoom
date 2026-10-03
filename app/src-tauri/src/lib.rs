@@ -1,4 +1,7 @@
 mod app_mode;
+mod library_commands;
+pub mod macro_format;
+pub mod repository;
 mod windows;
 
 use app_mode::AppMode;
@@ -507,6 +510,7 @@ pub fn run() {
                 windows::start_hooks(engine.clone());
             }
             app.manage(engine);
+            app.manage(library_commands::LibraryService::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -514,7 +518,9 @@ pub fn run() {
             snapshot,
             start_recording,
             stop,
-            play
+            play,
+            library_commands::load_library,
+            library_commands::macro_snapshot
         ])
         .run(tauri::generate_context!())
         // Event-loop startup failure is fatal: no running window exists to recover through.

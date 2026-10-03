@@ -223,14 +223,10 @@ svg {
   color: var(--muted);
   text-align: center;
 }
-.empty-library svg {
-  color: var(--danger);
-  opacity: 0.6;
-}
 .empty-library p {
   font-size: 0.875rem;
   line-height: 1.6;
-  margin: 0.65rem 0 0;
+  margin: 0;
 }
 .macro-menu {
   position: fixed;

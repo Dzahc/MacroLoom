@@ -31,6 +31,7 @@ export const LABEL = {
   macros: 'Macros',
   empty: 'No macros yet. Record your first macro.',
   ready: 'Ready',
+  loading: 'Loading macros…',
   saving: 'Saving…',
   recordShortcut: 'Record: F9',
   stopShortcut: 'Stop: F8',
@@ -84,6 +85,8 @@ export type LibrarySnapshot = Readonly<{
   selectedId: string | null;
   phase: LibraryPhase;
   message: string;
+  loading?: boolean;
+  writable?: boolean;
 }>;
 export type LibraryCallbacks = {
   onSelect: (change: SelectionChange) => void;
@@ -93,6 +96,7 @@ export type Outcome = Readonly<{
   id: number;
   kind: 'success' | 'failure';
   message: string;
+  persistent?: boolean;
 }>;
 
 /**
@@ -127,7 +131,10 @@ export function canRequest(
       (phase) => phase === snapshot.phase,
     );
   if (snapshot.phase !== PHASE.idle) return false;
-  if (action === ACTION.record) return true;
+  if (action === ACTION.record) return snapshot.writable !== false;
+  if (action === ACTION.delete) {
+    if (snapshot.writable === false) return false;
+  }
   return snapshot.macros.some(
     /** @param macro Candidate entry. @returns Whether the requested ID exists. */
     (macro) => macro.id === macroId,

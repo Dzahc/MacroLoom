@@ -8,6 +8,7 @@ const FIRST: Outcome = { ...OUTCOME_EXAMPLES[0], id: 1 };
 const SECOND: Outcome = { ...OUTCOME_EXAMPLES[1], id: 2 };
 const HALF_LIFETIME = TIME.toast / 2;
 const LONG_WAIT = TIME.toast * 3;
+const LOAD_FAILURE: Outcome = { ...SECOND, persistent: true };
 
 /**
  * Creates a real queue backed by deterministic monotonic time and mocked timers.
@@ -45,6 +46,17 @@ void test('outcomes are shown in arrival order and each receives a full visible 
   assert.equal(queue.getSnapshot()[0], FIRST);
   advance(1);
   assert.equal(queue.getSnapshot()[0], SECOND);
+  advance(TIME.toast);
+  assert.equal(queue.getSnapshot().length, 0);
+});
+
+void test('load failures remain until dismissed and their successor gets its normal lifetime' /** @param context Timer owner. @returns Nothing; checks persistent failure and subsequent expiration. */, (context) => {
+  const { queue, advance } = setup(context);
+  queue.enqueue(LOAD_FAILURE);
+  queue.enqueue(FIRST);
+  advance(LONG_WAIT);
+  assert.equal(queue.getSnapshot()[0], LOAD_FAILURE);
+  queue.dismiss();
   advance(TIME.toast);
   assert.equal(queue.getSnapshot().length, 0);
 });

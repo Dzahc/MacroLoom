@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "c08f046a-c096-4fd5-af1b-78a7c1d05a02",
+  "name": "Sample Drag and Drop",
+  "createdAt": "2026-10-03T16:00:00Z",
+  "updatedAt": "2026-10-03T16:00:00Z",
+  "recording": {
+    "platform": "windows",
+    "coordinateSpace": "screen_physical_pixels",
+    "keyboardLayout": "00000409",
+    "displays": [
+      { "x": 0, "y": 0, "width": 1920, "height": 1080, "scaleFactor": 1.0 }
+    ]
+  },
+  "durationMs": 12000,
+  "playback": {
+    "speed": 0.5,
+    "repeatMode": "fixed",
+    "totalRuns": 3,
+    "intervalMs": 1000
+  },
+  "events": [
+    {
+      "atMs": 1000,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 300,
+      "y": 400
+    },
+    { "atMs": 1500, "type": "mouse_move", "x": 400, "y": 400 },
+    { "atMs": 2000, "type": "mouse_move", "x": 500, "y": 450 },
+    { "atMs": 2500, "type": "mouse_move", "x": 600, "y": 500 },
+    { "atMs": 3000, "type": "mouse_up", "button": "left", "x": 600, "y": 500 }
+  ]
+}
