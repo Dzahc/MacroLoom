@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   type KeyboardEvent,
+  type MouseEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { DELETE_TEXT, type DeleteConfirmation } from './delete-confirmation';
@@ -16,12 +17,16 @@ const FOCUS_SELECTOR = {
   fallback: '.macro-library',
 } as const;
 export const ACTIVATION_KEY = { enter: 'Enter', space: ' ' } as const;
+const TAB_KEY = 'Tab';
+const ENABLED_BUTTONS = 'button:not(:disabled)';
+const FIRST_BUTTON = 0;
+const LAST_BUTTON_OFFSET = 1;
 
 type Props = {
   attempt: DeleteConfirmation;
   snapshot: LibrarySnapshot;
-  onCancel: () => void;
-  onConfirm: () => void;
+  onCancel: (event?: MouseEvent<HTMLButtonElement>) => void;
+  onConfirm: (event: MouseEvent<HTMLButtonElement>) => void;
 };
 
 /**
@@ -36,6 +41,26 @@ export function suppressRepeatedActivation(event: KeyboardEvent): void {
   ) {
     event.preventDefault();
     event.stopPropagation();
+  }
+}
+
+/**
+ * Wraps sequential focus at the modal's edges; WebView2 otherwise allows Tab to leave its web content.
+ * @param event Dialog keyboard event; Enter/Space repeats retain the owner's suppression policy.
+ * @returns Nothing; ordinary navigation between controls remains native.
+ */
+function containKeyboardFocus(event: KeyboardEvent<HTMLDialogElement>): void {
+  suppressRepeatedActivation(event);
+  if (event.key !== TAB_KEY) return;
+  const buttons =
+    event.currentTarget.querySelectorAll<HTMLButtonElement>(ENABLED_BUTTONS);
+  const first = buttons[FIRST_BUTTON];
+  const last = buttons[buttons.length - LAST_BUTTON_OFFSET];
+  const edge = event.shiftKey ? first : last;
+  const destination = event.shiftKey ? last : first;
+  if (document.activeElement === edge && destination) {
+    event.preventDefault();
+    destination.focus({ preventScroll: true });
   }
 }
 
@@ -135,7 +160,7 @@ export function DeleteDialog({
       aria-modal="true"
       aria-labelledby={title}
       aria-describedby={description}
-      onKeyDownCapture={suppressRepeatedActivation}
+      onKeyDownCapture={containKeyboardFocus}
       onCancel={
         /** @param event Native Escape cancellation, delegated to the owner without confirmation. */
         (event) => {

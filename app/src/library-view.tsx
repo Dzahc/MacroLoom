@@ -50,6 +50,8 @@ const MENU_EVENT = {
   blur: 'blur',
   resize: 'resize',
 } as const;
+const POINTER_CLICK = 'click';
+const FIRST_CLICK = 1;
 
 /**
  * Sends an available action request to the host without changing library state.
@@ -266,6 +268,7 @@ export function LibraryView(props: ViewProps) {
   const [attempt, setAttempt] = useState<DeleteConfirmation | null>(null);
   const owner = useRef<HTMLElement>(null);
   const previousAttempt = useRef<DeleteConfirmation | null>(null);
+  const suppressDismissalGesture = useRef(false);
   useLayoutEffect(
     /** Restores a dismissed dialog's origin after controls update, using the latest session phase. */
     () => {
@@ -303,24 +306,42 @@ export function LibraryView(props: ViewProps) {
     setAttempt(new DeleteConfirmation(target, request.source));
   }
 
-  /** Cancels the current attempt, closes it, and optionally reports cancellation without a disk outcome. @returns Nothing. */
-  function cancelDelete() {
+  /** @param event Optional pointer cancellation; absent for Escape/invalidation. @returns Nothing; closes without confirmation and consumes pointer continuations. */
+  function cancelDelete(event?: MouseEvent<HTMLButtonElement>) {
     if (!attempt) return;
+    suppressDismissalGesture.current =
+      event !== undefined && event.detail >= FIRST_CLICK;
     attempt.cancel();
     setAttempt(null);
     if (props.onDeleteCancelled)
       notifyDelete(props.onDeleteCancelled, attempt.target.id);
   }
 
-  /** Confirms the displayed ID once against the latest snapshot and closes immediately. @returns Nothing. */
-  function confirmDelete() {
+  /** @param event Deliberate pointer or keyboard activation. @returns Nothing; emits the displayed ID once, closes, and consumes pointer continuations. */
+  function confirmDelete(event: MouseEvent<HTMLButtonElement>) {
     if (!attempt) return;
+    suppressDismissalGesture.current = event.detail >= FIRST_CLICK;
     setAttempt(null);
     attempt.confirm(
       props.snapshot,
       /** @param id Frozen confirmed identity, forwarded with handled callback failures. */
       (id) => notifyDelete(props.onDeleteConfirmed, id),
     );
+  }
+
+  /**
+   * Consumes multi-click continuations after a pointer dismissal so they cannot select or play an underlying row.
+   * @param event Library click/double-click, including events bubbled from the portaled dialog.
+   * @returns Nothing; the next fresh click releases the guard without a timer.
+   */
+  function suppressFollowingClicks(event: MouseEvent<HTMLElement>) {
+    if (!suppressDismissalGesture.current) return;
+    if (event.detail > FIRST_CLICK) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.type === POINTER_CLICK) suppressDismissalGesture.current = false;
   }
   /**
    * Selects a valid idle row and opens its menu at the pointer, suppressing the browser menu.
@@ -342,6 +363,8 @@ export function LibraryView(props: ViewProps) {
       className="library-window"
       ref={owner}
       onKeyDownCapture={suppressRepeatedActivation}
+      onClickCapture={suppressFollowingClicks}
+      onDoubleClickCapture={suppressFollowingClicks}
       onScrollCapture={
         /** Closes the anchored menu when library content scrolls. */ () =>
           setMenu(null)
