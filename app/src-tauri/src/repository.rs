@@ -66,12 +66,15 @@ impl Entry {
         fingerprint: Vec<u8>,
     ) -> Result<Self, ValidationError> {
         let created_ms = macro_format::timestamp(&document.created_at, "createdAt")?;
+        let mut playback = document.playback;
+        // Extra property metadata is preserved in action documents, but never retained by the library cache.
+        playback.extra.clear();
         let summary = MacroSummary {
             id: document.id,
             name: document.name,
             duration_ms: document.duration_ms,
             created_at: document.created_at,
-            playback: document.playback,
+            playback,
         };
         Ok(Self {
             summary,

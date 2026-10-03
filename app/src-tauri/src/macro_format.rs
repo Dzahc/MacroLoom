@@ -15,6 +15,14 @@ const NANOS_PER_MILLISECOND: u32 = 1_000_000;
 const MAX_TIMESTAMP_PRECISION: usize = 3;
 const PLATFORM: &str = "windows";
 const COORDINATE_SPACE: &str = "screen_physical_pixels";
+const BUTTON_COUNT: usize = 2;
+const LEFT_BUTTON_INDEX: usize = 0;
+const RIGHT_BUTTON_INDEX: usize = 1;
+const EVENT_COMMON_FIELDS: [&str; 2] = ["atMs", "type"];
+const KEY_FIELDS: [&str; 2] = ["key", "native"];
+const BUTTON_FIELDS: [&str; 3] = ["button", "x", "y"];
+const MOVE_FIELDS: [&str; 2] = ["x", "y"];
+const WHEEL_FIELDS: [&str; 4] = ["axis", "delta", "x", "y"];
 const ROOT_FIELDS: [&str; 9] = [
     "schemaVersion",
     "id",
@@ -143,6 +151,18 @@ pub enum EventData {
     },
 }
 
+impl EventData {
+    /// Returns fields consumed by this payload variant so extension metadata survives a later save.
+    fn fields(&self) -> &'static [&'static str] {
+        match self {
+            Self::KeyDown { .. } | Self::KeyUp { .. } => &KEY_FIELDS,
+            Self::MouseDown { .. } | Self::MouseUp { .. } => &BUTTON_FIELDS,
+            Self::MouseMove { .. } => &MOVE_FIELDS,
+            Self::MouseWheel { .. } => &WHEEL_FIELDS,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// Version one accepts vertical wheel events only.
@@ -157,6 +177,8 @@ pub struct RecordedEvent {
     pub at_ms: u64,
     #[serde(flatten)]
     pub data: EventData,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -247,12 +269,25 @@ fn events_field(root: &Value) -> Result<Vec<RecordedEvent>, ValidationError> {
     values
         .iter()
         .enumerate()
-        .map(|(index, value)| {
-            serde_json::from_value(value.clone()).map_err(|error| {
-                ValidationError::new(format!("events[{index}]"), error.to_string())
-            })
-        })
+        .map(|(index, value)| decode_event(value, index))
         .collect()
+}
+
+/// Decodes one event and retains unrecognized fields without colliding with validated payload fields.
+fn decode_event(value: &Value, index: usize) -> Result<RecordedEvent, ValidationError> {
+    let mut event: RecordedEvent = serde_json::from_value(value.clone())
+        .map_err(|error| ValidationError::new(format!("events[{index}]"), error.to_string()))?;
+    let fields = event.data.fields();
+    event.extra = value.as_object().map_or_else(Map::new, |object| {
+        object
+            .iter()
+            .filter(|(key, _)| {
+                !EVENT_COMMON_FIELDS.contains(&key.as_str()) && !fields.contains(&key.as_str())
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    });
+    Ok(event)
 }
 
 /// Applies data-only semantic validation; each helper reports a precise field before any native use.
@@ -403,7 +438,7 @@ fn validate_display(display: &Display, index: usize) -> Result<(), ValidationErr
 /// Preserves equal-time array order and checks drag press state; end holds and unmatched releases are legal.
 fn validate_events(events: &[RecordedEvent], duration_ms: u64) -> Result<(), ValidationError> {
     let mut previous = 0;
-    let mut held = [false; 2];
+    let mut held = [false; BUTTON_COUNT];
     for (index, event) in events.iter().enumerate() {
         require(
             event.at_ms >= previous && event.at_ms <= duration_ms,
@@ -420,7 +455,7 @@ fn validate_events(events: &[RecordedEvent], duration_ms: u64) -> Result<(), Val
 fn validate_event(
     data: &EventData,
     index: usize,
-    held: &mut [bool; 2],
+    held: &mut [bool; BUTTON_COUNT],
 ) -> Result<(), ValidationError> {
     let prefix = format!("events[{index}]");
     match data {
@@ -456,8 +491,8 @@ fn validate_key(key: &str, native: &NativeKey, prefix: &str) -> Result<(), Valid
 /// Maps the two supported buttons to owned press-state slots.
 fn button_index(button: Button) -> usize {
     match button {
-        Button::Left => 0,
-        Button::Right => 1,
+        Button::Left => LEFT_BUTTON_INDEX,
+        Button::Right => RIGHT_BUTTON_INDEX,
     }
 }
 /// Converts a failed invariant into an actionable diagnostic; successful checks leave data untouched.
