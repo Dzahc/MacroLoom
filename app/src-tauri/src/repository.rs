@@ -11,6 +11,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 pub const MACROS_DIRECTORY: &str = "macros";
+/// Diagnostic part for directory creation or enumeration failures.
+pub const DIAGNOSTIC_DIRECTORY: &str = "directory";
+/// Diagnostic part for directory write-access failures.
+pub const DIAGNOSTIC_STORAGE: &str = "storage";
+/// Diagnostic part for file read and size-limit failures.
+pub const DIAGNOSTIC_FILE: &str = "file";
 const JSON_EXTENSION: &str = "json";
 const RESTART_GUIDANCE: &str = "Restart MacroLoom to reload external changes.";
 const LOCK_FAILURE: &str = "Library state is unavailable; restart MacroLoom.";
@@ -65,7 +71,8 @@ impl Entry {
         document: MacroDocument,
         fingerprint: Vec<u8>,
     ) -> Result<Self, ValidationError> {
-        let created_ms = macro_format::timestamp(&document.created_at, "createdAt")?;
+        let created_ms =
+            macro_format::timestamp(&document.created_at, macro_format::fields::CREATED_AT)?;
         let mut playback = document.playback;
         // Extra property metadata is preserved in action documents, but never retained by the library cache.
         playback.extra.clear();
@@ -215,7 +222,7 @@ impl Repository {
         publish: &mut impl FnMut(LibraryState),
     ) -> Result<Vec<PathBuf>, ValidationError> {
         fs::create_dir_all(&self.directory)
-            .map_err(|error| ValidationError::new("directory", error.to_string()))?;
+            .map_err(|error| ValidationError::new(DIAGNOSTIC_DIRECTORY, error.to_string()))?;
         match probe_writable(&self.directory) {
             Ok(()) => {
                 if let Ok(mut inner) = self.lock() {
@@ -224,12 +231,15 @@ impl Repository {
             }
             Err(error) => self.failure(
                 &self.directory,
-                ValidationError::new("storage", format!("Writes are unavailable: {error}")),
+                ValidationError::new(
+                    DIAGNOSTIC_STORAGE,
+                    format!("Writes are unavailable: {error}"),
+                ),
             ),
         }
         self.publish(publish);
         let reader = fs::read_dir(&self.directory)
-            .map_err(|error| ValidationError::new("directory", error.to_string()))?;
+            .map_err(|error| ValidationError::new(DIAGNOSTIC_DIRECTORY, error.to_string()))?;
         let mut paths = Vec::new();
         for item in reader {
             match item {
@@ -242,7 +252,7 @@ impl Repository {
                 Err(error) => {
                     self.failure(
                         &self.directory,
-                        ValidationError::new("directory", error.to_string()),
+                        ValidationError::new(DIAGNOSTIC_DIRECTORY, error.to_string()),
                     );
                     self.publish(publish);
                 }
@@ -276,7 +286,10 @@ impl Repository {
             drop(inner);
             self.failure(
                 &path,
-                ValidationError::new("id", "duplicate ID; the first valid file was retained"),
+                ValidationError::new(
+                    macro_format::fields::ID,
+                    "duplicate ID; the first valid file was retained",
+                ),
             );
             return;
         }
@@ -335,7 +348,7 @@ fn probe_writable(directory: &Path) -> Result<(), std::io::Error> {
 
 /// Names affected files concisely while retaining the full location for directory/storage failures.
 fn diagnostic_file(path: &Path, field: &str) -> String {
-    if field == "directory" || field == "storage" {
+    if field == DIAGNOSTIC_DIRECTORY || field == DIAGNOSTIC_STORAGE {
         return path.display().to_string();
     }
     path.file_name().map_or_else(
@@ -354,13 +367,17 @@ fn is_json(path: &Path) -> bool {
 }
 /// Reads at most the configured limit plus one byte, detecting growth without unbounded allocation.
 fn read_bounded(path: &Path) -> Result<Vec<u8>, ValidationError> {
-    let file = File::open(path).map_err(|error| ValidationError::new("file", error.to_string()))?;
+    let file = File::open(path)
+        .map_err(|error| ValidationError::new(DIAGNOSTIC_FILE, error.to_string()))?;
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| ValidationError::new("file", error.to_string()))?;
+        .map_err(|error| ValidationError::new(DIAGNOSTIC_FILE, error.to_string()))?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(ValidationError::new("file", "exceeds the 16 MiB limit"));
+        return Err(ValidationError::new(
+            DIAGNOSTIC_FILE,
+            "exceeds the 16 MiB limit",
+        ));
     }
     Ok(bytes)
 }
