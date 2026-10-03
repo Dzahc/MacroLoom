@@ -15,6 +15,7 @@ import {
   type MacroDocument,
 } from './macro-contract';
 import type { LibraryAction, SelectionChange } from './library-model';
+import type { DeleteConfirmed } from './delete-confirmation';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -34,13 +35,15 @@ const ACTION_CALLBACK_FAILURE = 'Library action callback failed';
 
 /**
  * Presents the executable-relative saved library with worker-driven progress and persistent error toasts.
- * @param props Optional later-story consumer for prepared Configure/Delete/Play snapshots.
+ * @param props Optional later-story consumers for prepared Configure/Play snapshots and confirmed Delete IDs.
  * @returns The library view; native listeners and queue timers disconnect on unmount.
  */
 export function LiveLibraryApp({
   onPreparedAction,
+  onDeleteConfirmed,
 }: {
   onPreparedAction?: (action: PreparedAction) => void;
+  onDeleteConfirmed?: DeleteConfirmed;
 }) {
   const [controller] = useState(
     /** @returns One controller for this mounted application. */ () =>
@@ -70,6 +73,10 @@ export function LiveLibraryApp({
   function select(change: SelectionChange) {
     controller.select(change);
   }
+  /** @param macroId Deliberately confirmed stable ID. @returns Optional consumer completion; this story performs no deletion. */
+  function confirmDelete(macroId: string) {
+    if (onDeleteConfirmed) return onDeleteConfirmed(macroId);
+  }
   /** @param request Available operation. @returns Nothing; asynchronously supplies data to later-story consumer. */
   function action(request: LibraryAction) {
     void controller
@@ -93,6 +100,7 @@ export function LiveLibraryApp({
       snapshot={snapshot}
       onSelect={select}
       onAction={action}
+      onDeleteConfirmed={confirmDelete}
       notifications={<OutcomeToasts queue={controller.queue} />}
     />
   );

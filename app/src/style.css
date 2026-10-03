@@ -254,6 +254,61 @@ svg {
 .macro-menu button:hover {
   background: var(--hover);
 }
+.delete-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.25rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 0.5rem 2rem #0004;
+}
+.delete-dialog::backdrop {
+  background: #0006;
+}
+.delete-dialog header,
+.delete-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.delete-dialog h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.delete-dialog p {
+  margin: 1rem 0 1.5rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.delete-dialog footer {
+  justify-content: flex-end;
+}
+.delete-dialog button {
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--surface);
+}
+.delete-dialog button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.delete-dialog button:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.delete-dialog .delete-dialog-close {
+  padding: 0.25rem 0.65rem;
+  font-size: 1.25rem;
+}
+.delete-dialog .delete-confirm {
+  border-color: var(--danger);
+  color: var(--danger);
+}
 .toast-overlay {
   position: fixed;
   z-index: 2;

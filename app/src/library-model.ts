@@ -87,6 +87,8 @@ export type LibrarySnapshot = Readonly<{
   message: string;
   loading?: boolean;
   writable?: boolean;
+  /** UI confirmation interlock; future native shortcut/session guards must enforce the same exclusion. */
+  confirmationOpen?: boolean;
 }>;
 export type LibraryCallbacks = {
   onSelect: (change: SelectionChange) => void;
@@ -131,6 +133,7 @@ export function canRequest(
       (phase) => phase === snapshot.phase,
     );
   if (snapshot.phase !== PHASE.idle) return false;
+  if (snapshot.confirmationOpen) return false;
   if (action === ACTION.record) return snapshot.writable !== false;
   if (action === ACTION.delete) {
     if (snapshot.writable === false) return false;

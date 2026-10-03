@@ -65,14 +65,22 @@ Copy-Item docs/samples/macros/*.json app/src-tauri/target/debug/macros
 The examples display durations of 5, 12, and 24 seconds and cover keyboard input,
 dragging, and scrolling. They load as saved data without executing their events.
 
-Configure, Delete, and Play prepare validated snapshots for their later stories;
-dialogs, persistence mutations, and native Record/Stop/Play integration remain
-outside ML-13. The loader never executes saved input. Browser-only previews retain
+Configure and Play prepare validated snapshots for their later stories. Delete
+opens the [ML-12 confirmation dialog](docs/validation/ML-12-validation.md), which
+emits the confirmed stable ID without deleting files. Persistence mutations and
+native Record/Stop/Play integration remain outside these GUI stories. The loader
+never executes saved input. Browser-only previews retain
 the ML-9 controlled samples because they cannot access native storage.
 
 In development, **Open development pane** exposes empty,
 populated, saving, and logged load-failure examples, six operation-toast examples,
 and a callback log in the browser preview. The development pane is omitted from production builds.
+
+For controlled Delete examples, select a sample macro and use the toolbar Delete
+button or its right-click menu. Cancel, Escape, and Close log `delete-cancelled`;
+deliberate Delete logs `delete-confirmed` with the target ID. Reopen to repeat the
+example; sample rows remain unchanged. Cancel initially has focus, backdrop clicks
+leave the dialog open, and Tab/Shift+Tab navigate its buttons.
 
 The ML-8 live input prototype remains available explicitly in a debug build:
 
