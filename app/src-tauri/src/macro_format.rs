@@ -2,6 +2,46 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// Shared version-one JSON keys used by decoding, diagnostics, metadata retention, and callers.
+pub mod fields {
+    /// Format version key.
+    pub const SCHEMA_VERSION: &str = "schemaVersion";
+    /// Stable macro identity key.
+    pub const ID: &str = "id";
+    /// Display name key.
+    pub const NAME: &str = "name";
+    /// Creation timestamp key.
+    pub const CREATED_AT: &str = "createdAt";
+    /// Last update timestamp key.
+    pub const UPDATED_AT: &str = "updatedAt";
+    /// Recording environment key.
+    pub const RECORDING: &str = "recording";
+    /// Recording duration key.
+    pub const DURATION_MS: &str = "durationMs";
+    /// Playback properties key.
+    pub const PLAYBACK: &str = "playback";
+    /// Ordered event array key.
+    pub const EVENTS: &str = "events";
+    /// Event timestamp key.
+    pub const AT_MS: &str = "atMs";
+    /// Event discriminator key.
+    pub const TYPE: &str = "type";
+    /// Normalized key label key.
+    pub const KEY: &str = "key";
+    /// Native keyboard metadata key.
+    pub const NATIVE: &str = "native";
+    /// Mouse button key.
+    pub const BUTTON: &str = "button";
+    /// Horizontal physical coordinate key.
+    pub const X: &str = "x";
+    /// Vertical physical coordinate key.
+    pub const Y: &str = "y";
+    /// Wheel axis key.
+    pub const AXIS: &str = "axis";
+    /// Wheel displacement key.
+    pub const DELTA: &str = "delta";
+}
+
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_EVENTS: usize = 100_000;
@@ -18,22 +58,24 @@ const COORDINATE_SPACE: &str = "screen_physical_pixels";
 const BUTTON_COUNT: usize = 2;
 const LEFT_BUTTON_INDEX: usize = 0;
 const RIGHT_BUTTON_INDEX: usize = 1;
-const EVENT_COMMON_FIELDS: [&str; 2] = ["atMs", "type"];
-const KEY_FIELDS: [&str; 2] = ["key", "native"];
-const BUTTON_FIELDS: [&str; 3] = ["button", "x", "y"];
-const MOVE_FIELDS: [&str; 2] = ["x", "y"];
-const WHEEL_FIELDS: [&str; 4] = ["axis", "delta", "x", "y"];
+const EVENT_COMMON_FIELDS: [&str; 2] = [fields::AT_MS, fields::TYPE];
+const KEY_FIELDS: [&str; 2] = [fields::KEY, fields::NATIVE];
+const BUTTON_FIELDS: [&str; 3] = [fields::BUTTON, fields::X, fields::Y];
+const MOVE_FIELDS: [&str; 2] = [fields::X, fields::Y];
+const WHEEL_FIELDS: [&str; 4] = [fields::AXIS, fields::DELTA, fields::X, fields::Y];
 const ROOT_FIELDS: [&str; 9] = [
-    "schemaVersion",
-    "id",
-    "name",
-    "createdAt",
-    "updatedAt",
-    "recording",
-    "durationMs",
-    "playback",
-    "events",
+    fields::SCHEMA_VERSION,
+    fields::ID,
+    fields::NAME,
+    fields::CREATED_AT,
+    fields::UPDATED_AT,
+    fields::RECORDING,
+    fields::DURATION_MS,
+    fields::PLAYBACK,
+    fields::EVENTS,
 ];
+const SAFE_MILLISECOND_RANGE_ERROR: &str = "exceeds the safe millisecond range";
+const PHYSICAL_DIMENSION_ERROR: &str = "must be a positive physical dimension";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,10 +250,10 @@ pub fn decode(bytes: &[u8]) -> Result<MacroDocument, ValidationError> {
 
 /// Reads typed root fields after checking the format version; unknown metadata fields are ignored.
 fn document_from_value(root: &Value) -> Result<MacroDocument, ValidationError> {
-    let schema_version: u32 = field(root, "schemaVersion")?;
+    let schema_version: u32 = field(root, fields::SCHEMA_VERSION)?;
     if schema_version != SCHEMA_VERSION {
         return Err(ValidationError::new(
-            "schemaVersion",
+            fields::SCHEMA_VERSION,
             "unsupported schema version",
         ));
     }
@@ -220,11 +262,11 @@ fn document_from_value(root: &Value) -> Result<MacroDocument, ValidationError> {
         schema_version,
         id,
         name,
-        created_at: field(root, "createdAt")?,
-        updated_at: field(root, "updatedAt")?,
-        recording: field(root, "recording")?,
-        duration_ms: field(root, "durationMs")?,
-        playback: field(root, "playback")?,
+        created_at: field(root, fields::CREATED_AT)?,
+        updated_at: field(root, fields::UPDATED_AT)?,
+        recording: field(root, fields::RECORDING)?,
+        duration_ms: field(root, fields::DURATION_MS)?,
+        playback: field(root, fields::PLAYBACK)?,
         events: events_field(root)?,
         extra: extra_metadata(root),
     })
@@ -232,7 +274,7 @@ fn document_from_value(root: &Value) -> Result<MacroDocument, ValidationError> {
 
 /// Reads stable identity and display name together, identifying either missing or mistyped field.
 fn identity(root: &Value) -> Result<(String, String), ValidationError> {
-    Ok((field(root, "id")?, field(root, "name")?))
+    Ok((field(root, fields::ID)?, field(root, fields::NAME)?))
 }
 
 /// Reads one required typed field; errors identify the root field and serde's nested part description.
@@ -258,12 +300,14 @@ fn extra_metadata(root: &Value) -> Map<String, Value> {
 /// Bounds event count before constructing typed events and identifies malformed payloads by array index.
 fn events_field(root: &Value) -> Result<Vec<RecordedEvent>, ValidationError> {
     let values = root
-        .get("events")
+        .get(fields::EVENTS)
         .and_then(Value::as_array)
-        .ok_or_else(|| ValidationError::new("events", "required array is missing or invalid"))?;
+        .ok_or_else(|| {
+            ValidationError::new(fields::EVENTS, "required array is missing or invalid")
+        })?;
     require(
         !values.is_empty() && values.len() <= MAX_EVENTS,
-        "events",
+        fields::EVENTS,
         "must contain 1 to 100,000 events",
     )?;
     values
@@ -275,8 +319,9 @@ fn events_field(root: &Value) -> Result<Vec<RecordedEvent>, ValidationError> {
 
 /// Decodes one event and retains unrecognized fields without colliding with validated payload fields.
 fn decode_event(value: &Value, index: usize) -> Result<RecordedEvent, ValidationError> {
-    let mut event: RecordedEvent = serde_json::from_value(value.clone())
-        .map_err(|error| ValidationError::new(format!("events[{index}]"), error.to_string()))?;
+    let mut event: RecordedEvent = serde_json::from_value(value.clone()).map_err(|error| {
+        ValidationError::new(format!("{}[{index}]", fields::EVENTS), error.to_string())
+    })?;
     let fields = event.data.fields();
     event.extra = value.as_object().map_or_else(Map::new, |object| {
         object
@@ -294,15 +339,15 @@ fn decode_event(value: &Value, index: usize) -> Result<RecordedEvent, Validation
 fn validate(document: &MacroDocument) -> Result<(), ValidationError> {
     require(
         valid_id(&document.id),
-        "id",
+        fields::ID,
         "must be a canonical lowercase UUID",
     )?;
     validate_name(&document.name)?;
     validate_dates(document)?;
     require(
         document.duration_ms <= MAX_SAFE_INTEGER,
-        "durationMs",
-        "exceeds the safe millisecond range",
+        fields::DURATION_MS,
+        SAFE_MILLISECOND_RANGE_ERROR,
     )?;
     validate_playback(&document.playback)?;
     validate_environment(&document.recording)?;
@@ -331,18 +376,18 @@ fn validate_name(name: &str) -> Result<(), ValidationError> {
             && length <= MAX_NAME_CHARS
             && name == name.trim()
             && !name.chars().any(char::is_control),
-        "name",
+        fields::NAME,
         "must be trimmed, 1–120 characters, with no control characters",
     )
 }
 
 /// Requires valid UTC timestamps and chronological creation/update order; future dates remain data.
 fn validate_dates(document: &MacroDocument) -> Result<(), ValidationError> {
-    let created = timestamp(&document.created_at, "createdAt")?;
-    let updated = timestamp(&document.updated_at, "updatedAt")?;
+    let created = timestamp(&document.created_at, fields::CREATED_AT)?;
+    let updated = timestamp(&document.updated_at, fields::UPDATED_AT)?;
     require(
         created <= updated,
-        "updatedAt",
+        fields::UPDATED_AT,
         "must not precede createdAt",
     )
 }
@@ -382,7 +427,7 @@ fn validate_playback(properties: &PlaybackProperties) -> Result<(), ValidationEr
     require(
         properties.interval_ms <= MAX_SAFE_INTEGER,
         "playback.intervalMs",
-        "exceeds the safe millisecond range",
+        SAFE_MILLISECOND_RANGE_ERROR,
     )
 }
 
@@ -421,12 +466,12 @@ fn validate_display(display: &Display, index: usize) -> Result<(), ValidationErr
     require(
         display.width > 0 && display.width <= i32::MAX as u32,
         &format!("{prefix}.width"),
-        "must be a positive physical dimension",
+        PHYSICAL_DIMENSION_ERROR,
     )?;
     require(
         display.height > 0 && display.height <= i32::MAX as u32,
         &format!("{prefix}.height"),
-        "must be a positive physical dimension",
+        PHYSICAL_DIMENSION_ERROR,
     )?;
     require(
         display.scale_factor.is_finite() && display.scale_factor > 0.0,
@@ -442,7 +487,7 @@ fn validate_events(events: &[RecordedEvent], duration_ms: u64) -> Result<(), Val
     for (index, event) in events.iter().enumerate() {
         require(
             event.at_ms >= previous && event.at_ms <= duration_ms,
-            &format!("events[{index}].atMs"),
+            &format!("{}[{index}].{}", fields::EVENTS, fields::AT_MS),
             "must be nondecreasing and within durationMs",
         )?;
         validate_event(&event.data, index, &mut held)?;
@@ -457,7 +502,7 @@ fn validate_event(
     index: usize,
     held: &mut [bool; BUTTON_COUNT],
 ) -> Result<(), ValidationError> {
-    let prefix = format!("events[{index}]");
+    let prefix = format!("{}[{index}]", fields::EVENTS);
     match data {
         EventData::KeyDown { key, native } | EventData::KeyUp { key, native } => {
             validate_key(key, native, &prefix)?
@@ -466,7 +511,7 @@ fn validate_event(
         EventData::MouseUp { button, .. } => held[button_index(*button)] = false,
         EventData::MouseMove { .. } => require(
             held.iter().any(|pressed| *pressed),
-            &format!("{prefix}.type"),
+            &format!("{prefix}.{}", fields::TYPE),
             "mouse_move requires a recorded held button",
         )?,
         EventData::MouseWheel { .. } => {}
@@ -478,7 +523,7 @@ fn validate_event(
 fn validate_key(key: &str, native: &NativeKey, prefix: &str) -> Result<(), ValidationError> {
     require(
         !key.is_empty() && !key.chars().any(char::is_control),
-        &format!("{prefix}.key"),
+        &format!("{prefix}.{}", fields::KEY),
         "must contain a normalized key label",
     )?;
     require(
