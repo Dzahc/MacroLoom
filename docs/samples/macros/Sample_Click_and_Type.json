@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "c08f046a-c096-4fd5-af1b-78a7c1d05a01",
+  "name": "Sample Click and Type",
+  "createdAt": "2026-10-03T17:00:00Z",
+  "updatedAt": "2026-10-03T17:00:00Z",
+  "recording": {
+    "platform": "windows",
+    "coordinateSpace": "screen_physical_pixels",
+    "keyboardLayout": "00000409",
+    "displays": [
+      { "x": 0, "y": 0, "width": 1920, "height": 1080, "scaleFactor": 1.0 }
+    ]
+  },
+  "durationMs": 5000,
+  "playback": {
+    "speed": 1.0,
+    "repeatMode": "once",
+    "totalRuns": 1,
+    "intervalMs": 0
+  },
+  "events": [
+    { "atMs": 500, "type": "mouse_down", "button": "left", "x": 400, "y": 300 },
+    { "atMs": 600, "type": "mouse_up", "button": "left", "x": 400, "y": 300 },
+    {
+      "atMs": 1000,
+      "type": "key_down",
+      "key": "KeyA",
+      "native": { "scanCode": 30, "virtualKey": 65, "extended": false }
+    },
+    {
+      "atMs": 1100,
+      "type": "key_up",
+      "key": "KeyA",
+      "native": { "scanCode": 30, "virtualKey": 65, "extended": false }
+    }
+  ]
+}

@@ -53,6 +53,18 @@ untouched and produce individually dismissed toasts naming the file and failing
 field or part. Temporary `.json.tmp` files are ignored. Event data loads on demand;
 external file changes require a restart before the affected action can proceed.
 
+Three example JSON files are available in [docs/samples/macros](docs/samples/macros).
+To restore them to the default development executable's library after cleaning the
+build directory, run from the repository root:
+
+```powershell
+New-Item -ItemType Directory -Force app/src-tauri/target/debug/macros
+Copy-Item docs/samples/macros/*.json app/src-tauri/target/debug/macros
+```
+
+The examples display durations of 5, 12, and 24 seconds and cover keyboard input,
+dragging, and scrolling. They load as saved data without executing their events.
+
 Configure, Delete, and Play prepare validated snapshots for their later stories;
 dialogs, persistence mutations, and native Record/Stop/Play integration remain
 outside ML-13. The loader never executes saved input. Browser-only previews retain

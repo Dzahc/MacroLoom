@@ -43,6 +43,24 @@ excluded from the library cache. Re-review found no remaining Spec findings.
 
 Review totals: Standards 1 resolved / 0 remaining; Spec 1 resolved / 0 remaining.
 
+## Empty-state and development sample follow-up
+
+Removed the recording icon from the empty-library message and its obsolete CSS.
+Added three reusable examples in `docs/samples/macros` and copied them beside the
+default development executable in `app/src-tauri/target/debug/macros`:
+
+- Sample Click and Type: 5 seconds, 4 events.
+- Sample Drag and Drop: 12 seconds, 5 events.
+- Sample Scroll Page: 24 seconds, 3 events.
+
+All three loaded and prepared successfully through the production Rust repository
+with no failures. This filesystem check did not execute native input. The README
+documents how to restore the samples after cleaning the build directory.
+
+`npm.cmd --prefix app run verify` passed again on October 3, 2026 (exit 0),
+including all 76 maintained tests and complexity checks with no exceptions.
+Supplemental Standards and Spec reviews each found zero issues.
+
 ## Native and manual evidence
 
 No target-application recording/playback claims are made by deterministic tests.
