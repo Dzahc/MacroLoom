@@ -9,6 +9,16 @@ import {
 import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
 import {
+  DeleteConfirmation,
+  notifyDelete,
+  type DeleteConfirmed,
+} from './delete-confirmation';
+import {
+  DeleteDialog,
+  restoreDeleteFocus,
+  suppressRepeatedActivation,
+} from './delete-dialog';
+import {
   ACTION,
   LABEL,
   PHASE,
@@ -21,6 +31,7 @@ import {
   type ActionName,
   type ActionSource,
   type LibraryCallbacks,
+  type LibraryAction,
   type LibrarySnapshot,
   type MacroSummary,
 } from './library-model';
@@ -28,6 +39,8 @@ import {
 type ViewProps = LibraryCallbacks & {
   snapshot: LibrarySnapshot;
   notifications?: ReactNode;
+  onDeleteConfirmed: DeleteConfirmed;
+  onDeleteCancelled?: DeleteConfirmed;
 };
 type MenuAnchor = { macroId: string; x: number; y: number };
 const MENU_GAP = 8;
@@ -37,6 +50,8 @@ const MENU_EVENT = {
   blur: 'blur',
   resize: 'resize',
 } as const;
+const POINTER_CLICK = 'click';
+const FIRST_CLICK = 1;
 
 /**
  * Sends an available action request to the host without changing library state.
@@ -67,6 +82,7 @@ function Toolbar(props: ViewProps) {
             type="button"
             key={action}
             className={`icon-button action-${action}`}
+            data-action={action}
             aria-label={TOOLTIP[action]}
             title={TOOLTIP[action]}
             disabled={!canRequest(props.snapshot, action)}
@@ -219,8 +235,11 @@ function MacroRow({
       <button
         type="button"
         className={`macro-row ${selected ? 'selected' : ''}`}
+        data-macro-id={macro.id}
         aria-pressed={selected}
-        disabled={props.snapshot.phase !== PHASE.idle}
+        disabled={
+          props.snapshot.phase !== PHASE.idle || props.snapshot.confirmationOpen
+        }
         onClick={select}
         onContextMenu={
           /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */ (
@@ -240,12 +259,90 @@ function MacroRow({
 }
 
 /**
- * Renders the production library from supplied state; owns only transient context-menu state.
- * @param props Snapshot, selection/action callbacks, and optional notification content.
- * @returns Toolbar, status, notifications, and independently scrollable macro list.
+ * Renders the production library with owned context-menu and delete-confirmation state.
+ * @param props Snapshot, typed callbacks, optional cancellation observer, and notifications.
+ * @returns Toolbar, status, list, and an optional modal; confirmation never mutates library data.
  */
 export function LibraryView(props: ViewProps) {
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  const [attempt, setAttempt] = useState<DeleteConfirmation | null>(null);
+  const owner = useRef<HTMLElement>(null);
+  const previousAttempt = useRef<DeleteConfirmation | null>(null);
+  const suppressDismissalGesture = useRef(false);
+  useLayoutEffect(
+    /** Restores a dismissed dialog's origin after controls update, using the latest session phase. */
+    () => {
+      const dismissed = previousAttempt.current;
+      previousAttempt.current = attempt;
+      if (dismissed && !attempt)
+        restoreDeleteFocus(owner.current, dismissed, props.snapshot);
+    },
+    [attempt, props.snapshot],
+  );
+  const viewProps = {
+    ...props,
+    snapshot: {
+      ...props.snapshot,
+      confirmationOpen: props.snapshot.confirmationOpen || attempt !== null,
+    },
+    onAction: action,
+  };
+
+  /** @param request Available typed request; Delete opens a frozen confirmation rather than executing an action. @returns Nothing. */
+  function action(request: LibraryAction) {
+    const macroId =
+      'macroId' in request ? request.macroId : props.snapshot.selectedId;
+    if (attempt || !canRequest(props.snapshot, request.action, macroId)) return;
+    if (request.action !== ACTION.delete) {
+      props.onAction(request);
+      return;
+    }
+    const target = props.snapshot.macros.find(
+      /** @param macro Library entry. @returns Whether it is the explicitly requested target. */
+      (macro) => macro.id === request.macroId,
+    );
+    if (!target) return;
+    setMenu(null);
+    setAttempt(new DeleteConfirmation(target, request.source));
+  }
+
+  /** @param event Optional pointer cancellation; absent for Escape/invalidation. @returns Nothing; closes without confirmation and consumes pointer continuations. */
+  function cancelDelete(event?: MouseEvent<HTMLButtonElement>) {
+    if (!attempt) return;
+    suppressDismissalGesture.current =
+      event !== undefined && event.detail >= FIRST_CLICK;
+    attempt.cancel();
+    setAttempt(null);
+    if (props.onDeleteCancelled)
+      notifyDelete(props.onDeleteCancelled, attempt.target.id);
+  }
+
+  /** @param event Deliberate pointer or keyboard activation. @returns Nothing; emits the displayed ID once, closes, and consumes pointer continuations. */
+  function confirmDelete(event: MouseEvent<HTMLButtonElement>) {
+    if (!attempt) return;
+    suppressDismissalGesture.current = event.detail >= FIRST_CLICK;
+    setAttempt(null);
+    attempt.confirm(
+      props.snapshot,
+      /** @param id Frozen confirmed identity, forwarded with handled callback failures. */
+      (id) => notifyDelete(props.onDeleteConfirmed, id),
+    );
+  }
+
+  /**
+   * Consumes multi-click continuations after a pointer dismissal so they cannot select or play an underlying row.
+   * @param event Library click/double-click, including events bubbled from the portaled dialog.
+   * @returns Nothing; the next fresh click releases the guard without a timer.
+   */
+  function suppressFollowingClicks(event: MouseEvent<HTMLElement>) {
+    if (!suppressDismissalGesture.current) return;
+    if (event.detail > FIRST_CLICK) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.type === POINTER_CLICK) suppressDismissalGesture.current = false;
+  }
   /**
    * Selects a valid idle row and opens its menu at the pointer, suppressing the browser menu.
    * @param event Context interaction carrying viewport coordinates.
@@ -254,24 +351,33 @@ export function LibraryView(props: ViewProps) {
    */
   function openMenu(event: MouseEvent, macroId: string) {
     event.preventDefault();
-    if (!canRequest(props.snapshot, ACTION.configure, macroId)) return;
+    if (!canRequest(viewProps.snapshot, ACTION.configure, macroId)) return;
     props.onSelect({ macroId, source: SOURCE.context });
     setMenu({ macroId, x: event.clientX, y: event.clientY });
   }
   const menuVisible =
-    menu !== null && canRequest(props.snapshot, ACTION.configure, menu.macroId);
+    menu !== null &&
+    canRequest(viewProps.snapshot, ACTION.configure, menu.macroId);
   return (
     <main
       className="library-window"
+      ref={owner}
+      onKeyDownCapture={suppressRepeatedActivation}
+      onClickCapture={suppressFollowingClicks}
+      onDoubleClickCapture={suppressFollowingClicks}
       onScrollCapture={
         /** Closes the anchored menu when library content scrolls. */ () =>
           setMenu(null)
       }
     >
-      <Toolbar {...props} />
+      <Toolbar {...viewProps} />
       <MessageBanner snapshot={props.snapshot} />
       {props.notifications}
-      <section className="macro-library" aria-label={LABEL.macros}>
+      <section
+        className="macro-library"
+        aria-label={LABEL.macros}
+        tabIndex={-1}
+      >
         <div className="library-heading">
           <h1>{LABEL.macros}</h1>
           <span aria-hidden="true">{props.snapshot.macros.length}</span>
@@ -289,7 +395,7 @@ export function LibraryView(props: ViewProps) {
                   key={macro.id}
                   macro={macro}
                   openMenu={openMenu}
-                  {...props}
+                  {...viewProps}
                 />
               ),
             )}
@@ -298,9 +404,17 @@ export function LibraryView(props: ViewProps) {
       </section>
       {menuVisible && (
         <ContextMenu
-          {...props}
+          {...viewProps}
           anchor={menu}
           close={/** Clears transient menu state. */ () => setMenu(null)}
+        />
+      )}
+      {attempt && (
+        <DeleteDialog
+          attempt={attempt}
+          snapshot={props.snapshot}
+          onCancel={cancelDelete}
+          onConfirm={confirmDelete}
         />
       )}
     </main>

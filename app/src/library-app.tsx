@@ -16,6 +16,12 @@ import { OutcomeQueue } from './outcome-queue';
 import { OutcomeToasts } from './outcome-toasts';
 import { isTauri } from '@tauri-apps/api/core';
 import { LiveLibraryApp } from './live-library-app';
+import { type DeleteConfirmed } from './delete-confirmation';
+
+const DELETE_LOG = {
+  confirmed: 'delete-confirmed',
+  cancelled: 'delete-cancelled',
+} as const;
 
 const DevelopmentPane = import.meta.env.DEV
   ? lazy(
@@ -95,6 +101,14 @@ function SampleLibraryApp() {
   function action(request: LibraryAction) {
     appendLog(JSON.stringify(request));
   }
+  /** @param macroId Deliberately confirmed stable ID, logged while sample data remains intact. @returns Nothing. */
+  function confirmDelete(macroId: string) {
+    appendLog(JSON.stringify({ event: DELETE_LOG.confirmed, macroId }));
+  }
+  /** @param macroId Cancelled dialog target, logged without emitting an action. @returns Nothing. */
+  function cancelDelete(macroId: string) {
+    appendLog(JSON.stringify({ event: DELETE_LOG.cancelled, macroId }));
+  }
   /** @param outcome Sample message/kind to enqueue with a unique local ID. @returns Nothing. */
   function notify(outcome: Omit<Outcome, 'id'>) {
     nextOutcome.current += 1;
@@ -124,6 +138,8 @@ function SampleLibraryApp() {
           snapshot={snapshot}
           onSelect={select}
           onAction={action}
+          onDeleteConfirmed={confirmDelete}
+          onDeleteCancelled={cancelDelete}
           notifications={<OutcomeToasts queue={queue} />}
         />
       </div>
@@ -146,7 +162,15 @@ function SampleLibraryApp() {
   );
 }
 
-/** @returns Live native storage, or controlled samples for the browser-only development preview. */
-export function LibraryApp() {
-  return isTauri() ? <LiveLibraryApp /> : <SampleLibraryApp />;
+/** @param props Optional later-story deletion consumer for native mode. @returns Native library or nonmutating controlled samples. */
+export function LibraryApp({
+  onDeleteConfirmed,
+}: {
+  onDeleteConfirmed?: DeleteConfirmed;
+}) {
+  return isTauri() ? (
+    <LiveLibraryApp onDeleteConfirmed={onDeleteConfirmed} />
+  ) : (
+    <SampleLibraryApp />
+  );
 }

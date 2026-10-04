@@ -97,6 +97,8 @@ function render(state: LibrarySnapshot): string {
         /** Ignores selection requests during static rendering. */ () => {},
       onAction:
         /** Ignores action requests during static rendering. */ () => {},
+      onDeleteConfirmed:
+        /** Ignores confirmation during static rendering; no dialog is open. */ () => {},
     }),
   );
 }
