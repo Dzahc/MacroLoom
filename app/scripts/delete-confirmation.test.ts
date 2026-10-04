@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DeleteConfirmation } from '../src/delete-confirmation.ts';
+import { DELETE_TEXT, DeleteConfirmation } from '../src/delete-confirmation.ts';
 import {
   ACTION,
   LABEL,
@@ -21,6 +21,39 @@ const IDLE: LibrarySnapshot = {
   message: LABEL.ready,
 };
 const RENAMED = 'Renamed report';
+const ASYNC_FAILURE = 'Async confirmation consumer failed';
+
+/** Verifies direct async consumers report failures without reopening the consumed attempt. */
+void test('async consumer rejection is handled within confirmation', async (context) => {
+  const attempt = new DeleteConfirmation(TARGET, SOURCE.toolbar);
+  const failure = new Error(ASYNC_FAILURE);
+  const emitted: string[] = [];
+  const reported = context.mock.method(
+    console,
+    'error',
+    /** Observes failure reporting without writing expected test failures to stderr. */
+    () => {},
+  );
+  /** @param id Stable identity delivered before the consumer rejects. @returns A rejected consumer promise. */
+  async function receive(id: string): Promise<void> {
+    emitted.push(id);
+    await Promise.reject(failure);
+  }
+  assert.equal(attempt.confirm(IDLE, receive), true);
+  assert.equal(attempt.confirm(IDLE, receive), false);
+  await new Promise<void>(
+    /** @param resolve Ends the turn after any rejection handler has run. */
+    (resolve) => setImmediate(resolve),
+  );
+  assert.deepEqual(emitted, [TARGET.id]);
+  assert.deepEqual(
+    reported.mock.calls.map(
+      /** @param call Captured console report. @returns Its failure message and reason. */
+      (call) => call.arguments,
+    ),
+    [[DELETE_TEXT.callbackFailure, failure]],
+  );
+});
 
 /** Verifies deliberate confirmation addresses the original ID even after selection changes. */
 void test('confirmation emits the frozen macro ID once and preserves library data', () => {

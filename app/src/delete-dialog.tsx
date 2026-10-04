@@ -47,7 +47,7 @@ export function suppressRepeatedActivation(event: KeyboardEvent): void {
 /**
  * Wraps sequential focus at the modal's edges; WebView2 otherwise allows Tab to leave its web content.
  * @param event Dialog keyboard event; Enter/Space repeats retain the owner's suppression policy.
- * @returns Nothing; ordinary navigation between controls remains native.
+ * @returns Nothing; wrapped focus scrolls into view and ordinary navigation between controls remains native.
  */
 function containKeyboardFocus(event: KeyboardEvent<HTMLDialogElement>): void {
   suppressRepeatedActivation(event);
@@ -60,7 +60,7 @@ function containKeyboardFocus(event: KeyboardEvent<HTMLDialogElement>): void {
   const destination = event.shiftKey ? last : first;
   if (document.activeElement === edge && destination) {
     event.preventDefault();
-    destination.focus({ preventScroll: true });
+    destination.focus();
   }
 }
 
@@ -133,12 +133,12 @@ export function DeleteDialog({
     () => onCancel(),
   );
   useLayoutEffect(
-    /** Opens once per mounted attempt and focuses Cancel; releases the native modal on cleanup. */
+    /** Opens once per mounted attempt and scrolls Cancel into visible focus; releases the native modal on cleanup. */
     () => {
       const element = dialog.current;
       if (!element) return;
       element.showModal();
-      cancel.current?.focus({ preventScroll: true });
+      cancel.current?.focus();
       /** Closes before the owner chooses a stable return target; cleanup never emits confirmation. */
       return () => {
         element.close();

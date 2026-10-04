@@ -39,7 +39,8 @@ in the backend; presentation availability is not a backend precondition.
 ## Automated validation
 
 The Node tests at the public confirmation boundary cover stable-ID emission,
-duplicate/reentrant activation, consumer failure, cancellation, reopening,
+duplicate/reentrant activation, synchronous consumer failure, directly supplied
+async consumer rejection (reported once with no unhandled rejection), cancellation, reopening,
 selection/reordering, and known invalidation. Request-boundary tests cover modal
 exclusion while retaining active-session Stop. Existing static library tests remain
 part of the maintained suite.
@@ -47,7 +48,7 @@ part of the maintained suite.
 Completion command: `npm.cmd --prefix app run verify` from the repository root.
 Result on October 3, 2026: **PASS**, exit code 0. All 14 gate checks passed,
 including the refreshed-origin comparison, formatting, TypeScript, ESLint,
-production frontend build, Clippy, 31 frontend/tooling tests, 19 Rust tests,
+production frontend build, Clippy, 32 frontend/tooling tests, 19 Rust tests,
 33 Python quality tests, and changed-file function checks at complexity ≤10.
 The command/result is also recorded in the ML-12 issue.
 
@@ -78,7 +79,15 @@ keyboard wrapping and pointer-gesture continuation suppression now prevent both.
 | Known removal/rename/nonidle update        | Log contains `cancelled: sample-report` and no confirmation; active-state controls remain unavailable                              |
 | Long name/scalable text                    | Complete sample name wraps at 150% root text size in the native 600 × 480 content area                                             |
 
-The native checks used the system dark theme. Separate light-theme, smallest-window,
+Follow-up headless Edge validation reproduced invisible initial Cancel focus at a
+supported 510 × 230 viewport with a valid 119-character name, using the real
+`DeleteDialog` and repository CSS. Before the fix, Cancel's bounds were below the
+visible dialog area. Allowing initial and wrapped focus to scroll brought Cancel,
+Delete, and both Tab/Shift+Tab wrap destinations fully into view. Focus restoration
+to the library still preserves its scroll position. This targeted browser harness
+is generated under the ignored `app/.quality-output/` debug directory.
+
+The native checks used the system dark theme. Separate light-theme, smallest-native-window,
 and physical held-key repeat checks were not performed. These observations are GUI
 evidence, not native input/timing or screen-reader speech validation.
 

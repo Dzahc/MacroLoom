@@ -76,14 +76,14 @@ export class DeleteConfirmation {
   /**
    * Finishes before calling the consumer, preventing duplicate or reentrant submissions.
    * @param snapshot Latest library state used to reject stale or unavailable targets.
-   * @param receive Consumer of the stable ID; failures propagate after the attempt is finished.
-   * @returns Whether this activation emitted confirmation.
+   * @param receive Consumer of the stable ID; synchronous failures propagate after the attempt is finished.
+   * @returns Whether this activation emitted confirmation; asynchronous failures are handled and logged.
    */
   confirm(snapshot: LibrarySnapshot, receive: DeleteConfirmed): boolean {
     const available = this.isAvailable(snapshot);
     this.finished = true;
     if (!available) return false;
-    void receive(this.target.id);
+    void Promise.resolve(receive(this.target.id)).catch(reportCallbackFailure);
     return true;
   }
 }
