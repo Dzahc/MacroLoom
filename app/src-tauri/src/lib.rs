@@ -520,7 +520,8 @@ pub fn run() {
             stop,
             play,
             library_commands::load_library,
-            library_commands::macro_snapshot
+            library_commands::macro_snapshot,
+            library_commands::delete_macro
         ])
         .run(tauri::generate_context!())
         // Event-loop startup failure is fatal: no running window exists to recover through.

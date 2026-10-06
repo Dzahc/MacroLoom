@@ -35,6 +35,7 @@ const LOADING: BackendLibraryState = {
   revision: 1,
   loading: true,
   writable: true,
+  deleting: null,
   macros: [SUMMARY],
   failures: [],
 };
@@ -82,6 +83,8 @@ void test('progressive snapshots preserve selection, deduplicate persistent fail
       assert.equal(id, ID);
       return Promise.resolve(DOCUMENT);
     },
+    /** @returns Committed metadata; deletion is unused in this progressive-loading test. */
+    delete: () => Promise.resolve(COMPLETE),
   };
   const controller = new LibraryController(transport);
   const disconnect = controller.connect();

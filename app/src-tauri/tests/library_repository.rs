@@ -1,5 +1,7 @@
 use macroloom_lib::macro_format::{fields, MAX_EVENTS, MAX_FILE_BYTES, SCHEMA_VERSION};
-use macroloom_lib::repository::{Repository, DIAGNOSTIC_DIRECTORY, DIAGNOSTIC_FILE};
+use macroloom_lib::repository::{
+    Repository, DELETE_UNAVAILABLE, DIAGNOSTIC_DIRECTORY, DIAGNOSTIC_FILE,
+};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
@@ -53,6 +55,8 @@ const DOCUMENT_TEMPLATE: &str = r#"{
 }"#;
 const SCHEMA_PLACEHOLDER: &str = "__SCHEMA_VERSION__";
 const TEST_DIRECTORY: &str = "macroloom-repository-tests";
+const DELETE_FIXTURE_COUNT: usize = 2;
+const SURVIVING_MACRO_COUNT: usize = 1;
 static DOCUMENT: LazyLock<String> = LazyLock::new(
     // Builds the valid fixture with the supported source schema version.
     || DOCUMENT_TEMPLATE.replace(SCHEMA_PLACEHOLDER, &SCHEMA_VERSION.to_string()),
@@ -383,4 +387,101 @@ fn cached_properties_do_not_retain_extension_metadata() {
         prepared[fields::PLAYBACK][EVENT_METADATA_FIELD],
         UNKNOWN_METADATA
     );
+}
+
+#[test]
+/// Removes only the trusted association even after external content edits, then verifies restart absence.
+fn confirmed_delete_ignores_contents_and_preserves_neighbor_on_restart() {
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    folder.write(TIED_FILE, &DOCUMENT.as_str().replace(ID, SECOND_ID));
+    let repository = Repository::new(folder.0.clone());
+    repository.load(|_| {});
+    folder.write(FILE, INVALID_JSON);
+    let mut progress = Vec::new();
+    let state = repository.delete(ID, |state| progress.push(state)).unwrap();
+    assert!(!folder.0.join(FILE).exists());
+    assert_eq!(
+        fs::read_to_string(folder.0.join(TIED_FILE)).unwrap(),
+        DOCUMENT.as_str().replace(ID, SECOND_ID)
+    );
+    assert_eq!(progress[0].deleting.as_deref(), Some(ID));
+    assert_eq!(progress[0].macros.len(), DELETE_FIXTURE_COUNT);
+    assert_eq!(state.deleting, None);
+    assert_eq!(state.macros[0].id, SECOND_ID);
+    let restarted = Repository::new(folder.0.clone());
+    restarted.load(|_| {});
+    assert_eq!(restarted.snapshot().unwrap().macros[0].id, SECOND_ID);
+    assert_eq!(
+        restarted.snapshot().unwrap().macros.len(),
+        SURVIVING_MACRO_COUNT
+    );
+}
+
+#[test]
+/// Missing files fail without hiding stale entries; another attempt remains available after failure.
+fn missing_delete_preserves_entry_and_releases_pending_state() {
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = Repository::new(folder.0.clone());
+    repository.load(|_| {});
+    fs::remove_file(folder.0.join(FILE)).unwrap();
+    assert!(repository.delete(ID, |_| {}).is_err());
+    let state = repository.snapshot().unwrap();
+    assert_eq!(state.macros[0].id, ID);
+    assert_eq!(state.deleting, None);
+    folder.write(FILE, DOCUMENT.as_str());
+    assert!(repository.delete(ID, |_| {}).is_ok());
+}
+
+#[test]
+/// Pending deletion prevents reentrant mutation and lazy action snapshots; unknown IDs never address a path.
+fn delete_rejects_unknown_busy_and_loading_requests() {
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = Repository::new(folder.0.clone());
+    assert_eq!(
+        repository.delete(ID, |_| {}).unwrap_err(),
+        DELETE_UNAVAILABLE
+    );
+    repository.load(|_| {});
+    assert!(repository.delete(SECOND_ID, |_| {}).is_err());
+    repository
+        .delete(ID, |state| {
+            if state.deleting.is_some() {
+                assert_eq!(
+                    repository.delete(ID, |_| {}).unwrap_err(),
+                    DELETE_UNAVAILABLE
+                );
+                assert_eq!(repository.read(ID).unwrap_err(), DELETE_UNAVAILABLE);
+                assert!(folder.0.join(FILE).exists());
+            }
+        })
+        .unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+/// A real Windows sharing violation preserves disk bytes and metadata, then succeeds after unlock.
+fn locked_file_delete_preserves_file_and_entry() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const NO_SHARING: u32 = 0;
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = Repository::new(folder.0.clone());
+    repository.load(|_| {});
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(NO_SHARING)
+        .open(folder.0.join(FILE))
+        .unwrap();
+    assert!(repository.delete(ID, |_| {}).is_err());
+    assert_eq!(repository.snapshot().unwrap().macros[0].id, ID);
+    assert!(folder.0.join(FILE).exists());
+    drop(lock);
+    assert_eq!(
+        fs::read_to_string(folder.0.join(FILE)).unwrap(),
+        DOCUMENT.as_str()
+    );
+    repository.delete(ID, |_| {}).unwrap();
 }

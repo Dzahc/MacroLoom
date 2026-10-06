@@ -1,3 +1,4 @@
+use crate::app_mode::AppMode;
 use crate::macro_format::MacroDocument;
 use crate::repository::{LibraryState, Repository};
 use std::sync::Arc;
@@ -45,7 +46,7 @@ pub async fn load_library(
 
 #[tauri::command]
 /// Obtains a validated selected snapshot lazily; IDs resolve only through trusted loaded associations.
-/// Later Configure/Delete/Play consumers use this boundary; this command never writes or injects input.
+/// Configure/Play consumers use this boundary; this command never writes or injects input.
 pub async fn macro_snapshot(
     macro_id: String,
     service: State<'_, LibraryService>,
@@ -54,4 +55,26 @@ pub async fn macro_snapshot(
     tauri::async_runtime::spawn_blocking(move || repository.read(&macro_id))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+/// Deletes a confirmed ID on a worker and publishes pending/final metadata without focus changes.
+/// Prototype mode is excluded because its native sessions use a separate in-memory library.
+/// Propagates missing-file/storage failures without removing cached entries or emitting success.
+pub async fn delete_macro(
+    macro_id: String,
+    app: AppHandle,
+    service: State<'_, LibraryService>,
+) -> Result<LibraryState, String> {
+    AppMode::current().require_library()?;
+    let repository = service.repository()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        repository.delete(&macro_id, |state| {
+            if let Err(error) = app.emit(LIBRARY_EVENT, state) {
+                eprintln!("Library update delivery failed: {error}");
+            }
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
