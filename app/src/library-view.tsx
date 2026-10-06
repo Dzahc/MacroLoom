@@ -101,7 +101,7 @@ function Toolbar(props: ViewProps) {
 
 /** @param props Supplied status snapshot. @returns A polite text status and fixed shortcut hints. */
 function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
-  const busy = snapshot.phase !== PHASE.idle;
+  const busy = snapshot.phase !== PHASE.idle || Boolean(snapshot.deleting);
   return (
     <section
       className="library-banner"

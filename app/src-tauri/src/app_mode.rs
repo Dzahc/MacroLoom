@@ -5,6 +5,7 @@ const INPUT_PROTOTYPE_ENABLED: bool = true;
 #[cfg(not(all(debug_assertions, feature = "input-prototype")))]
 const INPUT_PROTOTYPE_ENABLED: bool = false;
 const PROTOTYPE_DISABLED: &str = "Live input is disabled in the library preview";
+const LIBRARY_DISABLED: &str = "Saved macro deletion is unavailable in the input prototype";
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,11 +31,38 @@ impl AppMode {
             Err(PROTOTYPE_DISABLED.into())
         }
     }
+    /// Allows saved-library mutation only when native prototype capture/playback cannot run.
+    /// Returns a mode error before disk access in builds using the separate input prototype.
+    pub fn require_library(self) -> Result<(), String> {
+        if self.input_prototype {
+            Err(LIBRARY_DISABLED.into())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    /// Saved-library deletion is available only in modes where prototype input cannot start.
+    fn deletion_and_native_prototype_are_mutually_exclusive() {
+        assert_eq!(
+            AppMode {
+                input_prototype: false
+            }
+            .require_library(),
+            Ok(())
+        );
+        assert_eq!(
+            AppMode {
+                input_prototype: true
+            }
+            .require_library(),
+            Err(LIBRARY_DISABLED.into())
+        );
+    }
 
     #[test]
     #[cfg(not(feature = "input-prototype"))]

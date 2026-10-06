@@ -17,6 +17,7 @@ export type BackendLibraryState = Readonly<{
   revision: number;
   loading: boolean;
   writable: boolean;
+  deleting: string | null;
   macros: readonly StoredMacroSummary[];
   failures: readonly LoadFailure[];
 }>;
@@ -69,5 +70,6 @@ export type MacroDocument = Readonly<{
 export const LIBRARY_COMMAND = {
   load: 'load_library',
   snapshot: 'macro_snapshot',
+  delete: 'delete_macro',
 } as const;
 export const LIBRARY_EVENT = 'library-state';

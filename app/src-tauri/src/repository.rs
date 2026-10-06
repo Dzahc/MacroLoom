@@ -20,6 +20,10 @@ pub const DIAGNOSTIC_FILE: &str = "file";
 const JSON_EXTENSION: &str = "json";
 const RESTART_GUIDANCE: &str = "Restart MacroLoom to reload external changes.";
 const LOCK_FAILURE: &str = "Library state is unavailable; restart MacroLoom.";
+/// Rejection for discovery, storage, or concurrent-operation preconditions.
+pub const DELETE_UNAVAILABLE: &str = "Library deletion is unavailable";
+const OUTSIDE_LIBRARY: &str = "Macro file is outside the library directory";
+const SELECTED_UNAVAILABLE: &str = "Selected macro is unavailable";
 const INVALID_FILENAME_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 const DEVICE_NAMES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
 const DEVICE_DIGITS: [char; 12] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '¹', '²', '³'];
@@ -53,6 +57,7 @@ pub struct LibraryState {
     pub revision: u64,
     pub loading: bool,
     pub writable: bool,
+    pub deleting: Option<String>,
     pub macros: Vec<MacroSummary>,
     pub failures: Vec<LoadFailure>,
 }
@@ -114,6 +119,7 @@ impl Repository {
                     revision: 0,
                     loading: true,
                     writable: false,
+                    deleting: None,
                     macros: Vec::new(),
                     failures: Vec::new(),
                 },
@@ -182,6 +188,47 @@ impl Repository {
             return Err(format!("Macro file changed. {RESTART_GUIDANCE}"));
         }
         macro_format::decode(&bytes).map_err(|error| format!("{}: {}", error.field, error.message))
+    }
+    /// Deletes only the loaded ID's associated file without reading or comparing its contents.
+    /// Publishes pending/completed metadata outside locks; failed disk removal retains the entry.
+    /// Rejects unknown IDs, unfinished discovery, unavailable storage, and concurrent deletions.
+    pub fn delete(
+        &self,
+        id: &str,
+        mut publish: impl FnMut(LibraryState),
+    ) -> Result<LibraryState, String> {
+        let path = self.begin_delete(id)?;
+        self.publish(&mut publish);
+        let result = fs::remove_file(&path).map_err(|error| error.to_string());
+        let state = self.finish_delete(id, result.is_ok())?;
+        publish(state.clone());
+        result.map(|()| state)
+    }
+    /// Reserves deletion using trusted metadata, never a frontend path; performs no disk I/O.
+    fn begin_delete(&self, id: &str) -> Result<PathBuf, String> {
+        let mut inner = self.lock()?;
+        if inner.state.loading || !inner.state.writable || inner.state.deleting.is_some() {
+            return Err(DELETE_UNAVAILABLE.into());
+        }
+        let entry = inner.entries.get(id).ok_or(SELECTED_UNAVAILABLE)?;
+        if entry.path.parent() != Some(self.directory.as_path()) {
+            return Err(OUTSIDE_LIBRARY.into());
+        }
+        let path = entry.path.clone();
+        inner.state.deleting = Some(id.into());
+        inner.state.revision += 1;
+        Ok(path)
+    }
+    /// Ends the reserved operation; metadata is removed only after successful disk deletion.
+    fn finish_delete(&self, id: &str, succeeded: bool) -> Result<LibraryState, String> {
+        let mut inner = self.lock()?;
+        if succeeded {
+            inner.entries.remove(id);
+            inner.state.macros = sorted_summaries(&inner.entries);
+        }
+        inner.state.deleting = None;
+        inner.state.revision += 1;
+        Ok(inner.state.clone())
     }
     /// Refreshes cached properties/digest after a trusted backend consumer successfully commits an internal save.
     /// Keeps the actual filename and prior cache on failure; this is not exposed as an external-change bypass command.
@@ -326,10 +373,10 @@ impl Repository {
     /// Captures a trusted association briefly; unknown IDs cannot be used to access other paths.
     fn association(&self, id: &str) -> Result<(PathBuf, Vec<u8>), String> {
         let inner = self.lock()?;
-        let entry = inner
-            .entries
-            .get(id)
-            .ok_or("Selected macro is unavailable")?;
+        if inner.state.deleting.is_some() {
+            return Err(DELETE_UNAVAILABLE.into());
+        }
+        let entry = inner.entries.get(id).ok_or(SELECTED_UNAVAILABLE)?;
         Ok((entry.path.clone(), entry.fingerprint.clone()))
     }
 }

@@ -51,7 +51,7 @@ executable, independently of the launch working directory. Valid entries appear
 progressively, newest first, with stable-ID selection. Invalid files remain
 untouched and produce individually dismissed toasts naming the file and failing
 field or part. Temporary `.json.tmp` files are ignored. Event data loads on demand;
-external file changes require a restart before the affected action can proceed.
+external file changes require a restart before Configure or Play can proceed.
 
 Three example JSON files are available in [docs/samples/macros](docs/samples/macros).
 To restore them to the default development executable's library after cleaning the
@@ -66,10 +66,15 @@ The examples display durations of 5, 12, and 24 seconds and cover keyboard input
 dragging, and scrolling. They load as saved data without executing their events.
 
 Configure and Play prepare validated snapshots for their later stories. Delete
-opens the [ML-12 confirmation dialog](docs/validation/ML-12-validation.md), which
-emits the confirmed stable ID without deleting files. Persistence mutations and
-native Record/Stop/Play integration remain outside these GUI stories. The loader
-never executes saved input. Browser-only previews retain
+opens the [ML-12 confirmation dialog](docs/validation/ML-12-validation.md), then
+permanently removes the confirmed macro's associated file and entry. It does not
+read or compare file contents before deletion. Missing or locked files fail and
+retain the entry. Success and error toasts dismiss automatically after four
+seconds; deletion has no separate error banner or Retry control. While disk work
+is pending, the banner names the macro and actions are disabled, while selection
+and scrolling remain available. See [ML-21 validation](docs/validation/ML-21-validation.md).
+Native Record/Stop/Play and property-save integration belong to later stories.
+The loader never executes saved input. Browser-only previews retain
 the ML-9 controlled samples because they cannot access native storage.
 
 In development, **Open development pane** exposes empty,

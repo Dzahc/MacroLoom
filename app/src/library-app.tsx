@@ -16,7 +16,6 @@ import { OutcomeQueue } from './outcome-queue';
 import { OutcomeToasts } from './outcome-toasts';
 import { isTauri } from '@tauri-apps/api/core';
 import { LiveLibraryApp } from './live-library-app';
-import { type DeleteConfirmed } from './delete-confirmation';
 
 const DELETE_LOG = {
   confirmed: 'delete-confirmed',
@@ -162,15 +161,7 @@ function SampleLibraryApp() {
   );
 }
 
-/** @param props Optional later-story deletion consumer for native mode. @returns Native library or nonmutating controlled samples. */
-export function LibraryApp({
-  onDeleteConfirmed,
-}: {
-  onDeleteConfirmed?: DeleteConfirmed;
-}) {
-  return isTauri() ? (
-    <LiveLibraryApp onDeleteConfirmed={onDeleteConfirmed} />
-  ) : (
-    <SampleLibraryApp />
-  );
+/** @returns Native library with persisted deletion, or nonmutating controlled browser samples. */
+export function LibraryApp() {
+  return isTauri() ? <LiveLibraryApp /> : <SampleLibraryApp />;
 }

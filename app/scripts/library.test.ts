@@ -110,6 +110,28 @@ function renderToast(queue: OutcomeQueue): string {
   );
 }
 
+/** Pending disk deletion retains enabled rows, disables toolbar actions, and announces progress. */
+void test('pending deletion keeps rows selectable while actions are disabled', () => {
+  const pending = snapshot({
+    selectedId: SELECTED.id,
+    deleting: SELECTED.id,
+    message: LABEL.delete,
+  });
+  const markup = render(pending);
+  const toolbar = markup.slice(
+    markup.indexOf('<nav'),
+    markup.indexOf('</nav>'),
+  );
+  const rows = markup.slice(markup.indexOf('<ul'), markup.indexOf('</ul>'));
+  for (const action of TOOLBAR) {
+    assert.match(toolbar, new RegExp(`data-action="${action}"[^>]*disabled`));
+  }
+  assert.doesNotMatch(rows, /disabled/);
+  assert.ok(rows.includes(SELECTED.id));
+  assert.match(markup, /status-dot busy/);
+  assert.match(markup, /role="status" aria-live="polite"/);
+});
+
 /** Checks the fixed-overlay presentation retains one polite announcement, labeled dismissal, and outcome styling. */
 void test('toast overlay presents only the queue head and retains accessible dismissal and announcements', () => {
   const queue = new OutcomeQueue();

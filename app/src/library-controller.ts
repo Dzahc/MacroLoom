@@ -3,9 +3,12 @@ import {
   PHASE,
   reconcileSelection,
   requestAction,
+  canRequest,
+  ACTION,
   type LibraryAction,
   type LibrarySnapshot,
   type SelectionChange,
+  type MacroSummary,
 } from './library-model.ts';
 import type { BackendLibraryState, MacroDocument } from './macro-contract.ts';
 import { OutcomeQueue } from './outcome-queue.ts';
@@ -16,6 +19,7 @@ export type LibraryTransport = {
   ) => Promise<() => void>;
   load: () => Promise<BackendLibraryState>;
   read: (id: string) => Promise<MacroDocument>;
+  delete: (id: string) => Promise<BackendLibraryState>;
 };
 export type PreparedAction = Readonly<{
   request: LibraryAction;
@@ -26,6 +30,11 @@ const ACTION_ERROR = 'Could not prepare macro';
 const FILE_GUIDANCE =
   'Correct the file and restart MacroLoom. File left unchanged.';
 const INITIAL_REVISION = -1;
+const DELETE_MESSAGE = {
+  pending: 'Deleting',
+  success: 'Deleted',
+  failure: 'Could not delete',
+} as const;
 
 /**
  * Owns a backend-derived library store, stable selection and once-per-failure notifications.
@@ -39,6 +48,8 @@ export class LibraryController {
   private seenFailures = 0;
   private nextOutcome = 0;
   private generation = 0;
+  private pendingDelete: MacroSummary | null = null;
+  private latestBackend: BackendLibraryState | null = null;
   private state: LibrarySnapshot = {
     macros: [],
     selectedId: null,
@@ -99,6 +110,7 @@ export class LibraryController {
     return () => {
       disposed = true;
       this.generation += 1;
+      this.pendingDelete = null;
       if (unlisten) unlisten();
     };
   }
@@ -139,6 +151,55 @@ export class LibraryController {
     }
   }
 
+  /**
+   * Deletes a deliberately confirmed ID through the native boundary, without loading its contents.
+   * @param macroId Frozen confirmation identity, independently checked against current availability.
+   * @returns Completion after reporting a timed outcome; repeat requests are ignored while pending.
+   * Backend snapshots own removal; failures retain entries and selection. Disconnect suppresses delivery.
+   */
+  async deleteConfirmed(macroId: string): Promise<void> {
+    if (!canRequest(this.state, ACTION.delete, macroId)) return;
+    const target = this.state.macros.find(
+      /** @param macro Cached metadata. @returns Whether it is the confirmed target. */
+      (macro) => macro.id === macroId,
+    );
+    if (!target) return;
+    const generation = this.generation;
+    this.pendingDelete = target;
+    this.state = {
+      ...this.state,
+      deleting: macroId,
+      message: `${DELETE_MESSAGE.pending} “${target.name}”…`,
+    };
+    this.notify();
+    try {
+      const result = await this.transport.delete(macroId);
+      if (generation !== this.generation) return;
+      this.apply(result);
+      this.pendingDelete = null;
+      this.apply(this.latestBackend ?? result);
+      this.deleteOutcome(
+        'success',
+        `${DELETE_MESSAGE.success} “${target.name}”`,
+      );
+    } catch (reason) {
+      if (generation !== this.generation) return;
+      this.pendingDelete = null;
+      this.state = { ...this.state, deleting: null, message: LABEL.ready };
+      this.notify();
+      this.deleteOutcome(
+        'failure',
+        `${DELETE_MESSAGE.failure} “${target.name}”: ${String(reason)}`,
+      );
+    }
+  }
+
+  /** @param kind Disk outcome. @param message Accessible action/name feedback. @returns Nothing; uses the ordinary toast timeout. */
+  private deleteOutcome(kind: 'success' | 'failure', message: string): void {
+    this.nextOutcome += 1;
+    this.queue.enqueue({ id: this.nextOutcome, kind, message });
+  }
+
   /** Cancels owned toast timers and resets failure delivery for a StrictMode reconnection. */
   dispose(): void {
     this.queue.dispose();
@@ -149,12 +210,26 @@ export class LibraryController {
   private apply(incoming: BackendLibraryState): void {
     if (incoming.revision < this.revision) return;
     this.revision = incoming.revision;
+    this.latestBackend = incoming;
+    const deleting = this.pendingDelete?.id ?? incoming.deleting;
+    const target =
+      this.pendingDelete ??
+      incoming.macros.find(
+        /** @param macro Backend metadata. @returns Whether it is being deleted. */
+        (macro) => macro.id === deleting,
+      );
     this.state = {
       ...this.state,
       macros: incoming.macros,
       loading: incoming.loading,
       writable: incoming.writable,
-      message: incoming.loading ? LABEL.loading : LABEL.ready,
+      deleting,
+      message:
+        target && deleting
+          ? `${DELETE_MESSAGE.pending} “${target.name}”…`
+          : incoming.loading
+            ? LABEL.loading
+            : LABEL.ready,
       selectedId: reconcileSelection(incoming.macros, this.state.selectedId),
     };
     incoming.failures.slice(this.seenFailures).forEach(

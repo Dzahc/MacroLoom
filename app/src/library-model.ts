@@ -87,6 +87,8 @@ export type LibrarySnapshot = Readonly<{
   message: string;
   loading?: boolean;
   writable?: boolean;
+  /** Stable ID being removed; selection and scrolling remain available while actions are blocked. */
+  deleting?: string | null;
   /** UI confirmation interlock; future native shortcut/session guards must enforce the same exclusion. */
   confirmationOpen?: boolean;
 }>;
@@ -133,6 +135,7 @@ export function canRequest(
       (phase) => phase === snapshot.phase,
     );
   if (snapshot.phase !== PHASE.idle) return false;
+  if (snapshot.deleting) return false;
   if (snapshot.confirmationOpen) return false;
   if (action === ACTION.record) return snapshot.writable !== false;
   if (action === ACTION.delete) {

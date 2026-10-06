@@ -15,7 +15,6 @@ import {
   type MacroDocument,
 } from './macro-contract';
 import type { LibraryAction, SelectionChange } from './library-model';
-import type { DeleteConfirmed } from './delete-confirmation';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -30,20 +29,21 @@ const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param id Loaded stable identity. @returns Validated action-owned document, or native rejection. */
   read: (id) =>
     invoke<MacroDocument>(LIBRARY_COMMAND.snapshot, { macroId: id }),
+  /** @param id Confirmed stable identity. @returns Committed library metadata, or a disk/mode rejection. */
+  delete: (id) =>
+    invoke<BackendLibraryState>(LIBRARY_COMMAND.delete, { macroId: id }),
 };
 const ACTION_CALLBACK_FAILURE = 'Library action callback failed';
 
 /**
  * Presents the executable-relative saved library with worker-driven progress and persistent error toasts.
- * @param props Optional later-story consumers for prepared Configure/Play snapshots and confirmed Delete IDs.
+ * @param props Optional later-story consumer for prepared Configure/Play snapshots.
  * @returns The library view; native listeners and queue timers disconnect on unmount.
  */
 export function LiveLibraryApp({
   onPreparedAction,
-  onDeleteConfirmed,
 }: {
   onPreparedAction?: (action: PreparedAction) => void;
-  onDeleteConfirmed?: DeleteConfirmed;
 }) {
   const [controller] = useState(
     /** @returns One controller for this mounted application. */ () =>
@@ -73,9 +73,9 @@ export function LiveLibraryApp({
   function select(change: SelectionChange) {
     controller.select(change);
   }
-  /** @param macroId Deliberately confirmed stable ID. @returns Optional consumer completion; this story performs no deletion. */
+  /** @param macroId Deliberately confirmed stable ID. @returns Worker deletion completion; outcomes are controller-owned. */
   function confirmDelete(macroId: string) {
-    if (onDeleteConfirmed) return onDeleteConfirmed(macroId);
+    return controller.deleteConfirmed(macroId);
   }
   /** @param request Available operation. @returns Nothing; asynchronously supplies data to later-story consumer. */
   function action(request: LibraryAction) {
