@@ -183,7 +183,7 @@ impl PresentationService {
 }
 
 /// Enforces development and library-mode preconditions at the backend, independent of hidden controls.
-fn require_preview() -> Result<(), String> {
+pub(crate) fn require_preview() -> Result<(), String> {
     if !cfg!(debug_assertions) || AppMode::current().input_prototype {
         return Err(PREVIEW_DISABLED.into());
     }
@@ -213,8 +213,8 @@ pub fn preview_presentation(
 }
 
 #[tauri::command]
-/// Opens separate development controls so the main window can remain strictly frame/toolbar/banner while compact.
-pub fn open_presentation_preview(app: AppHandle) -> Result<(), String> {
+/// Opens separate development controls asynchronously; synchronous Windows IPC would deadlock WebView2 creation on the event thread.
+pub async fn open_presentation_preview(app: AppHandle) -> Result<(), String> {
     require_preview()?;
     if let Some(window) = app.get_webview_window(PREVIEW_WINDOW) {
         window.show().map_err(|error| error.to_string())?;

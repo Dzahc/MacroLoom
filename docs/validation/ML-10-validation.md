@@ -107,3 +107,30 @@ after the full placement has already changed, then checks compact bounds,
 topmost, frame styles, external focus, and subsequent successful restoration.
 
 Follow-up Spec review: zero remaining actionable findings.
+
+## Development-window freeze regression
+
+The owner reported that opening the development pane created a blank window and
+froze normal application closure. The real Tauri IPC path reproduced the freeze
+inside synchronous `open_presentation_preview` window creation. Tauri documents
+that creating WebView2 windows from synchronous Windows commands can deadlock;
+the command now runs asynchronously.
+
+An explicit development-only executable shares the application's services,
+command registration, and native window lifecycle. With Vite running, execute:
+
+```powershell
+cargo run --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --bin compact-preview-check
+```
+
+The check waits for the actual main React controls, opens the preview through the
+same frontend IPC command as the button, waits for all seven development controls
+and successful backend state application, then closes both windows normally. A
+separate 15-second watchdog bounds a frozen test process. A missing frontend or
+loading placeholder cannot count as success. This interactive check remains
+separate from unattended verification; `native-checks` is opt-in and the normal
+application remains the default executable.
+
+Recorded result after the fix: **PASS** — development controls rendered, applied
+state, and both windows closed normally. The original synchronous command timed
+out before the preview loaded. Clippy also passed with `native-checks` enabled.
