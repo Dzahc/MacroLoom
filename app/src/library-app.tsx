@@ -16,6 +16,8 @@ import { OutcomeQueue } from './outcome-queue';
 import { OutcomeToasts } from './outcome-toasts';
 import { isTauri } from '@tauri-apps/api/core';
 import { LiveLibraryApp } from './live-library-app';
+import { PREVIEW_QUERY } from './compact-contract';
+import { isCompactView } from './compact-presentation';
 
 const DELETE_LOG = {
   confirmed: 'delete-confirmed',
@@ -31,6 +33,16 @@ const DevelopmentPane = import.meta.env.DEV
           (module) => ({
             default: module.DevelopmentPane,
           }),
+        ),
+    )
+  : null;
+const NativeDevelopmentPane = import.meta.env.DEV
+  ? lazy(
+      /** @returns The development-only native state-control module. */
+      () =>
+        import('./native-development-pane').then(
+          /** @param module Loaded controls. @returns React's lazy component shape. */
+          (module) => ({ default: module.NativeDevelopmentPane }),
         ),
     )
   : null;
@@ -139,7 +151,9 @@ function SampleLibraryApp() {
           onAction={action}
           onDeleteConfirmed={confirmDelete}
           onDeleteCancelled={cancelDelete}
-          notifications={<OutcomeToasts queue={queue} />}
+          notifications={
+            <OutcomeToasts queue={queue} compact={isCompactView(snapshot)} />
+          }
         />
       </div>
       {DevelopmentPane && showDev && (
@@ -163,5 +177,14 @@ function SampleLibraryApp() {
 
 /** @returns Native library with persisted deletion, or nonmutating controlled browser samples. */
 export function LibraryApp() {
+  if (
+    NativeDevelopmentPane &&
+    new URLSearchParams(window.location.search).has(PREVIEW_QUERY)
+  )
+    return (
+      <Suspense>
+        <NativeDevelopmentPane />
+      </Suspense>
+    );
   return isTauri() ? <LiveLibraryApp /> : <SampleLibraryApp />;
 }

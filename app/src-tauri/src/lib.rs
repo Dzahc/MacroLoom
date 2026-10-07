@@ -1,7 +1,9 @@
 mod app_mode;
 mod library_commands;
 pub mod macro_format;
+mod presentation;
 pub mod repository;
+mod window_view;
 mod windows;
 
 use app_mode::AppMode;
@@ -14,6 +16,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const DESKTOP_START_FAILURE: &str = "failed to run MacroLoom desktop event loop";
+const MAIN_WINDOW_LABEL: &str = "main";
+const MAIN_WINDOW_UNAVAILABLE: &str = "Main window unavailable";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -511,8 +515,13 @@ pub fn run() {
             }
             app.manage(engine);
             app.manage(library_commands::LibraryService::new());
+            let window = app
+                .get_webview_window(MAIN_WINDOW_LABEL)
+                .ok_or(MAIN_WINDOW_UNAVAILABLE)?;
+            app.manage(presentation::PresentationService::new(window)?);
             Ok(())
         })
+        .on_window_event(presentation::window_event)
         .invoke_handler(tauri::generate_handler![
             app_mode,
             snapshot,
@@ -521,7 +530,11 @@ pub fn run() {
             play,
             library_commands::load_library,
             library_commands::macro_snapshot,
-            library_commands::delete_macro
+            library_commands::delete_macro,
+            presentation::presentation_snapshot,
+            presentation::preview_presentation,
+            presentation::open_presentation_preview,
+            presentation::set_window_view
         ])
         .run(tauri::generate_context!())
         // Event-loop startup failure is fatal: no running window exists to recover through.

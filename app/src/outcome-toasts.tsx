@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import { ActionIcon } from './action-icon';
 import { LABEL } from './library-model';
 import { OutcomeQueue, PAUSE } from './outcome-queue';
@@ -10,13 +10,32 @@ import { subscribeDocumentVisibility } from './document-visibility';
  * @returns A fixed bottom overlay with accessible dismissal and no layout displacement.
  * Document subscriptions disconnect on unmount; the owner disposes the queue.
  */
-export function OutcomeToasts({ queue }: { queue: OutcomeQueue }) {
+export function OutcomeToasts({
+  queue,
+  compact = false,
+}: {
+  queue: OutcomeQueue;
+  compact?: boolean;
+}) {
   const outcomes = useSyncExternalStore(
     queue.subscribe,
     queue.getSnapshot,
     queue.getSnapshot,
   );
-  const current = outcomes[0];
+  const current = compact ? undefined : outcomes[0];
+  useLayoutEffect(
+    /** Suspends ordinary toast lifetime while hidden by compact mode; element pauses cannot outlive hidden controls. */
+    () => {
+      if (compact) {
+        queue.pause(PAUSE.compact);
+        queue.resume(PAUSE.hover);
+        queue.resume(PAUSE.focus);
+      } else queue.resume(PAUSE.compact);
+      /** Releases this view's compact pause on unmount without touching document visibility. */
+      return () => queue.resume(PAUSE.compact);
+    },
+    [queue, compact],
+  );
   useEffect(
     /** Subscribes hidden-document pauses independently of scroll position; returns cleanup. */
     () => subscribeDocumentVisibility(queue, document),

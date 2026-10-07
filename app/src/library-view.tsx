@@ -8,6 +8,9 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
+import { isCompactView, sessionBanner } from './compact-presentation';
+import { observeCompactLayout, restoreLibraryScroll } from './compact-layout';
+import type { WindowViewRequest } from './compact-contract';
 import {
   DeleteConfirmation,
   notifyDelete,
@@ -41,6 +44,7 @@ type ViewProps = LibraryCallbacks & {
   notifications?: ReactNode;
   onDeleteConfirmed: DeleteConfirmed;
   onDeleteCancelled?: DeleteConfirmed;
+  onLayout?: (request: WindowViewRequest) => void;
 };
 type MenuAnchor = { macroId: string; x: number; y: number };
 const MENU_GAP = 8;
@@ -101,7 +105,7 @@ function Toolbar(props: ViewProps) {
 
 /** @param props Supplied status snapshot. @returns A polite text status and fixed shortcut hints. */
 function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
-  const busy = snapshot.phase !== PHASE.idle || Boolean(snapshot.deleting);
+  const banner = sessionBanner(snapshot);
   return (
     <section
       className="library-banner"
@@ -109,12 +113,10 @@ function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
       aria-live="polite"
       aria-atomic="true"
     >
-      <span className={`status-dot ${busy ? 'busy' : ''}`} aria-hidden="true" />
+      <span className={`status-dot ${banner.indicator}`} aria-hidden="true" />
       <div>
-        <strong>{snapshot.message}</strong>
-        <span>
-          {LABEL.recordShortcut} · {LABEL.stopShortcut}
-        </span>
+        <strong title={banner.title}>{banner.title}</strong>
+        <span>{banner.detail}</span>
       </div>
     </section>
   );
@@ -269,6 +271,19 @@ export function LibraryView(props: ViewProps) {
   const owner = useRef<HTMLElement>(null);
   const previousAttempt = useRef<DeleteConfirmation | null>(null);
   const suppressDismissalGesture = useRef(false);
+  const scrollPosition = useRef(0);
+  const compact = isCompactView(props.snapshot);
+  const onLayout = props.onLayout;
+  useLayoutEffect(
+    /** Observes external layout measurements and restores list scroll without activating controls. */
+    () => {
+      if (!owner.current) return;
+      if (!compact) restoreLibraryScroll(owner.current, scrollPosition.current);
+      if (onLayout)
+        return observeCompactLayout(owner.current, compact, onLayout);
+    },
+    [compact, onLayout],
+  );
   useLayoutEffect(
     /** Restores a dismissed dialog's origin after controls update, using the latest session phase. */
     () => {
@@ -360,14 +375,22 @@ export function LibraryView(props: ViewProps) {
     canRequest(viewProps.snapshot, ACTION.configure, menu.macroId);
   return (
     <main
-      className="library-window"
+      className={`library-window${compact ? ' compact' : ''}`}
       ref={owner}
       onKeyDownCapture={suppressRepeatedActivation}
       onClickCapture={suppressFollowingClicks}
       onDoubleClickCapture={suppressFollowingClicks}
       onScrollCapture={
-        /** Closes the anchored menu when library content scrolls. */ () =>
-          setMenu(null)
+        /** @param event Library scroll event. @returns Nothing; retains full-list position independently of compact layout. */
+        (event) => {
+          setMenu(null);
+          if (
+            !compact &&
+            event.target instanceof HTMLElement &&
+            event.target.classList.contains('macro-list')
+          )
+            scrollPosition.current = event.target.scrollTop;
+        }
       }
     >
       <Toolbar {...viewProps} />
@@ -377,6 +400,7 @@ export function LibraryView(props: ViewProps) {
         className="macro-library"
         aria-label={LABEL.macros}
         tabIndex={-1}
+        hidden={compact}
       >
         <div className="library-heading">
           <h1>{LABEL.macros}</h1>

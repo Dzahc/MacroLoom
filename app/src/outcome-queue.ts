@@ -4,6 +4,7 @@ export const PAUSE = {
   hover: 'hover',
   focus: 'focus',
   hidden: 'hidden',
+  compact: 'compact',
 } as const;
 type PauseReason = (typeof PAUSE)[keyof typeof PAUSE];
 type Timer = ReturnType<typeof setTimeout>;
