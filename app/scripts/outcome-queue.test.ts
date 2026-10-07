@@ -10,6 +10,22 @@ const HALF_LIFETIME = TIME.toast / 2;
 const LONG_WAIT = TIME.toast * 3;
 const LOAD_FAILURE: Outcome = { ...SECOND, persistent: true };
 
+/** @param context Timer owner. @returns Nothing; compact time never consumes the visible lifetime retained before entry. */
+void test('compact sessions preserve the remaining ordinary-toast lifetime and queued arrival order', (context) => {
+  const { queue, advance } = setup(context);
+  queue.enqueue(FIRST);
+  advance(HALF_LIFETIME);
+  queue.pause(PAUSE.compact);
+  queue.enqueue(SECOND);
+  advance(LONG_WAIT);
+  assert.equal(queue.getSnapshot()[0], FIRST);
+  queue.resume(PAUSE.compact);
+  advance(HALF_LIFETIME);
+  assert.equal(queue.getSnapshot()[0], SECOND);
+  advance(TIME.toast);
+  assert.equal(queue.getSnapshot().length, 0);
+});
+
 /**
  * Creates a real queue backed by deterministic monotonic time and mocked timers.
  * @param context Test owner registering disposal cleanup.

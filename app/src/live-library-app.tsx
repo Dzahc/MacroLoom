@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -14,7 +20,15 @@ import {
   type BackendLibraryState,
   type MacroDocument,
 } from './macro-contract';
-import type { LibraryAction, SelectionChange } from './library-model';
+import { type LibraryAction, type SelectionChange } from './library-model';
+import { WINDOW_COMMAND, type WindowViewRequest } from './compact-contract';
+import {
+  isCompactPhase,
+  isCompactView,
+  presentedLibrary,
+} from './compact-presentation';
+import { useCompactWindow, useSessionPresentation } from './native-compact';
+import { DEV_TEXT } from './library-samples';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -55,6 +69,18 @@ export function LiveLibraryApp({
     controller.getSnapshot,
   );
   const mounted = useRef(false);
+  const session = useSessionPresentation();
+  const { controller: windowController, view } = useCompactWindow();
+  const desiredCompact = isCompactPhase(session.phase);
+  const presentation = presentedLibrary(snapshot, session, view);
+  const compact = isCompactView(presentation);
+  const layout = useCallback(
+    /** @param request Measured logical content. @returns Nothing; the serialized controller converts native rejections to timed toasts. */
+    (request: WindowViewRequest) => {
+      void windowController.update({ ...request, compact: desiredCompact });
+    },
+    [windowController, desiredCompact],
+  );
   useEffect(
     /** Connects native progress and returns owner cleanup. */ () => {
       mounted.current = true;
@@ -96,12 +122,41 @@ export function LiveLibraryApp({
       );
   }
   return (
-    <LibraryView
-      snapshot={snapshot}
-      onSelect={select}
-      onAction={action}
-      onDeleteConfirmed={confirmDelete}
-      notifications={<OutcomeToasts queue={controller.queue} />}
-    />
+    <div className="app-layout">
+      <div className="product-column">
+        {import.meta.env.DEV && !compact && (
+          <div className="development-toggle">
+            <button
+              type="button"
+              onClick={
+                /** Opens separate native controls; development-command failures are reported through the transition toast queue. */
+                () => {
+                  void invoke<void>(WINDOW_COMMAND.openPreview).catch(
+                    /** @param reason Preview opening failure. @returns Nothing; reports it without persistent recovery controls. */
+                    (reason: unknown) =>
+                      windowController.report(String(reason)),
+                  );
+                }
+              }
+            >
+              {DEV_TEXT.open}
+            </button>
+          </div>
+        )}
+        <LibraryView
+          snapshot={presentation}
+          onSelect={select}
+          onAction={action}
+          onDeleteConfirmed={confirmDelete}
+          onLayout={layout}
+          notifications={
+            <>
+              <OutcomeToasts queue={controller.queue} compact={compact} />
+              <OutcomeToasts queue={windowController.failures} />
+            </>
+          }
+        />
+      </div>
+    </div>
   );
 }

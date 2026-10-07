@@ -126,6 +126,49 @@ svg {
   color: var(--muted);
   font-size: 0.75rem;
 }
+.library-banner > div {
+  min-width: 0;
+  flex: 1;
+}
+.library-window.compact {
+  flex: none;
+  width: 100%;
+}
+.compact .library-toolbar {
+  flex-wrap: nowrap;
+  width: max-content;
+}
+.compact .library-banner {
+  line-height: 1.4;
+}
+.compact .library-banner strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.compact .library-banner div > span {
+  min-height: 1.4em;
+  font-variant-numeric: tabular-nums;
+}
+.status-dot.recording {
+  background: var(--danger);
+}
+.macro-library[hidden] {
+  display: none;
+}
+.compact .toast-overlay {
+  position: absolute;
+  top: var(--compact-toolbar-bottom);
+  bottom: 0.25rem;
+}
+.compact .outcome-toast {
+  max-height: 100%;
+  animation: none;
+}
+.library-window.compact {
+  position: relative;
+}
 .status-dot {
   width: 0.45rem;
   height: 0.45rem;
@@ -382,6 +425,15 @@ svg {
   justify-content: space-between;
   gap: 0.5rem;
 }
+.native-development {
+  min-height: 100dvh;
+  border: 0;
+}
+.native-development > label {
+  display: block;
+  margin-block: 1rem;
+  font-size: 0.8rem;
+}
 .development-pane h2,
 .development-pane h3 {
   margin: 0;
@@ -449,6 +501,8 @@ svg {
   }
   .with-development .product-column {
     min-height: 100dvh;
+    height: 100dvh;
+    flex: none;
   }
   .development-pane {
     flex-basis: auto;

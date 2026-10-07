@@ -1,3 +1,5 @@
+import type { SessionPresentation } from './compact-contract.ts';
+
 export const ACTION = {
   record: 'record',
   play: 'play',
@@ -10,6 +12,7 @@ export const PHASE = {
   saving: 'saving',
   recording: 'recording',
   playing: 'playing',
+  interval: 'interval',
   stopping: 'stopping',
 } as const;
 export const SOURCE = {
@@ -91,6 +94,10 @@ export type LibrarySnapshot = Readonly<{
   deleting?: string | null;
   /** UI confirmation interlock; future native shortcut/session guards must enforce the same exclusion. */
   confirmationOpen?: boolean;
+  /** Backend status or controlled presentation; no input operations are inferred from it. */
+  session?: SessionPresentation;
+  /** Native transition override after failure; keeps presentation consistent with the visible window. */
+  compact?: boolean;
 }>;
 export type LibraryCallbacks = {
   onSelect: (change: SelectionChange) => void;
@@ -130,7 +137,12 @@ export function canRequest(
   macroId: string | null = snapshot.selectedId,
 ): boolean {
   if (action === ACTION.stop)
-    return [PHASE.recording, PHASE.playing, PHASE.stopping].some(
+    return [
+      PHASE.recording,
+      PHASE.playing,
+      PHASE.interval,
+      PHASE.stopping,
+    ].some(
       /** @param phase Stop-capable phase. @returns Whether the current phase matches. */
       (phase) => phase === snapshot.phase,
     );

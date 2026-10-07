@@ -1,7 +1,9 @@
 mod app_mode;
 mod library_commands;
 pub mod macro_format;
+mod presentation;
 pub mod repository;
+mod window_view;
 mod windows;
 
 use app_mode::AppMode;
@@ -14,6 +16,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const DESKTOP_START_FAILURE: &str = "failed to run MacroLoom desktop event loop";
+const MAIN_WINDOW_LABEL: &str = "main";
+const MAIN_WINDOW_UNAVAILABLE: &str = "Main window unavailable";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -503,6 +507,14 @@ fn play(engine: State<'_, Arc<Engine>>) -> Result<Snapshot, String> {
 /// Initializes DPI and the managed engine; startup failure panics because no window can recover.
 pub fn run() {
     windows::enable_physical_dpi();
+    desktop_builder()
+        .run(tauri::generate_context!())
+        // Event-loop startup failure is fatal: no running window exists to recover through.
+        .expect(DESKTOP_START_FAILURE);
+}
+
+/// Registers the real application services, commands, and window lifecycle; shared with native integration checks.
+fn desktop_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .setup(|app| {
             let engine = Engine::new(app.handle().clone())?;
@@ -511,8 +523,13 @@ pub fn run() {
             }
             app.manage(engine);
             app.manage(library_commands::LibraryService::new());
+            let window = app
+                .get_webview_window(MAIN_WINDOW_LABEL)
+                .ok_or(MAIN_WINDOW_UNAVAILABLE)?;
+            app.manage(presentation::PresentationService::new(window)?);
             Ok(())
         })
+        .on_window_event(presentation::window_event)
         .invoke_handler(tauri::generate_handler![
             app_mode,
             snapshot,
@@ -521,11 +538,25 @@ pub fn run() {
             play,
             library_commands::load_library,
             library_commands::macro_snapshot,
-            library_commands::delete_macro
+            library_commands::delete_macro,
+            presentation::presentation_snapshot,
+            presentation::preview_presentation,
+            presentation::open_presentation_preview,
+            presentation::set_window_view
         ])
-        .run(tauri::generate_context!())
-        // Event-loop startup failure is fatal: no running window exists to recover through.
-        .expect(DESKTOP_START_FAILURE);
+}
+
+#[cfg(feature = "native-checks")]
+mod preview_window_tests;
+
+#[cfg(feature = "native-checks")]
+/// Runs the isolated real-WebView development check; requires the local Vite server and closes its own windows.
+pub fn check_development_preview() {
+    const CHECK_SUPPORTED: &str =
+        "Native preview checks require development library mode without input hooks";
+    // Fail before any native setup in unsupported builds; the check never starts recording hooks.
+    presentation::require_preview().expect(CHECK_SUPPORTED);
+    preview_window_tests::preview_window_loads_and_closes_through_real_ipc();
 }
 
 #[cfg(test)]

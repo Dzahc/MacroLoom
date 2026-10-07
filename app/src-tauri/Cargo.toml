@@ -2,6 +2,7 @@
 name = "macroloom"
 version = "0.1.0"
 edition = "2021"
+default-run = "macroloom"
 
 [lib]
 name = "macroloom_lib"
@@ -9,6 +10,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 input-prototype = []
+native-checks = []
+
+[[bin]]
+name = "compact-preview-check"
+path = "src/bin/compact-preview-check.rs"
+required-features = ["native-checks"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

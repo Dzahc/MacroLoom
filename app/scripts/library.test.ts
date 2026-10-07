@@ -27,6 +27,9 @@ import {
   OUTCOME_EXAMPLES,
 } from '../src/library-samples.ts';
 import { OutcomeQueue } from '../src/outcome-queue.ts';
+import { IDLE_PRESENTATION } from '../src/compact-contract.ts';
+import { presentedLibrary, SESSION_TEXT } from '../src/compact-presentation.ts';
+import { SESSION_SAMPLES, SESSION_SCENARIO } from '../src/session-samples.ts';
 
 let view: typeof import('../src/library-view.tsx');
 let toastView: typeof import('../src/outcome-toasts.tsx');
@@ -35,6 +38,7 @@ const OTHER = SAMPLE_MACROS[1];
 const MISSING_ID = 'missing-macro';
 const OUTCOME_ID = { first: 1, second: 2 } as const;
 const READ_ONLY = false;
+const EXPECTED_COUNTDOWN = '3.0 s';
 const DURATION_CASES = [
   [0, '00:00'],
   [TIME.millisecond - 1, '00:00'],
@@ -103,12 +107,104 @@ function render(state: LibrarySnapshot): string {
   );
 }
 
-/** @param queue Owner-managed outcome state. @returns Static overlay markup with real queue-head selection. */
-function renderToast(queue: OutcomeQueue): string {
+/** @param queue Owner-managed outcome state. @param compact Whether ordinary visual/live announcements are suppressed. @returns Static overlay markup with real queue-head selection. */
+function renderToast(queue: OutcomeQueue, compact = false): string {
   return renderToStaticMarkup(
-    createElement(toastView.OutcomeToasts, { queue }),
+    createElement(toastView.OutcomeToasts, { queue, compact }),
   );
 }
+
+/** Active recording retains library nodes and selection while hiding them, and displays its own elapsed clock. */
+void test('recording compact view hides the mounted selected library and shows elapsed time without a name', () => {
+  const state = {
+    ...snapshot({ phase: PHASE.recording, selectedId: SELECTED.id }),
+    session: {
+      ...IDLE_PRESENTATION,
+      phase: PHASE.recording,
+      elapsedMs: SELECTED.durationMs,
+    },
+  };
+  const markup = render(state);
+  assert.match(markup, /class="library-window compact"/);
+  assert.match(markup, /class="macro-library"[^>]*hidden/);
+  assert.match(markup, /aria-pressed="true"/);
+  assert.match(markup, /status-dot recording/);
+  assert.ok(markup.includes(SESSION_TEXT.recording));
+  assert.ok(markup.includes(formatDuration(SELECTED.durationMs)));
+  assert.match(markup, /data-action="stop"(?![^>]*disabled)/);
+});
+
+/** Native retained compact mode keeps cleanup/Stop presentation even after backend status has already returned idle. */
+void test('actual retained compact bounds stay usable until native restoration completes', () => {
+  const session = { ...IDLE_PRESENTATION, revision: 1 };
+  const retained = presentedLibrary(snapshot(), session, {
+    compact: true,
+    failed: false,
+  });
+  assert.equal(retained.phase, PHASE.stopping);
+  const markup = render(retained);
+  assert.match(markup, /class="library-window compact"/);
+  assert.match(markup, /data-action="stop"(?![^>]*disabled)/);
+  const restored = presentedLibrary(snapshot(), session, {
+    compact: false,
+    failed: false,
+  });
+  assert.equal(restored.phase, PHASE.idle);
+  assert.doesNotMatch(render(restored), /class="library-window compact"/);
+});
+
+/** Finite/infinite playback, repeat waits and cleanup remain compact while saving restores the mounted library. */
+void test('session banners show backend run semantics and saving uses the full view', () => {
+  const scenarios = [
+    SESSION_SCENARIO.playing,
+    SESSION_SCENARIO.infinite,
+    SESSION_SCENARIO.interval,
+    SESSION_SCENARIO.stopping,
+  ] as const;
+  for (const name of scenarios) {
+    const session = SESSION_SAMPLES[name].status;
+    const markup = render({ ...snapshot({ phase: session.phase }), session });
+    assert.match(markup, /class="library-window compact"/);
+    assert.match(markup, /class="macro-library"[^>]*hidden/);
+    assert.match(markup, /data-action="stop"(?![^>]*disabled)/);
+    if (session.phase === PHASE.playing) {
+      assert.ok(markup.includes(session.macroName ?? SESSION_TEXT.playing));
+      assert.ok(
+        markup.includes(
+          `${SESSION_TEXT.run} ${session.run}/${session.totalRuns ?? SESSION_TEXT.infinity}`,
+        ),
+      );
+      assert.ok(markup.includes(formatDuration(session.elapsedMs)));
+    }
+  }
+  const interval = SESSION_SAMPLES.interval.status;
+  assert.ok(
+    render({
+      ...snapshot({ phase: PHASE.interval }),
+      session: interval,
+    }).includes(`${SESSION_TEXT.next} ${EXPECTED_COUNTDOWN}`),
+  );
+  const saving = render(
+    snapshot({ phase: PHASE.saving, message: LABEL.saving }),
+  );
+  assert.doesNotMatch(saving, /class="library-window compact"/);
+  assert.doesNotMatch(saving, /class="macro-library"[^>]*hidden/);
+});
+
+/** Compact sessions hide both visual ordinary toasts and their live announcement without removing queued data. */
+void test('ordinary toast presentation is suppressed while compact', () => {
+  const queue = new OutcomeQueue();
+  try {
+    const outcome = { ...OUTCOME_EXAMPLES[0], id: OUTCOME_ID.first };
+    queue.enqueue(outcome);
+    const markup = renderToast(queue, true);
+    assert.equal(markup.includes(outcome.message), false);
+    assert.doesNotMatch(markup, /<aside/);
+    assert.equal(queue.getSnapshot()[0], outcome);
+  } finally {
+    queue.dispose();
+  }
+});
 
 /** Pending disk deletion retains enabled rows, disables toolbar actions, and announces progress. */
 void test('pending deletion keeps rows selectable while actions are disabled', () => {

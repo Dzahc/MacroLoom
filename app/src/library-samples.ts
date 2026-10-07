@@ -5,31 +5,24 @@ import {
   type MacroSummary,
 } from './library-model.ts';
 
-export const SAMPLE_MACROS: readonly MacroSummary[] = [
-  {
-    id: 'sample-report',
-    name: 'Update report',
-    durationMs: 24000,
-    createdAt: '2026-09-28T22:00:00Z',
-  },
-  {
-    id: 'sample-form',
-    name: 'Fill form',
-    durationMs: 8000,
-    createdAt: '2026-09-28T21:32:08Z',
-  },
-  {
-    id: 'sample-long',
-    name: 'Prepare the monthly report and transfer the completed figures to the shared planning workbook',
-    durationMs: 3737000,
-    createdAt: '2026-09-27T21:32:08Z',
-  },
-];
+import { SAMPLE_MACROS } from './sample-macros.ts';
+import {
+  SESSION_SAMPLES,
+  SESSION_SCENARIO,
+  type SessionScenario,
+} from './session-samples.ts';
+import type { SessionPresentation } from './compact-contract.ts';
+export { SAMPLE_MACROS } from './sample-macros.ts';
 export const SCENARIO = {
   populated: 'populated',
   empty: 'empty',
   failedLoad: 'failed-load',
   saving: 'saving',
+  recording: 'recording',
+  playing: 'playing',
+  infinite: 'infinite',
+  interval: 'interval',
+  stopping: 'stopping',
 } as const;
 export type ScenarioName = (typeof SCENARIO)[keyof typeof SCENARIO];
 export type SampleScenario = {
@@ -38,10 +31,28 @@ export type SampleScenario = {
   phase: LibraryPhase;
   message: string;
   failures: readonly string[];
+  session?: SessionPresentation;
 };
 const LOAD_FAILURE =
   'Could not load broken-macro.json: unsupported sample format. File left unchanged.';
+/** @param scenario Controlled session key. @returns Presentation-only sample sharing the stable library and selection identities. */
+function activeSample(scenario: SessionScenario): SampleScenario {
+  const sample = SESSION_SAMPLES[scenario];
+  return {
+    label: sample.label,
+    phase: sample.status.phase,
+    session: sample.status,
+    macros: SAMPLE_MACROS,
+    message: LABEL.ready,
+    failures: [],
+  };
+}
 export const SCENARIOS: Record<ScenarioName, SampleScenario> = {
+  recording: activeSample(SESSION_SCENARIO.recording),
+  playing: activeSample(SESSION_SCENARIO.playing),
+  infinite: activeSample(SESSION_SCENARIO.infinite),
+  interval: activeSample(SESSION_SCENARIO.interval),
+  stopping: activeSample(SESSION_SCENARIO.stopping),
   populated: {
     label: 'Populated library',
     macros: SAMPLE_MACROS,
