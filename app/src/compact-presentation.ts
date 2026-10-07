@@ -21,6 +21,7 @@ export const SESSION_TEXT = {
   complete: 'complete',
   next: 'Next run in',
   infinity: '∞',
+  busy: 'busy',
 } as const;
 const COUNTDOWN_DIGITS = 1;
 
@@ -94,26 +95,28 @@ export function sessionBanner(snapshot: LibrarySnapshot): {
       return {
         title: session.macroName ?? SESSION_TEXT.playing,
         detail: `${runs} · ${elapsed}`,
-        indicator: 'busy',
+        indicator: SESSION_TEXT.busy,
       };
     case PHASE.interval:
       return {
         title: `${runs} ${SESSION_TEXT.complete}`,
         detail: `${SESSION_TEXT.next} ${(session.remainingMs / TIME.millisecond).toFixed(COUNTDOWN_DIGITS)} s · ${elapsed}`,
-        indicator: 'busy',
+        indicator: SESSION_TEXT.busy,
       };
     case PHASE.stopping:
       return {
         title: SESSION_TEXT.stopping,
         detail: SESSION_TEXT.cleanup,
-        indicator: 'busy',
+        indicator: SESSION_TEXT.busy,
       };
     default:
       return {
         title: snapshot.message,
         detail: `${LABEL.recordShortcut} · ${LABEL.stopShortcut}`,
         indicator:
-          snapshot.phase !== PHASE.idle || snapshot.deleting ? 'busy' : '',
+          snapshot.phase !== PHASE.idle || snapshot.deleting
+            ? SESSION_TEXT.busy
+            : '',
       };
   }
 }

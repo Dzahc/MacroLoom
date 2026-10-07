@@ -28,6 +28,7 @@ import {
   presentedLibrary,
 } from './compact-presentation';
 import { useCompactWindow, useSessionPresentation } from './native-compact';
+import { DEV_TEXT } from './library-samples';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -138,7 +139,7 @@ export function LiveLibraryApp({
                 }
               }
             >
-              Open development pane
+              {DEV_TEXT.open}
             </button>
           </div>
         )}

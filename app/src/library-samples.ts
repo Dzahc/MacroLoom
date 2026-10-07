@@ -6,7 +6,11 @@ import {
 } from './library-model.ts';
 
 import { SAMPLE_MACROS } from './sample-macros.ts';
-import { SESSION_SAMPLES, type SessionScenario } from './session-samples.ts';
+import {
+  SESSION_SAMPLES,
+  SESSION_SCENARIO,
+  type SessionScenario,
+} from './session-samples.ts';
 import type { SessionPresentation } from './compact-contract.ts';
 export { SAMPLE_MACROS } from './sample-macros.ts';
 export const SCENARIO = {
@@ -44,11 +48,11 @@ function activeSample(scenario: SessionScenario): SampleScenario {
   };
 }
 export const SCENARIOS: Record<ScenarioName, SampleScenario> = {
-  recording: activeSample('recording'),
-  playing: activeSample('playing'),
-  infinite: activeSample('infinite'),
-  interval: activeSample('interval'),
-  stopping: activeSample('stopping'),
+  recording: activeSample(SESSION_SCENARIO.recording),
+  playing: activeSample(SESSION_SCENARIO.playing),
+  infinite: activeSample(SESSION_SCENARIO.infinite),
+  interval: activeSample(SESSION_SCENARIO.interval),
+  stopping: activeSample(SESSION_SCENARIO.stopping),
   populated: {
     label: 'Populated library',
     macros: SAMPLE_MACROS,

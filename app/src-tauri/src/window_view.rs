@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const MIN_CONTENT_WIDTH: f64 = 360.0;
+const MIN_CONTENT_HEIGHT: f64 = 1.0;
 const MAX_CONTENT_SIZE: f64 = 4096.0;
 const INVALID_SIZE: &str = "Invalid compact content measurements";
+const ROLLBACK_FAILED: &str = "rollback failed";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// Signed physical screen coordinate; negative origins are valid on secondary monitors.
@@ -34,7 +36,7 @@ impl ViewRequest {
             || !self.height.is_finite()
             || self.width < MIN_CONTENT_WIDTH
             || self.width > MAX_CONTENT_SIZE
-            || self.height < 1.0
+            || self.height < MIN_CONTENT_HEIGHT
             || self.height > MAX_CONTENT_SIZE
         {
             return Err(INVALID_SIZE.into());
@@ -157,7 +159,7 @@ impl<A: WindowAdapter> WindowView<A> {
     fn rollback(&mut self, error: String) -> Result<(), String> {
         match self.restore() {
             Ok(()) => Err(error),
-            Err(rollback) => Err(format!("{error}; rollback failed: {rollback}")),
+            Err(rollback) => Err(format!("{error}; {ROLLBACK_FAILED}: {rollback}")),
         }
     }
 

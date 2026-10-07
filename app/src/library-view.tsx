@@ -103,7 +103,7 @@ function Toolbar(props: ViewProps) {
   );
 }
 
-/** @param props Supplied status snapshot. @returns A polite text status and fixed shortcut hints. */
+/** @param props Supplied status snapshot. @returns A polite two-line status with session progress or full-view shortcut hints. */
 function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
   const banner = sessionBanner(snapshot);
   return (

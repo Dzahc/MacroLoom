@@ -45,6 +45,7 @@ const WINDOW_MOVE_ERROR: &str = "Could not change window bounds or topmost state
 const WINDOW_WORK_AREA_ERROR: &str = "Could not read display work area";
 const WINDOW_CONTENT_ERROR: &str = "Compact content does not fit the display work area";
 const WINDOW_RESTORE_ERROR: &str = "Could not restore full window placement";
+const COMPACT_ROLLBACK_FAILED: &str = "compact rollback failed";
 
 /// Enables per-monitor physical-coordinate handling before creating any application windows.
 pub fn enable_physical_dpi() {
@@ -181,6 +182,19 @@ impl DesktopWindow {
         };
         clamp_window_bounds(requested)
     }
+
+    /// Applies an owned placement, constraints, frame, and stacking mode without activation; callers roll back partial failure.
+    fn apply_placement(&self, saved: &FullWindowPlacement, compact: bool) -> Result<(), String> {
+        let mut placement = saved.placement;
+        placement.showCmd = SW_SHOWNOACTIVATE as u32;
+        // SAFETY: live HWND; captured initialized placement is local and its show command forbids activation.
+        if unsafe { SetWindowPlacement(self.hwnd as HWND, &placement) } == 0 {
+            return Err(WINDOW_RESTORE_ERROR.into());
+        }
+        (self.constraints)(compact)?;
+        self.style(saved.style)?;
+        self.place(saved.bounds, compact)
+    }
 }
 
 impl WindowAdapter for DesktopWindow {
@@ -242,17 +256,16 @@ impl WindowAdapter for DesktopWindow {
         self.place(self.content_bounds(position, size, style as i32)?, true)
     }
 
-    /// Restores normal restore coordinates then full visible bounds and maximize bits, exclusively through nonactivating calls.
+    /// Restores full placement without activation; partial failure rolls back the prior compact frame and retains restoration data.
     fn restore(&mut self, saved: &Self::Saved) -> Result<(), String> {
-        let mut placement = saved.placement;
-        placement.showCmd = SW_SHOWNOACTIVATE as u32;
-        // SAFETY: live HWND; the captured initialized placement is owned locally and its show command forbids activation.
-        if unsafe { SetWindowPlacement(self.hwnd as HWND, &placement) } == 0 {
-            return Err(WINDOW_RESTORE_ERROR.into());
+        let previous = self.save()?;
+        if let Err(error) = self.apply_placement(saved, false) {
+            return match self.apply_placement(&previous, true) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(format!("{error}; {COMPACT_ROLLBACK_FAILED}: {rollback}")),
+            };
         }
-        (self.constraints)(false)?;
-        self.style(saved.style)?;
-        self.place(saved.bounds, false)
+        Ok(())
     }
 
     /// Applies DPI/work-area corrections after compact movement only when the actual frame needs changing.
@@ -660,6 +673,7 @@ mod tests {
 mod native_view_tests {
     use super::*;
     use crate::window_view::{ViewRequest, WindowView, MIN_CONTENT_WIDTH};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, GetClientRect, IsZoomed, SetForegroundWindow, ShowWindow,
         SW_MAXIMIZE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
@@ -673,7 +687,24 @@ mod native_view_tests {
     const ORIGIN: i32 = 100;
     const CONTENT_HEIGHT: f64 = 156.0;
     const STATUS_UPDATES: usize = 20;
-    const OFF_SCREEN: i32 = 100_000;
+    // Keep the off-screen test origin within Win32's signed 16-bit window-position limit.
+    const OFF_SCREEN: i32 = 30_000;
+    const CONSTRAINT_FAILURE: &str = "Injected constraint failure after placement changed";
+
+    /// Builds a real native adapter with a one-shot constraint failure after full-placement mutation.
+    fn faultable_adapter(hwnd: isize, fail_restore: Arc<AtomicBool>) -> DesktopWindow {
+        let mut adapter = DesktopWindow::unconstrained(hwnd);
+        adapter.constraints = Box::new(
+            // Compact rollback succeeds; the first requested full constraint change deliberately fails.
+            move |compact| {
+                if !compact && fail_restore.swap(false, Ordering::SeqCst) {
+                    return Err(CONSTRAINT_FAILURE.into());
+                }
+                Ok(())
+            },
+        );
+        adapter
+    }
 
     /// Owns disposable native test windows; production adapters never accept an external HWND through IPC.
     struct TestWindows {
@@ -757,6 +788,22 @@ mod native_view_tests {
         (rect.left, rect.top, rect.right, rect.bottom)
     }
 
+    /// Independently checks every edge of the real native frame against its monitor's physical work area.
+    fn assert_on_work_area(hwnd: HWND) {
+        // SAFETY: initialized output values; caller owns the live native test window.
+        let mut rect: RECT = unsafe { std::mem::zeroed() };
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        // SAFETY: synchronous getters write correctly sized local storage; monitor handle remains OS-owned.
+        unsafe {
+            assert_ne!(GetWindowRect(hwnd, &mut rect), 0);
+            let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+            assert_ne!(GetMonitorInfoW(monitor, &mut info), 0);
+        }
+        assert!(rect.left >= info.rcWork.left && rect.top >= info.rcWork.top);
+        assert!(rect.right <= info.rcWork.right && rect.bottom <= info.rcWork.bottom);
+    }
+
     /// Verifies the public native adapter's actual bounds, frame, topmost, focus, and restoration on an interactive desktop.
     fn exercise(maximized: bool) {
         let windows = TestWindows::new();
@@ -768,7 +815,11 @@ mod native_view_tests {
         }
         let full = rectangle(windows.main);
         let target = windows.focus_target();
-        let mut view = WindowView::new(DesktopWindow::unconstrained(windows.main as isize));
+        let fail_restore = Arc::new(AtomicBool::new(false));
+        let mut view = WindowView::new(faultable_adapter(
+            windows.main as isize,
+            fail_restore.clone(),
+        ));
         let request = ViewRequest {
             compact: true,
             width: MIN_CONTENT_WIDTH,
@@ -811,19 +862,45 @@ mod native_view_tests {
         assert_eq!(unsafe { GetForegroundWindow() }, target);
         // SAFETY: moves only the owned compact test window; size and focus stay unchanged.
         unsafe {
-            SetWindowPos(
-                windows.main,
-                HWND_TOPMOST,
-                OFF_SCREEN,
-                OFF_SCREEN,
-                0,
-                0,
-                SWP_NOACTIVATE | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
+            assert_ne!(
+                SetWindowPos(
+                    windows.main,
+                    HWND_TOPMOST,
+                    OFF_SCREEN,
+                    OFF_SCREEN,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
+                ),
+                0
             );
         }
+        let off_screen = rectangle(windows.main);
+        assert_eq!((off_screen.0, off_screen.1), (OFF_SCREEN, OFF_SCREEN));
         assert!(view.refresh().error.is_none());
         let moved = rectangle(windows.main);
         assert!(moved.0 < OFF_SCREEN && moved.1 < OFF_SCREEN);
+        assert_on_work_area(windows.main);
+        fail_restore.store(true, Ordering::SeqCst);
+        let failed_restore = view.update(ViewRequest {
+            compact: false,
+            ..request
+        });
+        assert!(failed_restore.compact);
+        assert_eq!(failed_restore.error.as_deref(), Some(CONSTRAINT_FAILURE));
+        assert_eq!(rectangle(windows.main), moved);
+        // SAFETY: test-owned HWND remains live; getters return values without side effects.
+        unsafe {
+            assert_eq!(GetForegroundWindow(), target);
+            assert_ne!(
+                GetWindowLongW(windows.main, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST,
+                0
+            );
+            assert_eq!(
+                GetWindowLongW(windows.main, GWL_STYLE) as u32 & (WS_THICKFRAME | WS_MAXIMIZEBOX),
+                0
+            );
+        }
         let restored = view.update(ViewRequest {
             compact: false,
             ..request

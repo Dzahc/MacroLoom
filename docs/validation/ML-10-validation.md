@@ -48,6 +48,11 @@ rustfmt, Clippy, maintained frontend/Rust/Python tests, and changed-file
 complexity. Local output is retained in the ignored
 `app/.quality-output/ML-10-verify.log`.
 
+Final result: **PASS** — 46 frontend/tooling tests, 30 Rust tests, and 33 Python
+quality fixtures passed; changed-file complexity had zero failures. The native
+desktop test is intentionally excluded from the unattended gate and passed
+separately below. Production output contains no development controls.
+
 The interactive Windows adapter check passed separately:
 
 ```powershell
@@ -56,7 +61,8 @@ cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline native_co
 
 This check used disposable native frames at **DPI 168 / 175% scaling**. It passed
 normal and maximized restoration, physical frame sizing, topmost/non-resizable
-styles, off-screen work-area correction, and external foreground preservation
+styles, verified off-screen setup and full-frame work-area correction, partial
+restoration rollback, and external foreground preservation
 through entry, repeated updates, and restoration. It exercises the actual Win32
 adapter, independently of the Tauri/WebView integration.
 
@@ -75,3 +81,29 @@ display/text scaling settings, multiple monitors and cross-monitor DPI changes,
 actual negative-coordinate monitors, and screen-reader use. Negative coordinates
 and restoration failures have deterministic policy coverage, separate from this
 remaining Windows evidence.
+
+## Final review
+
+The code-review skill ran separate Standards and Spec reviews against
+`4c437431f9ea42dea0f3db865337d72572ab1d83`.
+
+### Standards
+
+Three findings: unchecked native test setup, added semantic literals bypassing
+named constants, and outdated changed-function documentation. Addressed by
+checking actual off-screen placement and every frame edge, reusing/adding named
+constants, and updating the affected contracts. No independent code-smell
+changes were requested.
+
+Follow-up Standards review: zero remaining actionable findings.
+
+### Spec
+
+One finding: a later restoration failure could leave the native frame at full
+bounds while the presentation still reported compact. Addressed by restoring
+the prior compact placement, constraints, styles, and stacking state after a
+partial failure. The interactive native regression injects a constraint failure
+after the full placement has already changed, then checks compact bounds,
+topmost, frame styles, external focus, and subsequent successful restoration.
+
+Follow-up Spec review: zero remaining actionable findings.

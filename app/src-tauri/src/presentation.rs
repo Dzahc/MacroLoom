@@ -20,6 +20,10 @@ const PREVIEW_DISABLED: &str =
 const INVALID_STATUS: &str = "Invalid controlled session presentation";
 const INVALID_WINDOW: &str = "Window presentation commands belong to the main library window";
 const STATE_POISONED: &str = "Window presentation state is unavailable";
+const VIEW_CHANNEL_CAPACITY: usize = 1;
+const CALLER_DISCONNECTED: &str = "Window view caller disconnected";
+const EVENT_DELIVERY_FAILED: &str = "Window view event delivery failed";
+const PREVIEW_CLOSE_FAILED: &str = "Preview close restoration failed";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -248,12 +252,12 @@ pub async fn set_window_view(
         return Err(INVALID_WINDOW.into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = mpsc::sync_channel(VIEW_CHANNEL_CAPACITY);
         let event_app = app.clone();
         app.run_on_main_thread(move || {
             // An abandoned IPC receiver needs no state rollback: actual view remains owned by the main window.
             if sender.send(change_view(&event_app, request)).is_err() {
-                eprintln!("Window view caller disconnected");
+                eprintln!("{CALLER_DISCONNECTED}");
             }
         })
         .map_err(|error| error.to_string())?;
@@ -294,7 +298,7 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         }
     };
     if let Err(error) = window.emit(WINDOW_VIEW_EVENT, result) {
-        eprintln!("Window view event delivery failed: {error}");
+        eprintln!("{EVENT_DELIVERY_FAILED}: {error}");
     }
 }
 
@@ -315,6 +319,6 @@ fn preview_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 .map_err(|error| error.to_string())
         });
     if let Err(error) = result {
-        eprintln!("Preview close restoration failed: {error}");
+        eprintln!("{PREVIEW_CLOSE_FAILED}: {error}");
     }
 }

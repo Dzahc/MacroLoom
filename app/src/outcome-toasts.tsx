@@ -6,8 +6,8 @@ import { subscribeDocumentVisibility } from './document-visibility';
 
 /**
  * Presents only the queue head and announces each identity through a polite live region.
- * @param props Owner-managed queue; document/hover/focus pause expiration.
- * @returns A fixed bottom overlay with accessible dismissal and no layout displacement.
+ * @param props Owner-managed queue and optional compact suppression; compact/document/hover/focus pause expiration.
+ * @returns An overlay with accessible dismissal, hidden visual/live announcements while compact, and no layout displacement.
  * Document subscriptions disconnect on unmount; the owner disposes the queue.
  */
 export function OutcomeToasts({

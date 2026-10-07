@@ -28,7 +28,7 @@ import {
 } from '../src/library-samples.ts';
 import { OutcomeQueue } from '../src/outcome-queue.ts';
 import { IDLE_PRESENTATION } from '../src/compact-contract.ts';
-import { presentedLibrary } from '../src/compact-presentation.ts';
+import { presentedLibrary, SESSION_TEXT } from '../src/compact-presentation.ts';
 import { SESSION_SAMPLES, SESSION_SCENARIO } from '../src/session-samples.ts';
 
 let view: typeof import('../src/library-view.tsx');
@@ -38,6 +38,7 @@ const OTHER = SAMPLE_MACROS[1];
 const MISSING_ID = 'missing-macro';
 const OUTCOME_ID = { first: 1, second: 2 } as const;
 const READ_ONLY = false;
+const EXPECTED_COUNTDOWN = '3.0 s';
 const DURATION_CASES = [
   [0, '00:00'],
   [TIME.millisecond - 1, '00:00'],
@@ -106,7 +107,7 @@ function render(state: LibrarySnapshot): string {
   );
 }
 
-/** @param queue Owner-managed outcome state. @returns Static overlay markup with real queue-head selection. */
+/** @param queue Owner-managed outcome state. @param compact Whether ordinary visual/live announcements are suppressed. @returns Static overlay markup with real queue-head selection. */
 function renderToast(queue: OutcomeQueue, compact = false): string {
   return renderToStaticMarkup(
     createElement(toastView.OutcomeToasts, { queue, compact }),
@@ -128,7 +129,7 @@ void test('recording compact view hides the mounted selected library and shows e
   assert.match(markup, /class="macro-library"[^>]*hidden/);
   assert.match(markup, /aria-pressed="true"/);
   assert.match(markup, /status-dot recording/);
-  assert.ok(markup.includes('Recording'));
+  assert.ok(markup.includes(SESSION_TEXT.recording));
   assert.ok(markup.includes(formatDuration(SELECTED.durationMs)));
   assert.match(markup, /data-action="stop"(?![^>]*disabled)/);
 });
@@ -167,9 +168,11 @@ void test('session banners show backend run semantics and saving uses the full v
     assert.match(markup, /class="macro-library"[^>]*hidden/);
     assert.match(markup, /data-action="stop"(?![^>]*disabled)/);
     if (session.phase === PHASE.playing) {
-      assert.ok(markup.includes(session.macroName ?? 'Playing'));
+      assert.ok(markup.includes(session.macroName ?? SESSION_TEXT.playing));
       assert.ok(
-        markup.includes(`Run ${session.run}/${session.totalRuns ?? '∞'}`),
+        markup.includes(
+          `${SESSION_TEXT.run} ${session.run}/${session.totalRuns ?? SESSION_TEXT.infinity}`,
+        ),
       );
       assert.ok(markup.includes(formatDuration(session.elapsedMs)));
     }
@@ -179,7 +182,7 @@ void test('session banners show backend run semantics and saving uses the full v
     render({
       ...snapshot({ phase: PHASE.interval }),
       session: interval,
-    }).includes('Next run in 3.0 s'),
+    }).includes(`${SESSION_TEXT.next} ${EXPECTED_COUNTDOWN}`),
   );
   const saving = render(
     snapshot({ phase: PHASE.saving, message: LABEL.saving }),

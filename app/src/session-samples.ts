@@ -20,6 +20,7 @@ const SAMPLE_ELAPSED = 18_000;
 const SAMPLE_RUN = 2;
 const SAMPLE_RUNS = 5;
 const SAMPLE_INTERVAL = 3000;
+const SAMPLE_INDEX = { report: 0, form: 1, monthlyReport: 2 } as const;
 export const SESSION_SAMPLES: Record<
   SessionScenario,
   { label: string; status: SessionPresentation }
@@ -38,7 +39,7 @@ export const SESSION_SAMPLES: Record<
     status: {
       ...IDLE_PRESENTATION,
       phase: PHASE.playing,
-      macroName: SAMPLE_MACROS[2].name,
+      macroName: SAMPLE_MACROS[SAMPLE_INDEX.monthlyReport].name,
       elapsedMs: SAMPLE_ELAPSED,
       run: SAMPLE_RUN,
       totalRuns: SAMPLE_RUNS,
@@ -49,7 +50,7 @@ export const SESSION_SAMPLES: Record<
     status: {
       ...IDLE_PRESENTATION,
       phase: PHASE.playing,
-      macroName: SAMPLE_MACROS[1].name,
+      macroName: SAMPLE_MACROS[SAMPLE_INDEX.form].name,
       elapsedMs: SAMPLE_ELAPSED,
       run: SAMPLE_RUN,
       totalRuns: null,
@@ -60,7 +61,7 @@ export const SESSION_SAMPLES: Record<
     status: {
       ...IDLE_PRESENTATION,
       phase: PHASE.interval,
-      macroName: SAMPLE_MACROS[0].name,
+      macroName: SAMPLE_MACROS[SAMPLE_INDEX.report].name,
       elapsedMs: SAMPLE_ELAPSED,
       run: SAMPLE_RUN,
       totalRuns: SAMPLE_RUNS,
