@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 pub const PRESENTATION_EVENT: &str = "presentation-state";
 pub const WINDOW_VIEW_EVENT: &str = "window-view-state";
 const MAIN_WINDOW: &str = "main";
-const PREVIEW_WINDOW: &str = "compact-development";
+pub(crate) const PREVIEW_WINDOW: &str = "compact-development";
 const PREVIEW_URL: &str = "index.html?compact-development";
 const PREVIEW_TITLE: &str = "MacroLoom — Compact development preview";
 const PREVIEW_WIDTH: f64 = 460.0;
@@ -99,6 +99,12 @@ mod tests {
     const VALID_STATUS: &str = r#"{"phase":"recording","macroName":null,"elapsedMs":18000,"run":1,"totalRuns":1,"remainingMs":0}"#;
     const INVALID_PHASE: &str = "unsupported";
     const STATUS_REVISION: u64 = 7;
+    const RECORDING_PHASE: &str = "recording";
+    const REVISION_FIELD: &str = "revision";
+    const MACRO_NAME_FIELD: &str = "macroName";
+    const PHASE_FIELD: &str = "phase";
+    const ELAPSED_MS_FIELD: &str = "elapsedMs";
+    const NON_CONTRACT_ELAPSED_MS_FIELD: &str = "elapsed_ms";
 
     #[test]
     /// External controlled recording accepts no name and serializes the exact TypeScript camelCase contract.
@@ -111,17 +117,17 @@ mod tests {
             status,
         };
         let json = serde_json::to_value(snapshot).expect("Owned serializable status cannot fail");
-        assert_eq!(json["revision"], STATUS_REVISION);
-        assert!(json["macroName"].is_null());
-        assert_eq!(json["phase"], "recording");
-        assert!(json.get("elapsedMs").is_some());
-        assert!(json.get("elapsed_ms").is_none());
+        assert_eq!(json[REVISION_FIELD], STATUS_REVISION);
+        assert!(json[MACRO_NAME_FIELD].is_null());
+        assert_eq!(json[PHASE_FIELD], RECORDING_PHASE);
+        assert!(json.get(ELAPSED_MS_FIELD).is_some());
+        assert!(json.get(NON_CONTRACT_ELAPSED_MS_FIELD).is_none());
     }
 
     #[test]
     /// External payloads cannot publish unsupported phases, unsafe timestamps, or invalid run counts.
     fn invalid_external_status_is_rejected_before_publishing() {
-        let invalid = VALID_STATUS.replace("recording", INVALID_PHASE);
+        let invalid = VALID_STATUS.replace(RECORDING_PHASE, INVALID_PHASE);
         assert!(serde_json::from_str::<PreviewStatus>(&invalid).is_err());
         let mut status = PreviewStatus {
             elapsed_ms: MAX_ELAPSED_MS + 1,

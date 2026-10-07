@@ -1,12 +1,11 @@
 //! Interactive regression for the real IPC/window-creation path, separate from pure frame-policy tests.
 
-use super::{desktop_builder, windows, MAIN_WINDOW_LABEL};
+use super::{desktop_builder, presentation::PREVIEW_WINDOW, windows, MAIN_WINDOW_LABEL};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tauri::{webview::PageLoadEvent, Manager, Webview};
 
-const PREVIEW_LABEL: &str = "compact-development";
 const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const OPEN_PREVIEW: &str = "window.__TAURI_INTERNALS__.invoke('open_presentation_preview')";
 const MAIN_READY: &str = "!!document.querySelector('.development-toggle button')";
@@ -84,7 +83,7 @@ pub fn preview_window_loads_and_closes_through_real_ipc() {
                         .eval(OPEN_PREVIEW)
                         .expect("Loaded owned WebView must accept the IPC test script");
                 });
-            } else if webview.label() == PREVIEW_LABEL {
+            } else if webview.label() == PREVIEW_WINDOW {
                 let webview = webview.clone();
                 let observed = observed.clone();
                 let app = webview.app_handle().clone();
@@ -93,7 +92,7 @@ pub fn preview_window_loads_and_closes_through_real_ipc() {
                     wait_ready(&webview, PREVIEW_READY);
                     observed.store(true, Ordering::SeqCst);
                     eprintln!("{PREVIEW_LOADED}");
-                    app.get_webview_window(PREVIEW_LABEL)
+                    app.get_webview_window(PREVIEW_WINDOW)
                         .expect("Loaded preview must remain registered")
                         .close()
                         .expect("Owned preview must accept normal close");
