@@ -1,4 +1,6 @@
 mod app_mode;
+mod configure;
+mod configure_model;
 mod library_commands;
 pub mod macro_format;
 mod presentation;
@@ -21,6 +23,7 @@ const MAIN_WINDOW_UNAVAILABLE: &str = "Main window unavailable";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Prototype-only presentation snapshot; input events and held-state ownership remain in the native engine.
 pub struct Snapshot {
     phase: &'static str,
     event_count: usize,
@@ -38,12 +41,14 @@ pub struct Snapshot {
 }
 
 #[derive(Clone)]
+/// One prototype input event at a monotonic offset, copied into playback's owned session snapshot.
 pub struct Event {
     pub at: Duration,
     pub kind: EventKind,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// Supported positioned mouse buttons with independent session-owned held states.
 pub enum MouseButton {
     Left,
     Right,
@@ -52,6 +57,7 @@ pub enum MouseButton {
 impl MouseButton {
     const ALL: [Self; 2] = [Self::Left, Self::Right];
 
+    /// Returns this supported button's owned press-state slot; every variant has exactly one slot.
     fn index(self) -> usize {
         match self {
             Self::Left => 0,
@@ -61,6 +67,7 @@ impl MouseButton {
 }
 
 #[derive(Clone)]
+/// Prototype input payload; positions are signed physical pixels and key metadata preserves Windows scan codes.
 pub enum EventKind {
     Key {
         vk: u16,
@@ -81,12 +88,14 @@ pub enum EventKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// Mutually exclusive prototype session phases; idle grants permission for a new capture or playback.
 enum Phase {
     Idle,
     Recording,
     Playing,
 }
 
+/// Synchronized prototype state; an active recording owns its start instant and playback owns its cancellation flag.
 struct Inner {
     phase: Phase,
     start: Option<Instant>,
@@ -109,6 +118,8 @@ struct Inner {
     f8_available: bool,
 }
 
+/// Prototype input session owner; the inner mutex owns capture state and the window mutex owns native placement.
+/// Poisoning means a prior worker panicked while mutating session invariants; legacy panic paths cannot safely resume input.
 pub struct Engine {
     app: AppHandle,
     inner: Mutex<Inner>,
@@ -116,6 +127,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Binds a live main window and initializes an idle prototype engine; missing window/handle rejects startup.
     fn new(app: AppHandle) -> Result<Arc<Self>, String> {
         let window = app
             .get_webview_window("main")
@@ -148,6 +160,7 @@ impl Engine {
         }))
     }
 
+    /// Copies current session state and bounded timing metrics for UI presentation without changing input ownership.
     fn snapshot(&self) -> Snapshot {
         let inner = self.inner.lock().unwrap();
         let mut sorted = inner.lateness.clone();
@@ -182,10 +195,12 @@ impl Engine {
         }
     }
 
+    /// Emits current prototype status; event delivery is best effort and never controls capture/playback timing.
     fn publish(&self) {
         let _ = self.app.emit("prototype-state", self.snapshot());
     }
 
+    /// Records native Record/Stop registration availability and publishes actionable conflict feedback.
     fn set_hotkeys(&self, f9: bool, f8: bool) {
         let mut inner = self.inner.lock().unwrap();
         inner.f9_available = f9;
@@ -201,7 +216,11 @@ impl Engine {
         self.publish();
     }
 
+    /// Starts capture only while idle, outside Configure and with global Stop available; compact transition failure rolls back phase.
     fn start_recording(&self) -> Result<(), String> {
+        self.app
+            .state::<configure::ConfigureService>()
+            .require_operation()?;
         {
             let mut inner = self.inner.lock().unwrap();
             if inner.phase != Phase::Idle {
@@ -234,6 +253,8 @@ impl Engine {
         Ok(())
     }
 
+    /// Appends one observed input with monotonic timing; recording guarantees a start instant and owns held-state bookkeeping.
+    /// Ignores idle/free movement and coalesces held-button movement without disk or UI-loop work.
     fn capture(&self, kind: EventKind) {
         let mut inner = self.inner.lock().unwrap();
         if inner.phase != Phase::Recording {
@@ -288,6 +309,8 @@ impl Engine {
         inner.events.push(Event { at, kind });
     }
 
+    /// Stops capture with owned-input release events or signals cancellable playback; recording phase guarantees a start instant.
+    /// Window restoration failure propagates; playback cleanup remains worker-owned.
     fn stop(&self) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
         match inner.phase {
@@ -345,7 +368,12 @@ impl Engine {
         Ok(())
     }
 
+    /// Starts one cancellable worker from an owned event snapshot; rejects Configure, active sessions, unavailable Stop or empty input.
+    /// Worker completion/failure releases session-held input and restores full placement.
     fn play(self: &Arc<Self>) -> Result<(), String> {
+        self.app
+            .state::<configure::ConfigureService>()
+            .require_operation()?;
         let (events, duration, cancel) = {
             let mut inner = self.inner.lock().unwrap();
             if inner.phase != Phase::Idle {
@@ -417,11 +445,13 @@ impl Engine {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// Session-owned injected input to release on completion, cancellation, failure, or application exit.
 pub enum Held {
     Key(u16, u16, bool),
     Button(MouseButton),
 }
 
+/// Updates session-owned holds after an injected event; movement changes no ownership.
 fn track_held(held: &mut Vec<Held>, kind: &EventKind) {
     match kind {
         EventKind::Key {
@@ -435,6 +465,7 @@ fn track_held(held: &mut Vec<Held>, kind: &EventKind) {
     }
 }
 
+/// Returns terminal feedback with injection failure taking precedence over cancellation.
 fn playback_message(error: Option<String>, cancelled: bool) -> String {
     match error {
         Some(error) => format!("Playback failed: {error}"),
@@ -443,6 +474,7 @@ fn playback_message(error: Option<String>, cancelled: bool) -> String {
     }
 }
 
+/// Retains each currently pressed input once and removes it on release, preserving cleanup ownership.
 fn update_held(held: &mut Vec<Held>, item: Held, down: bool) {
     if down {
         if !held.contains(&item) {
@@ -453,6 +485,7 @@ fn update_held(held: &mut Vec<Held>, item: Held, down: bool) {
     }
 }
 
+/// Waits against a monotonic absolute deadline in bounded slices; returns false immediately after cancellation is observed.
 fn wait_until(deadline: Instant, cancel: &AtomicBool) -> bool {
     while !cancel.load(Ordering::Acquire) {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -517,6 +550,7 @@ pub fn run() {
 fn desktop_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .setup(|app| {
+            app.manage(configure::ConfigureService::default());
             let engine = Engine::new(app.handle().clone())?;
             if AppMode::current().input_prototype {
                 windows::start_hooks(engine.clone());
@@ -529,7 +563,10 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             app.manage(presentation::PresentationService::new(window)?);
             Ok(())
         })
-        .on_window_event(presentation::window_event)
+        .on_window_event(|window, event| {
+            configure::window_event(window, event);
+            presentation::window_event(window, event);
+        })
         .invoke_handler(tauri::generate_handler![
             app_mode,
             snapshot,
@@ -539,6 +576,12 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             library_commands::load_library,
             library_commands::macro_snapshot,
             library_commands::delete_macro,
+            configure::open_configure,
+            configure::configure_snapshot,
+            configure::configure_submit,
+            configure::configure_claim,
+            configure::configure_resolve,
+            configure::close_configure,
             presentation::presentation_snapshot,
             presentation::preview_presentation,
             presentation::open_presentation_preview,
@@ -564,6 +607,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Repeated presses retain one ownership entry; movement retains holds and matching releases clear them.
     fn replay_tracking_keeps_only_inputs_still_held() {
         let mut held = Vec::new();
         let key = |down| EventKind::Key {
@@ -590,6 +634,7 @@ mod tests {
     }
 
     #[test]
+    /// Terminal feedback explains injection failure even when cancellation was concurrently requested.
     fn playback_feedback_prioritizes_failure_over_cancellation() {
         assert_eq!(
             playback_message(Some("injection rejected".into()), true),

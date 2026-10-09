@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { LibraryApp } from './library-app';
 import './style.css';
+import './configure.css';
+import { CONFIGURE_QUERY } from './configure-contract';
+import { NativeConfigureApp } from './native-configure-app';
+import { ConfigureSample } from './configure-sample';
 
 type AppMode = { inputPrototype: boolean };
 const LIBRARY_MODE: AppMode = { inputPrototype: false };
@@ -68,8 +72,15 @@ function App() {
   return <LibraryApp />;
 }
 
+/** @returns The owned editor route or main application; browser editor routes use nonmutating controlled callbacks. */
+function RoutedApp() {
+  if (new URLSearchParams(window.location.search).has(CONFIGURE_QUERY))
+    return isTauri() ? <NativeConfigureApp /> : <ConfigureSample />;
+  return <App />;
+}
+
 createRoot(document.getElementById(ROOT_ID)!).render(
   <React.StrictMode>
-    <App />
+    <RoutedApp />
   </React.StrictMode>,
 );

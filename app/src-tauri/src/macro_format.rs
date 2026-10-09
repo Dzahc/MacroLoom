@@ -369,7 +369,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 /// Enforces trimmed 1–120-character display names without controls, independently of filename syntax.
-fn validate_name(name: &str) -> Result<(), ValidationError> {
+pub(crate) fn validate_name(name: &str) -> Result<(), ValidationError> {
     let length = name.chars().count();
     require(
         length > 0
@@ -413,7 +413,7 @@ pub(crate) fn timestamp(value: &str, field: &str) -> Result<i64, ValidationError
 }
 
 /// Validates presets, positive finite-run counts and integral millisecond intervals.
-fn validate_playback(properties: &PlaybackProperties) -> Result<(), ValidationError> {
+pub(crate) fn validate_playback(properties: &PlaybackProperties) -> Result<(), ValidationError> {
     require(
         SPEEDS.contains(&properties.speed),
         "playback.speed",

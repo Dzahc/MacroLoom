@@ -2,7 +2,7 @@ use crate::app_mode::AppMode;
 use crate::macro_format::MacroDocument;
 use crate::repository::{LibraryState, Repository};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const LIBRARY_EVENT: &str = "library-state";
 
@@ -19,7 +19,7 @@ impl LibraryService {
         )
     }
     /// Returns shared repository ownership, propagating the original initialization error.
-    fn repository(&self) -> Result<Arc<Repository>, String> {
+    pub(crate) fn repository(&self) -> Result<Arc<Repository>, String> {
         self.0.clone()
     }
 }
@@ -67,8 +67,12 @@ pub async fn delete_macro(
     service: State<'_, LibraryService>,
 ) -> Result<LibraryState, String> {
     AppMode::current().require_library()?;
+    let reservation = app
+        .state::<crate::configure::ConfigureService>()
+        .reserve_operation()?;
     let repository = service.repository()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _reservation = reservation;
         repository.delete(&macro_id, |state| {
             if let Err(error) = app.emit(LIBRARY_EVENT, state) {
                 eprintln!("Library update delivery failed: {error}");

@@ -20,7 +20,13 @@ import {
   type BackendLibraryState,
   type MacroDocument,
 } from './macro-contract';
-import { type LibraryAction, type SelectionChange } from './library-model';
+import {
+  ACTION,
+  type LibraryAction,
+  type SelectionChange,
+} from './library-model';
+import { useNativeConfigure } from './native-configure';
+import { CONFIGURE_TEXT, type ConfigureSave } from './configure-contract';
 import { WINDOW_COMMAND, type WindowViewRequest } from './compact-contract';
 import {
   isCompactPhase,
@@ -51,13 +57,15 @@ const ACTION_CALLBACK_FAILURE = 'Library action callback failed';
 
 /**
  * Presents the executable-relative saved library with worker-driven progress and persistent error toasts.
- * @param props Optional later-story consumer for prepared Configure/Play snapshots.
+ * @param props Optional playback snapshot consumer and async property-draft consumer for later storage integration.
  * @returns The library view; native listeners and queue timers disconnect on unmount.
  */
 export function LiveLibraryApp({
   onPreparedAction,
+  onConfigureSave,
 }: {
   onPreparedAction?: (action: PreparedAction) => void;
+  onConfigureSave?: ConfigureSave;
 }) {
   const [controller] = useState(
     /** @returns One controller for this mounted application. */ () =>
@@ -69,6 +77,7 @@ export function LiveLibraryApp({
     controller.getSnapshot,
   );
   const mounted = useRef(false);
+  const configure = useNativeConfigure(onConfigureSave);
   const session = useSessionPresentation();
   const { controller: windowController, view } = useCompactWindow();
   const desiredCompact = isCompactPhase(session.phase);
@@ -105,6 +114,17 @@ export function LiveLibraryApp({
   }
   /** @param request Available operation. @returns Nothing; asynchronously supplies data to later-story consumer. */
   function action(request: LibraryAction) {
+    if (configure.busy) return;
+    if (request.action === ACTION.configure) {
+      void configure.open(request).catch(
+        /** @param reason Snapshot/window creation failure. @returns Nothing; reports actionable feedback without losing selection. */
+        (reason: unknown) =>
+          windowController.report(
+            `${CONFIGURE_TEXT.openFailure}: ${String(reason)}`,
+          ),
+      );
+      return;
+    }
     void controller
       .prepare(request)
       .then(
@@ -144,7 +164,7 @@ export function LiveLibraryApp({
           </div>
         )}
         <LibraryView
-          snapshot={presentation}
+          snapshot={{ ...presentation, confirmationOpen: configure.busy }}
           onSelect={select}
           onAction={action}
           onDeleteConfirmed={confirmDelete}
