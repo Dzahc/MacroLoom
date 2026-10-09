@@ -3,23 +3,19 @@ import { ConfigureController } from './configure-controller';
 import { ConfigureForm } from './configure-form';
 import {
   CONFIGURE_TEXT,
-  REPEAT_MODE,
-  SPEED_PRESETS,
+  CONFIGURE_DEFAULT_PLAYBACK,
   type ConfigureSnapshot,
   type ConfigureDraft,
 } from './configure-contract';
 import { SAMPLE_MACROS } from './sample-macros';
 
-const SAMPLE = SAMPLE_MACROS[0];
+const SAMPLE_INDEX = 0;
+const EMPTY_LOG = '';
+const SAMPLE = SAMPLE_MACROS[SAMPLE_INDEX];
 export const CONFIGURE_SAMPLE: ConfigureSnapshot = {
   macroId: SAMPLE.id,
   name: SAMPLE.name,
-  playback: {
-    speed: SPEED_PRESETS[2],
-    repeatMode: REPEAT_MODE.once,
-    totalRuns: 1,
-    intervalMs: 0,
-  },
+  playback: { ...CONFIGURE_DEFAULT_PLAYBACK },
 };
 const SAMPLE_TEXT = {
   title: 'Controlled Configure example',
@@ -32,13 +28,13 @@ const SAMPLE_TEXT = {
 /** @returns Controlled editor with switchable async success/failure callbacks; sample library data is never mutated. */
 export function ConfigureSample() {
   const [fail, setFail] = useState(false);
-  const [log, setLog] = useState('');
+  const [log, setLog] = useState(EMPTY_LOG);
   const [controller, setController] = useState<ConfigureController | null>(
     null,
   );
   /** Creates one draft owner with the selected controlled outcome; callbacks receive complete validated properties. */
   function open() {
-    setLog('');
+    setLog(EMPTY_LOG);
     setController(
       new ConfigureController(
         CONFIGURE_SAMPLE,

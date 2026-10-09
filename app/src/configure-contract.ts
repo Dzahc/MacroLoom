@@ -21,19 +21,42 @@ export const CONFIGURE_LIMIT = {
   firstRun: 1,
   max: Number.MAX_SAFE_INTEGER,
 } as const;
-export const SPEED_PRESETS = [0.25, 0.5, 1, 2, 4] as const;
+export const PLAYBACK_SPEED = {
+  quarter: 0.25,
+  half: 0.5,
+  normal: 1,
+  double: 2,
+  quadruple: 4,
+} as const;
+export const SPEED_PRESETS = Object.freeze(Object.values(PLAYBACK_SPEED));
 export const REPEAT_MODE = {
   once: 'once',
   fixed: 'fixed',
   indefinite: 'indefinite',
 } as const;
-export const CONFIGURE_FIELD = [
-  'name',
-  'speed',
-  'repeatMode',
-  'totalRuns',
-  'interval',
-] as const;
+export const CONFIGURE_DEFAULT_PLAYBACK = {
+  speed: PLAYBACK_SPEED.normal,
+  repeatMode: REPEAT_MODE.once,
+  totalRuns: CONFIGURE_LIMIT.firstRun,
+  intervalMs: 0,
+} as const satisfies Readonly<PlaybackProperties>;
+export const CONFIGURE_FIELD_KEY = {
+  name: 'name',
+  speed: 'speed',
+  repeatMode: 'repeatMode',
+  totalRuns: 'totalRuns',
+  interval: 'interval',
+} as const;
+export const CONFIGURE_FIELD = Object.freeze(
+  Object.values(CONFIGURE_FIELD_KEY),
+);
+export const CONFIGURE_INPUT_ID = {
+  name: 'configure-name',
+  speed: 'configure-speed',
+  repeatMode: 'configure-repeatMode',
+  totalRuns: 'configure-totalRuns',
+  interval: 'configure-interval',
+} as const;
 export type ConfigureField = (typeof CONFIGURE_FIELD)[number];
 export type ConfigureSnapshot = Readonly<{
   macroId: string;

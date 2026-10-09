@@ -3,10 +3,9 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
   CONFIGURE_LIMIT,
+  CONFIGURE_DEFAULT_PLAYBACK,
   CONFIGURE_TEXT,
   CONFIGURE_WINDOW,
-  REPEAT_MODE,
-  SPEED_PRESETS,
   type ConfigureDraft,
   type ConfigureResult,
 } from '../src/configure-contract.ts';
@@ -17,7 +16,6 @@ import {
 import { SAMPLE_MACROS } from '../src/sample-macros.ts';
 
 const SAMPLE_INDEX = 0;
-const SPEED_INDEX = 2;
 const ATTEMPT = CONFIGURE_LIMIT.firstRun;
 const FORGED_ATTEMPT = ATTEMPT + CONFIGURE_LIMIT.firstRun;
 const NO_CALLS = 0;
@@ -36,12 +34,7 @@ const EVENT_PERMISSIONS = [
 const NATIVE_DRAFT: ConfigureDraft = {
   macroId: SAMPLE_MACROS[SAMPLE_INDEX].id,
   name: SAMPLE_MACROS[SAMPLE_INDEX].name,
-  playback: {
-    speed: SPEED_PRESETS[SPEED_INDEX],
-    repeatMode: REPEAT_MODE.once,
-    totalRuns: CONFIGURE_LIMIT.firstRun,
-    intervalMs: NO_CALLS,
-  },
+  playback: { ...CONFIGURE_DEFAULT_PLAYBACK },
 };
 const SUCCESS: ConfigureResult = { ok: true };
 const FAILURE: ConfigureResult = { ok: false, message: CONFIGURE_TEXT.failure };

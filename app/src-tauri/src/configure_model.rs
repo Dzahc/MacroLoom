@@ -14,6 +14,7 @@ const WRONG_TARGET: &str = "Configure draft does not match its original macro";
 const INVALID_RESULT: &str = "Invalid Configure callback result";
 const DELIVERY_FAILED: &str = "Configure callback delivery failed";
 const CONSUMED_ATTEMPT: u64 = 0;
+const ATTEMPT_INCREMENT: u64 = 1;
 const MAX_ERROR_CHARS: usize = 2048;
 const ERROR_FIELDS: [&str; 5] = ["name", "speed", "repeatMode", "totalRuns", "interval"];
 
@@ -142,7 +143,7 @@ impl ConfigureState {
         if self.next_attempt >= MAX_SAFE_INTEGER {
             return Err(CONFIGURE_MISSING.into());
         }
-        self.next_attempt += 1;
+        self.next_attempt += ATTEMPT_INCREMENT;
         self.pending = Some(PendingSave {
             attempt_id: self.next_attempt,
             sender,
@@ -207,6 +208,9 @@ mod tests {
     const EMOJI: &str = "🧶";
     const INVALID_SPEED: f64 = 3.0;
     const FIRST_RUN: u64 = 1;
+    const NORMAL_SPEED_INDEX: usize = 2;
+    const NO_INTERVAL_MS: u64 = 0;
+    const INVALID_TOTAL_RUNS: u64 = 0;
 
     /// Returns a complete minimal property snapshot matching the existing storage contract.
     fn draft() -> ConfigureDraft {
@@ -214,10 +218,10 @@ mod tests {
             macro_id: ID.into(),
             name: NAME.into(),
             playback: PlaybackProperties {
-                speed: SPEEDS[2],
+                speed: SPEEDS[NORMAL_SPEED_INDEX],
                 repeat_mode: RepeatMode::Once,
                 total_runs: FIRST_RUN,
-                interval_ms: 0,
+                interval_ms: NO_INTERVAL_MS,
                 extra: Default::default(),
             },
         }
@@ -238,7 +242,7 @@ mod tests {
         value.playback.speed = INVALID_SPEED;
         assert!(value.validate(&original).is_err());
         value = draft();
-        value.playback.total_runs = 0;
+        value.playback.total_runs = INVALID_TOTAL_RUNS;
         assert!(value.validate(&original).is_err());
         value = draft();
         value.playback.interval_ms = MAX_SAFE_INTEGER + FIRST_RUN;

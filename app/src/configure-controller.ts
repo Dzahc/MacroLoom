@@ -13,6 +13,10 @@ import {
   type ConfigureInputs,
 } from './configure-validation.ts';
 
+const INITIAL_FOCUS_REVISION = 0;
+const FOCUS_REVISION_INCREMENT = 1;
+const EMPTY_MESSAGE = '';
+
 export type ConfigureState = Readonly<{
   input: ConfigureInputs;
   errors: ConfigureErrors;
@@ -40,9 +44,9 @@ export class ConfigureController {
       errors: {},
       pending: false,
       closed: false,
-      message: '',
+      message: EMPTY_MESSAGE,
       focus: null,
-      focusRevision: 0,
+      focusRevision: INITIAL_FOCUS_REVISION,
     };
   }
   /** @returns Stable immutable presentation state between edits. */
@@ -63,7 +67,7 @@ export class ConfigureController {
     const errors: ConfigureErrors = {};
     for (const key of this.touched)
       if (activeErrors[key]) errors[key] = activeErrors[key];
-    this.update({ input, errors, message: '' });
+    this.update({ input, errors, message: EMPTY_MESSAGE });
   }
   /** @param field Input losing focus. @returns Nothing; exposes its current active validation error. */
   blur(field: ConfigureField): void {
@@ -96,8 +100,8 @@ export class ConfigureController {
     this.update({
       errors,
       focus,
-      focusRevision: this.state.focusRevision + 1,
-      message: '',
+      focusRevision: this.state.focusRevision + FOCUS_REVISION_INCREMENT,
+      message: EMPTY_MESSAGE,
     });
     if (focus) return;
     this.update({ pending: true });
@@ -124,7 +128,7 @@ export class ConfigureController {
       message,
       errors,
       focus,
-      focusRevision: this.state.focusRevision + 1,
+      focusRevision: this.state.focusRevision + FOCUS_REVISION_INCREMENT,
     });
   }
   /** @param patch State changes. @returns Nothing; synchronously notifies the mounted views. */

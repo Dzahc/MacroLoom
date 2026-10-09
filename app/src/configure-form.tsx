@@ -11,6 +11,8 @@ import {
 } from './configure-controller';
 import {
   CONFIGURE_TEXT,
+  CONFIGURE_FIELD_KEY,
+  CONFIGURE_INPUT_ID,
   REPEAT_MODE,
   SPEED_PRESETS,
   type ConfigureField,
@@ -26,8 +28,10 @@ const ENABLED_CONTROLS =
   'input:not(:disabled), select:not(:disabled), button:not(:disabled)';
 const FIRST = 0;
 const LAST_OFFSET = 1;
+const PROGRAMMATIC_TAB_INDEX = -1;
+const EMPTY_STATUS = '';
+const SPEED_MULTIPLIER_SUFFIX = '×';
 const TITLE_ID = 'configure-title';
-const INPUT_ID_PREFIX = 'configure-';
 const ERROR_SUFFIX = '-error';
 const HINT_SUFFIX = '-hint';
 type FieldProps = {
@@ -40,7 +44,7 @@ type FieldProps = {
 
 /** @param field Stable field key. @returns Document-local input identifier. */
 function inputId(field: ConfigureField): string {
-  return `${INPUT_ID_PREFIX}${field}`;
+  return CONFIGURE_INPUT_ID[field];
 }
 
 /** @param props Field label, error, hint and input. @returns Explicitly associated accessible label and field-specific diagnostics. */
@@ -181,36 +185,47 @@ export function ConfigureForm({
         }
       >
         <div className="configure-fields">
-          <Field field="name" label={CONFIGURE_TEXT.name} state={state}>
+          <Field
+            field={CONFIGURE_FIELD_KEY.name}
+            label={CONFIGURE_TEXT.name}
+            state={state}
+          >
             <input
               ref={name}
-              {...accessibility('name', state)}
+              {...accessibility(CONFIGURE_FIELD_KEY.name, state)}
               type="text"
               autoComplete="off"
               value={state.input.name}
               disabled={state.pending}
               onChange={
                 /** @param event Edited name. @returns Nothing. */ (event) =>
-                  controller.edit('name', event.target.value)
+                  controller.edit(CONFIGURE_FIELD_KEY.name, event.target.value)
               }
               onBlur={
                 /** Validates the name after editing. */ () =>
-                  controller.blur('name')
+                  controller.blur(CONFIGURE_FIELD_KEY.name)
               }
             />
           </Field>
-          <Field field="speed" label={CONFIGURE_TEXT.speed} state={state}>
+          <Field
+            field={CONFIGURE_FIELD_KEY.speed}
+            label={CONFIGURE_TEXT.speed}
+            state={state}
+          >
             <select
-              {...accessibility('speed', state)}
+              {...accessibility(CONFIGURE_FIELD_KEY.speed, state)}
               value={state.input.speed}
               disabled={state.pending}
               onChange={
                 /** @param event Chosen preset. @returns Nothing. */ (event) =>
-                  controller.edit('speed', Number(event.target.value))
+                  controller.edit(
+                    CONFIGURE_FIELD_KEY.speed,
+                    Number(event.target.value),
+                  )
               }
               onBlur={
                 /** Validates the speed selection. */ () =>
-                  controller.blur('speed')
+                  controller.blur(CONFIGURE_FIELD_KEY.speed)
               }
             >
               {SPEED_PRESETS.map(
@@ -218,28 +233,32 @@ export function ConfigureForm({
                   speed,
                 ) => (
                   <option key={speed} value={speed}>
-                    {speed}×
+                    {speed}
+                    {SPEED_MULTIPLIER_SUFFIX}
                   </option>
                 ),
               )}
             </select>
           </Field>
           <Field
-            field="repeatMode"
+            field={CONFIGURE_FIELD_KEY.repeatMode}
             label={CONFIGURE_TEXT.repeatMode}
             state={state}
           >
             <select
-              {...accessibility('repeatMode', state)}
+              {...accessibility(CONFIGURE_FIELD_KEY.repeatMode, state)}
               value={state.input.repeatMode}
               disabled={state.pending}
               onChange={
                 /** @param event Chosen mode. @returns Nothing. */ (event) =>
-                  controller.edit('repeatMode', event.target.value)
+                  controller.edit(
+                    CONFIGURE_FIELD_KEY.repeatMode,
+                    event.target.value,
+                  )
               }
               onBlur={
                 /** Validates the mode selection. */ () =>
-                  controller.blur('repeatMode')
+                  controller.blur(CONFIGURE_FIELD_KEY.repeatMode)
               }
             >
               {Object.values(REPEAT_MODE).map(
@@ -254,13 +273,13 @@ export function ConfigureForm({
             </select>
           </Field>
           <Field
-            field="totalRuns"
+            field={CONFIGURE_FIELD_KEY.totalRuns}
             label={CONFIGURE_TEXT.totalRuns}
             state={state}
             hint={CONFIGURE_TEXT.runsHint}
           >
             <input
-              {...accessibility('totalRuns', state, true)}
+              {...accessibility(CONFIGURE_FIELD_KEY.totalRuns, state, true)}
               type="text"
               inputMode="numeric"
               value={state.input.totalRuns}
@@ -269,22 +288,25 @@ export function ConfigureForm({
               }
               onChange={
                 /** @param event Edited count. @returns Nothing. */ (event) =>
-                  controller.edit('totalRuns', event.target.value)
+                  controller.edit(
+                    CONFIGURE_FIELD_KEY.totalRuns,
+                    event.target.value,
+                  )
               }
               onBlur={
                 /** Validates the active count. */ () =>
-                  controller.blur('totalRuns')
+                  controller.blur(CONFIGURE_FIELD_KEY.totalRuns)
               }
             />
           </Field>
           <Field
-            field="interval"
+            field={CONFIGURE_FIELD_KEY.interval}
             label={CONFIGURE_TEXT.interval}
             state={state}
             hint={CONFIGURE_TEXT.intervalHint}
           >
             <input
-              {...accessibility('interval', state, true)}
+              {...accessibility(CONFIGURE_FIELD_KEY.interval, state, true)}
               type="text"
               inputMode="decimal"
               value={state.input.interval}
@@ -293,11 +315,14 @@ export function ConfigureForm({
               }
               onChange={
                 /** @param event Edited seconds. @returns Nothing. */ (event) =>
-                  controller.edit('interval', event.target.value)
+                  controller.edit(
+                    CONFIGURE_FIELD_KEY.interval,
+                    event.target.value,
+                  )
               }
               onBlur={
                 /** Validates the active interval. */ () =>
-                  controller.blur('interval')
+                  controller.blur(CONFIGURE_FIELD_KEY.interval)
               }
             />
           </Field>
@@ -308,8 +333,8 @@ export function ConfigureForm({
           )}
         </div>
         <footer>
-          <p ref={status} role="status" tabIndex={-1}>
-            {state.pending ? CONFIGURE_TEXT.saving : ''}
+          <p ref={status} role="status" tabIndex={PROGRAMMATIC_TAB_INDEX}>
+            {state.pending ? CONFIGURE_TEXT.saving : EMPTY_STATUS}
           </p>
           <button
             type="button"
