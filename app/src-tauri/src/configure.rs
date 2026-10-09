@@ -21,8 +21,6 @@ const MIN_WIDTH: f64 = 360.0;
 const MIN_HEIGHT: f64 = 300.0;
 const LOCK_FAILED: &str = "Configure state is unavailable; restart MacroLoom";
 const INVALID_CALLER: &str = "Configure command is unavailable in this window";
-const DELIVERY_FAILED: &str = "Configure callback delivery failed";
-const CONSUMED_ATTEMPT: u64 = 0;
 
 #[derive(Default)]
 /// Managed singleton editor interlock shared by native commands, callback workers, and window lifecycle events.
@@ -202,6 +200,17 @@ pub async fn configure_submit(
 }
 
 #[tauri::command]
+/// Supplies the main consumer with the matching native-validated draft once; event payloads never supply callback data.
+pub fn configure_claim(
+    attempt_id: u64,
+    window: WebviewWindow,
+    service: State<'_, ConfigureService>,
+) -> Result<ConfigureDraft, String> {
+    require_caller(&window, MAIN_WINDOW)?;
+    service.lock()?.claim(attempt_id)
+}
+
+#[tauri::command]
 /// Resolves only the matching active callback from the main window; duplicate/stale acknowledgements fail.
 pub fn configure_resolve(
     attempt_id: u64,
@@ -210,21 +219,7 @@ pub fn configure_resolve(
     service: State<'_, ConfigureService>,
 ) -> Result<(), String> {
     require_caller(&window, MAIN_WINDOW)?;
-    result.validate()?;
-    let mut state = service.lock()?;
-    let pending = state.pending.as_ref().ok_or(CONFIGURE_MISSING)?;
-    if pending.attempt_id == CONSUMED_ATTEMPT || pending.attempt_id != attempt_id {
-        return Err(CONFIGURE_MISSING.into());
-    }
-    pending
-        .sender
-        .send(result)
-        .map_err(|_| DELIVERY_FAILED.to_string())?;
-    // Keep the pending guard until the submit worker settles; mark this sender consumed to reject duplicate resolution.
-    if let Some(pending) = state.pending.as_mut() {
-        pending.attempt_id = CONSUMED_ATTEMPT;
-    }
-    Ok(())
+    service.lock()?.resolve(attempt_id, result)
 }
 
 #[tauri::command]
@@ -281,7 +276,7 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     }
 }
 
-/// Prevents native close during Save and reenables/refocuses the parent after editor destruction.
+/// Prevents native close during Save and reenables the owner before destruction without forcing foreground activation.
 fn editor_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -290,18 +285,25 @@ fn editor_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 Ok(state) => {
                     if state.pending.is_some() {
                         api.prevent_close();
+                        return;
                     }
                 }
-                Err(_) => api.prevent_close(),
+                Err(_) => {
+                    api.prevent_close();
+                    return;
+                }
             };
-        }
-        tauri::WindowEvent::Destroyed => {
-            reset(window.app_handle());
+            // An enabled owner participates in Windows' normal close-time activation.
+            // No foreground request is made when another application owns focus.
             if let Some(main) = window.app_handle().get_webview_window(MAIN_WINDOW) {
-                if let Err(error) = main.set_focus() {
+                if let Err(error) = main.set_enabled(true) {
+                    api.prevent_close();
                     eprintln!("{error}");
                 }
             }
+        }
+        tauri::WindowEvent::Destroyed => {
+            reset(window.app_handle());
         }
         _ => {}
     }

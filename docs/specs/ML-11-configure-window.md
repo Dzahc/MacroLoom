@@ -27,6 +27,8 @@ Durable property storage and outcome toasts remain the later integration story.
   Tab/Shift+Tab stay within the form. Escape, Cancel and native close discard
   idle local edits. Closing restores the opening control when the main document
   is active. Animation-frame work and event subscriptions disconnect on cleanup.
+  The native owner is reenabled before accepted editor closure, leaving focus
+  activation to Windows rather than forcing the main window into the foreground.
 - Valid Save emits the complete `{macroId, name, playback}` draft once per
   attempt, even without changes, through `ConfigureSave`. While awaiting the
   callback, fields and buttons are disabled, Escape is ignored and native close
@@ -42,7 +44,11 @@ Durable property storage and outcome toasts remain the later integration story.
 `LiveLibraryApp.onConfigureSave` supplies the async consumer. The native bridge
 validates drafts independently, freezes the macro identity and correlates each
 submission with a safe integer attempt ID. Only the editor may submit/close;
-only the main window may acknowledge a matching callback. Unknown control
+only the main window may claim its native-held validated draft once and
+acknowledge that claimed callback. Events carry only attempt notifications;
+their payloads never supply consumer draft data. The editor has no event API
+permissions. Forged, stale and replayed notifications cannot invoke another
+consumer callback or prematurely acknowledge an active attempt. Unknown control
 payload fields, changed IDs, invalid settings and duplicate acknowledgements
 are rejected. No Configure command writes a file or changes library metadata.
 

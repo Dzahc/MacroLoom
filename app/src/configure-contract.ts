@@ -6,6 +6,7 @@ export const CONFIGURE_COMMAND = {
   open: 'open_configure',
   snapshot: 'configure_snapshot',
   submit: 'configure_submit',
+  claim: 'configure_claim',
   resolve: 'configure_resolve',
   close: 'close_configure',
 } as const;
@@ -51,7 +52,6 @@ export type ConfigureResult =
 export type ConfigureSave = (draft: ConfigureDraft) => Promise<ConfigureResult>;
 export type ConfigureSubmission = Readonly<{
   attemptId: number;
-  draft: ConfigureDraft;
 }>;
 export const CONFIGURE_TEXT = {
   title: 'Configure macro',

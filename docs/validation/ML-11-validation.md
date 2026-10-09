@@ -39,3 +39,25 @@ passed every check except Rust tests because the development executable was
 still running. Closing that test instance released the binary; the final complete
 gate then passed. No complexity exceptions or quality-tooling changes were added.
 This command/result is also recorded in GitHub issue #11.
+
+## PR #35 review fixes
+
+The Configure editor has no frontend event permissions. Submit events now carry
+only an attempt notification; the main window claims the validated native-held
+draft exactly once before invoking the Save consumer. Acknowledgement requires
+that claim, and invalid/replayed notifications leave the legitimate pending
+callback unchanged.
+
+Five additional Node regression tests cover event permissions, forged draft
+payloads, unknown attempts, replay during/after Save, rejected consumers,
+malformed acknowledgements and bridge disconnection. Three additional Rust tests
+cover matching once-only claims, native trimming, invalid identity rejection,
+stale attempts after Retry and acknowledgement ordering/replay.
+
+The native close path reenables the owner before accepted editor closure and
+does not request foreground activation after destruction. Windows handles normal
+owned-window activation; the frontend restores the opening control only when
+the main document is active. Pending Save continues to block native closure.
+Interactive foreground-focus and text-scaling checks were not rerun; the
+previously documented user-requested omission remains in effect. Review-fix
+verification results are recorded in GitHub issue #11.

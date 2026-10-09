@@ -13,8 +13,12 @@ import {
   CONFIGURE_TEXT,
   type ConfigureSave,
   type ConfigureSubmission,
-  type ConfigureResult,
+  type ConfigureDraft,
 } from './configure-contract';
+import {
+  deliverConfigureSubmission,
+  type ConfigureDelivery,
+} from './configure-delivery';
 import { ACTION, SOURCE, type LibraryAction } from './library-model';
 
 const FOCUS_TARGET = {
@@ -23,6 +27,16 @@ const FOCUS_TARGET = {
   fallback: '.macro-library',
 } as const;
 const BRIDGE_FAILED = 'Configure callback bridge failed';
+const NATIVE_DELIVERY: ConfigureDelivery = {
+  /** @param attemptId Untrusted notification identity. @returns Matching native draft once, or native rejection. */
+  claim: (attemptId) =>
+    invoke<ConfigureDraft>(CONFIGURE_COMMAND.claim, { attemptId }),
+  /** @param attemptId Claimed identity. @param result Consumer acknowledgement. @returns Native acceptance or rejection. */
+  resolve: (attemptId, result) =>
+    invoke<void>(CONFIGURE_COMMAND.resolve, { attemptId, result }),
+  /** @param reason Rejected claim or acknowledgement. @returns Nothing; records bridge failures without changing modal state. */
+  report: (reason) => console.error(BRIDGE_FAILED, reason),
+};
 
 /** @param request Original opening control. @returns Nothing; restores actual control focus after the native owner is enabled. */
 function restoreFocus(request: LibraryAction | null): void {
@@ -56,32 +70,9 @@ export function useNativeConfigure(
   const origin = useRef<LibraryAction | null>(null);
   const opening = useRef(false);
   const consume = useEffectEvent(
-    /** @param submission Native-validated, once-per-attempt draft. @returns Nothing; rejected consumers receive a retained failure acknowledgement. */ async (
+    /** @param submission Attempt notification. @returns Completion after a native claim; replayed events cannot invoke the consumer. */ (
       submission: ConfigureSubmission,
-    ) => {
-      let result: ConfigureResult;
-      try {
-        result = await save(submission.draft);
-      } catch {
-        result = { ok: false, message: CONFIGURE_TEXT.failure };
-      }
-      try {
-        await invoke<void>(CONFIGURE_COMMAND.resolve, {
-          attemptId: submission.attemptId,
-          result,
-        });
-      } catch (reason) {
-        console.error(BRIDGE_FAILED, reason);
-        // Malformed consumer responses must leave a recoverable failure instead of indefinite progress.
-        await invoke<void>(CONFIGURE_COMMAND.resolve, {
-          attemptId: submission.attemptId,
-          result: { ok: false, message: CONFIGURE_TEXT.failure },
-        }).catch(
-          /** @param failure Disconnected bridge rejection. @returns Nothing; reports it without an unhandled promise. */
-          (failure: unknown) => console.error(BRIDGE_FAILED, failure),
-        );
-      }
-    },
+    ) => deliverConfigureSubmission(submission, save, NATIVE_DELIVERY),
   );
   useEffect(
     /** Subscribes before opening an editor and cleans up registrations that complete after teardown. */ () => {
@@ -96,7 +87,7 @@ export function useNativeConfigure(
       const registration = Promise.all([
         listen<ConfigureSubmission>(
           CONFIGURE_EVENT.submit,
-          /** @param event Validated submission. @returns Nothing. */ (
+          /** @param event Untrusted attempt notification. @returns Nothing; native state authenticates its draft before delivery. */ (
             event,
           ) => {
             if (!disposed) void consume(event.payload);

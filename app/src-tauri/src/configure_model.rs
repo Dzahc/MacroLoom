@@ -12,6 +12,8 @@ pub const CALLBACK_FAILED: &str =
     "Could not save changes. Your edits are retained; try again or Cancel.";
 const WRONG_TARGET: &str = "Configure draft does not match its original macro";
 const INVALID_RESULT: &str = "Invalid Configure callback result";
+const DELIVERY_FAILED: &str = "Configure callback delivery failed";
+const CONSUMED_ATTEMPT: u64 = 0;
 const MAX_ERROR_CHARS: usize = 2048;
 const ERROR_FIELDS: [&str; 5] = ["name", "speed", "repeatMode", "totalRuns", "interval"];
 
@@ -90,16 +92,16 @@ impl ConfigureResult {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// Once-per-attempt event delivered only to the main window's supplied asynchronous consumer.
+/// Notification of a pending attempt; the main consumer must claim its validated draft from native state.
 pub struct ConfigureSubmission {
     pub attempt_id: u64,
-    pub draft: ConfigureDraft,
 }
 
 /// Active callback channel retained until the main consumer acknowledges the matching attempt.
 pub struct PendingSave {
     pub attempt_id: u64,
     pub sender: Sender<ConfigureResult>,
+    pub draft: Option<ConfigureDraft>,
 }
 
 #[derive(Default)]
@@ -144,12 +146,38 @@ impl ConfigureState {
         self.pending = Some(PendingSave {
             attempt_id: self.next_attempt,
             sender,
+            draft: Some(draft),
         });
         self.save_succeeded = false;
         Ok(ConfigureSubmission {
             attempt_id: self.next_attempt,
-            draft,
         })
+    }
+    /// Returns the matching native-validated draft once; missing, forged, stale and replayed attempt IDs cannot deliver data.
+    pub fn claim(&mut self, attempt_id: u64) -> Result<ConfigureDraft, String> {
+        let pending = self.pending.as_mut().ok_or(CONFIGURE_MISSING)?;
+        if pending.attempt_id != attempt_id {
+            return Err(CONFIGURE_MISSING.into());
+        }
+        pending.draft.take().ok_or_else(|| CONFIGURE_MISSING.into())
+    }
+    /// Sends one validated acknowledgement only after a matching claim; premature, stale and duplicate results leave the active callback unchanged.
+    pub fn resolve(&mut self, attempt_id: u64, result: ConfigureResult) -> Result<(), String> {
+        result.validate()?;
+        let pending = self.pending.as_mut().ok_or(CONFIGURE_MISSING)?;
+        if pending.attempt_id == CONSUMED_ATTEMPT
+            || pending.attempt_id != attempt_id
+            || pending.draft.is_some()
+        {
+            return Err(CONFIGURE_MISSING.into());
+        }
+        pending
+            .sender
+            .send(result)
+            .map_err(|_| DELIVERY_FAILED.to_string())?;
+        // Retain the pending guard until the submit worker settles, while preventing another acknowledgement.
+        pending.attempt_id = CONSUMED_ATTEMPT;
+        Ok(())
     }
     /// Completes an acknowledged attempt; failed Save cancels deferred exit so recoverable edits remain open.
     pub fn settle(&mut self, result: &ConfigureResult) {
@@ -260,6 +288,101 @@ mod tests {
         assert!(state.exit_requested);
         assert!(state.pending.is_none());
         assert!(state.begin(draft(), sender).is_err());
+    }
+
+    #[test]
+    /// A forged notification cannot claim data; the active claim returns the validated draft once and replay leaves its callback pending.
+    fn claims_only_the_matching_validated_draft_once() {
+        let mut state = ConfigureState {
+            occupied: true,
+            original: Some(draft()),
+            ..ConfigureState::default()
+        };
+        assert!(state.claim(FIRST_RUN).is_err());
+        let (sender, _) = std::sync::mpsc::channel();
+        let mut submitted = draft();
+        submitted.name = format!("  {NAME}  ");
+        let notification = state
+            .begin(submitted, sender)
+            .expect("Reserved editor accepts validated draft");
+        assert!(state.claim(notification.attempt_id + FIRST_RUN).is_err());
+        let claimed = state
+            .claim(notification.attempt_id)
+            .expect("Only the matching notification claims the pending draft");
+        assert_eq!(claimed.macro_id, ID);
+        assert_eq!(claimed.name, NAME);
+        assert!(state.claim(notification.attempt_id).is_err());
+        assert!(state.pending.is_some());
+    }
+
+    #[test]
+    /// Validation failure creates no claimable draft and Retry cannot be consumed by an earlier attempt notification.
+    fn invalid_drafts_and_stale_attempts_cannot_be_claimed() {
+        let mut state = ConfigureState {
+            occupied: true,
+            original: Some(draft()),
+            ..ConfigureState::default()
+        };
+        let (sender, _) = std::sync::mpsc::channel();
+        let mut invalid = draft();
+        invalid.macro_id = WRONG_ID.into();
+        assert!(state.begin(invalid, sender.clone()).is_err());
+        assert!(state.claim(FIRST_RUN).is_err());
+        let first = state
+            .begin(draft(), sender.clone())
+            .expect("Valid draft creates the first attempt");
+        state
+            .claim(first.attempt_id)
+            .expect("First callback claims the validated draft");
+        state.settle(&ConfigureResult::failure());
+        let retry = state
+            .begin(draft(), sender)
+            .expect("Failure permits a new attempt");
+        assert!(state.claim(first.attempt_id).is_err());
+        assert!(state.claim(retry.attempt_id).is_ok());
+    }
+
+    #[test]
+    /// Only a claimed matching attempt can acknowledge Save; premature and replayed acknowledgements never release or replace the channel.
+    fn acknowledgement_requires_a_claim_and_cannot_be_replayed() {
+        let mut state = ConfigureState {
+            occupied: true,
+            original: Some(draft()),
+            ..ConfigureState::default()
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let notification = state
+            .begin(draft(), sender)
+            .expect("Valid draft creates a pending callback");
+        assert!(state
+            .resolve(notification.attempt_id, ConfigureResult::failure())
+            .is_err());
+        assert!(receiver.try_recv().is_err());
+        state
+            .claim(notification.attempt_id)
+            .expect("Consumer claims the native draft before acknowledgement");
+        assert!(state
+            .resolve(
+                notification.attempt_id + FIRST_RUN,
+                ConfigureResult::failure()
+            )
+            .is_err());
+        assert!(receiver.try_recv().is_err());
+        assert!(state
+            .resolve(notification.attempt_id, ConfigureResult::failure())
+            .is_ok());
+        assert!(state.pending.is_some());
+        assert!(
+            !receiver
+                .try_recv()
+                .expect("Matching claimed attempt delivers one acknowledgement")
+                .ok
+        );
+        assert!(state
+            .resolve(notification.attempt_id, ConfigureResult::failure())
+            .is_err());
+        assert!(state.claim(notification.attempt_id).is_err());
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

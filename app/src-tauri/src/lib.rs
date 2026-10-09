@@ -579,6 +579,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             configure::open_configure,
             configure::configure_snapshot,
             configure::configure_submit,
+            configure::configure_claim,
             configure::configure_resolve,
             configure::close_configure,
             presentation::presentation_snapshot,
