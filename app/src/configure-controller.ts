@@ -21,6 +21,7 @@ export type ConfigureState = Readonly<{
   input: ConfigureInputs;
   errors: ConfigureErrors;
   pending: boolean;
+  uncertain: boolean;
   closed: boolean;
   message: string;
   focus: ConfigureField | null;
@@ -43,6 +44,7 @@ export class ConfigureController {
       input: configureInputs(snapshot),
       errors: {},
       pending: false,
+      uncertain: false,
       closed: false,
       message: EMPTY_MESSAGE,
       focus: null,
@@ -59,9 +61,9 @@ export class ConfigureController {
       this.listeners.delete(listener);
     };
   };
-  /** @param field Edited input key. @param value Typed local value. @returns Nothing; pending/closed editors ignore edits. */
+  /** @param field Edited input key. @param value Typed local value. @returns Nothing; pending/closed/uncertain editors ignore edits until their submitted outcome is known. */
   edit<K extends ConfigureField>(field: K, value: ConfigureInputs[K]): void {
-    if (this.state.pending || this.state.closed) return;
+    if (this.state.pending || this.state.closed || this.state.uncertain) return;
     const input = { ...this.state.input, [field]: value };
     const activeErrors = configureErrors(input);
     const errors: ConfigureErrors = {};
@@ -82,7 +84,8 @@ export class ConfigureController {
   }
   /** @returns Whether cancellation closed the idle editor; never calls Save. */
   cancel(): boolean {
-    if (this.state.pending || this.state.closed) return false;
+    if (this.state.pending || this.state.closed || this.state.uncertain)
+      return false;
     this.update({ closed: true });
     return true;
   }
@@ -108,15 +111,26 @@ export class ConfigureController {
     try {
       const result = await this.save(
         configureDraft(this.state.input, this.original),
+        this.state.uncertain,
       );
-      if (result.ok) this.update({ pending: false, closed: true });
-      else this.failed(result.message, result.fields ?? {});
+      if (result.ok)
+        this.update({ pending: false, uncertain: false, closed: true });
+      else
+        this.failed(
+          result.message,
+          result.fields ?? {},
+          result.uncertain ?? false,
+        );
     } catch {
       this.failed(CONFIGURE_TEXT.failure, {});
     }
   }
-  /** @param message Actionable consumer error. @param errors Optional field errors. @returns Nothing; resets the submission guard for deliberate Retry. */
-  private failed(message: string, errors: ConfigureErrors): void {
+  /** @param message Actionable consumer error. @param errors Optional field errors. @param uncertain Whether the submitted outcome remains unknown, freezing edits/dismissal until Retry reconciles it. @returns Nothing; resets the submission guard for deliberate Retry. */
+  private failed(
+    message: string,
+    errors: ConfigureErrors,
+    uncertain = false,
+  ): void {
     const focus =
       CONFIGURE_FIELD.find(
         /** @param field Input key. @returns Whether the consumer rejected it. */ (
@@ -125,6 +139,7 @@ export class ConfigureController {
       ) ?? null;
     this.update({
       pending: false,
+      uncertain,
       message,
       errors,
       focus,

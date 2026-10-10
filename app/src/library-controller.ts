@@ -12,6 +12,12 @@ import {
 } from './library-model.ts';
 import type { BackendLibraryState, MacroDocument } from './macro-contract.ts';
 import { OutcomeQueue } from './outcome-queue.ts';
+import {
+  CONFIGURE_TEXT,
+  CONFIGURE_OUTCOME,
+  INITIAL_CONFIGURE_ATTEMPT,
+  type ConfigureCompletion,
+} from './configure-contract.ts';
 
 export type LibraryTransport = {
   listen: (
@@ -47,6 +53,7 @@ export class LibraryController {
   private revision = INITIAL_REVISION;
   private seenFailures = 0;
   private nextOutcome = 0;
+  private lastConfigureAttempt = INITIAL_CONFIGURE_ATTEMPT;
   private generation = 0;
   private pendingDelete: MacroSummary | null = null;
   private latestBackend: BackendLibraryState | null = null;
@@ -178,24 +185,40 @@ export class LibraryController {
       this.apply(result);
       this.pendingDelete = null;
       this.apply(this.latestBackend ?? result);
-      this.deleteOutcome(
-        'success',
-        `${DELETE_MESSAGE.success} “${target.name}”`,
-      );
+      this.outcome('success', `${DELETE_MESSAGE.success} “${target.name}”`);
     } catch (reason) {
       if (generation !== this.generation) return;
       this.pendingDelete = null;
       this.state = { ...this.state, deleting: null, message: LABEL.ready };
       this.notify();
-      this.deleteOutcome(
+      this.outcome(
         'failure',
         `${DELETE_MESSAGE.failure} “${target.name}”: ${String(reason)}`,
       );
     }
   }
 
+  /** @param completion Backend-owned saved result. @returns Nothing; reconciles committed metadata and announces each changed save once, preserving selection. */
+  configured(completion: ConfigureCompletion): void {
+    if (completion.attemptId <= this.lastConfigureAttempt) return;
+    this.lastConfigureAttempt = completion.attemptId;
+    if (completion.library) this.apply(completion.library);
+    const result = completion.result;
+    if (!result.ok || !result.changed) return;
+    if (result.warning) {
+      this.state = { ...this.state, message: result.warning };
+      this.notify();
+    }
+    this.outcome(
+      result.warning ? CONFIGURE_OUTCOME.failure : CONFIGURE_OUTCOME.success,
+      result.warning
+        ? `“${result.name}”: ${result.warning}`
+        : `${CONFIGURE_TEXT.updated} “${result.name}”`,
+    );
+  }
+
   /** @param kind Disk outcome. @param message Accessible action/name feedback. @returns Nothing; uses the ordinary toast timeout. */
-  private deleteOutcome(kind: 'success' | 'failure', message: string): void {
+  private outcome(kind: 'success' | 'failure', message: string): void {
     this.nextOutcome += 1;
     this.queue.enqueue({ id: this.nextOutcome, kind, message });
   }
