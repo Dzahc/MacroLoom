@@ -1,16 +1,17 @@
-//! Native singleton Configure window and asynchronous, nonpersisting callback bridge.
+//! Native singleton Configure window, worker persistence and recoverable authoritative save results.
 
 use crate::app_mode::AppMode;
 use crate::configure_model::{
-    ConfigureDraft, ConfigureResult, ConfigureState, CONFIGURE_BUSY, CONFIGURE_MISSING,
-    CONFIGURE_PENDING,
+    ConfigureCompletion, ConfigureDraft, ConfigureDraftInput, ConfigureResult, ConfigureState,
+    ConfigureStatus, CONFIGURE_BUSY, CONFIGURE_MISSING, CONFIGURE_PENDING,
 };
 use crate::library_commands::LibraryService;
-use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use crate::library_commands::LIBRARY_EVENT;
+use crate::repository::Repository;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 pub const CONFIGURE_WINDOW: &str = "configure";
-pub const CONFIGURE_SUBMIT_EVENT: &str = "configure-submit";
 pub const CONFIGURE_CLOSED_EVENT: &str = "configure-closed";
 const MAIN_WINDOW: &str = "main";
 const EDITOR_URL: &str = "index.html?configure";
@@ -21,9 +22,10 @@ const MIN_WIDTH: f64 = 360.0;
 const MIN_HEIGHT: f64 = 300.0;
 const LOCK_FAILED: &str = "Configure state is unavailable; restart MacroLoom";
 const INVALID_CALLER: &str = "Configure command is unavailable in this window";
+const SAVED_LIBRARY_DELIVERY_FAILED: &str = "Saved library update delivery failed";
 
 #[derive(Default)]
-/// Managed singleton editor interlock shared by native commands, callback workers, and window lifecycle events.
+/// Managed singleton editor interlock shared by native commands, persistence workers, and window lifecycle events.
 pub struct ConfigureService {
     pub inner: Arc<Mutex<ConfigureState>>,
 }
@@ -168,63 +170,111 @@ pub fn configure_snapshot(
 }
 
 #[tauri::command]
-/// Validates a complete draft, emits it once to the main consumer, and waits on a worker for acknowledgement.
-/// No storage is performed; failures leave original data and frontend drafts intact for deliberate retry.
+/// Validates and persists a complete draft on a worker; native state owns the commit and the recoverable outcome.
+/// Pending Saves cannot be dismissed. Repeating a committed request returns its receipt without another write.
 pub async fn configure_submit(
-    draft: ConfigureDraft,
+    draft: ConfigureDraftInput,
     window: WebviewWindow,
     app: AppHandle,
     service: State<'_, ConfigureService>,
+    library: State<'_, LibraryService>,
 ) -> Result<ConfigureResult, String> {
     require_caller(&window, CONFIGURE_WINDOW)?;
-    let (sender, receiver) = mpsc::channel();
-    let submission = service.lock()?.begin(draft, sender)?;
-    if app
-        .emit_to(MAIN_WINDOW, CONFIGURE_SUBMIT_EVENT, submission)
-        .is_err()
-    {
-        let result = ConfigureResult::failure();
-        service.lock()?.settle(&result);
-        return Ok(result);
+    AppMode::current().require_library()?;
+    let repository = library.repository()?;
+    if let Some(completed) = service.lock()?.completion.clone() {
+        if completed.result.ok {
+            return Ok(completed.result);
+        }
     }
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        receiver
-            .recv()
-            .unwrap_or_else(|_| ConfigureResult::failure())
+    let (attempt_id, draft) = match prepare_submission(&service, draft) {
+        Ok(submission) => submission,
+        Err(error) => return Ok(ConfigureResult::rejected(error)),
+    };
+    let state = service.inner.clone();
+    // Store the completion on the worker itself, before IPC acknowledgement can fail or its future is dropped.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut completion = persist(&repository, draft, attempt_id);
+        publish_saved(&app, &mut completion);
+        let mut guard = state.lock().map_err(|_| LOCK_FAILED.to_string())?;
+        guard.complete(completion)
     })
     .await
-    .map_err(|error| error.to_string());
-    let result = result.unwrap_or_else(|_| ConfigureResult::failure());
-    service.lock()?.settle(&result);
-    Ok(result)
+    .map_err(|error| error.to_string())?
+}
+
+/// Validates and claims the draft under one short-lived guard; malformed submissions retain field-specific feedback.
+fn prepare_submission(
+    service: &ConfigureService,
+    draft: ConfigureDraftInput,
+) -> Result<(u64, ConfigureDraft), crate::macro_format::ValidationError> {
+    let mut state = service.lock().map_err(retained_error)?;
+    let original = state
+        .original
+        .as_ref()
+        .ok_or_else(|| retained_error(CONFIGURE_MISSING.into()))?;
+    let draft = draft.validate(original)?;
+    let submission = state.begin(draft)?;
+    let draft = state.claim(submission.attempt_id).map_err(retained_error)?;
+    Ok((submission.attempt_id, draft))
+}
+
+/// Maps native precommit state errors to actionable retained feedback without claiming persistence.
+fn retained_error(message: String) -> crate::macro_format::ValidationError {
+    crate::macro_format::ValidationError::new(crate::repository::DIAGNOSTIC_STORAGE, message)
+}
+
+/// Converts the repository receipt to an authoritative completion; only errors before disk commit are ordinary failures.
+fn persist(repository: &Repository, draft: ConfigureDraft, attempt_id: u64) -> ConfigureCompletion {
+    match repository.save_properties(&draft.macro_id, &draft.name, &draft.playback) {
+        Ok(saved) => ConfigureCompletion {
+            attempt_id,
+            result: ConfigureResult {
+                ok: true,
+                message: String::new(),
+                fields: Default::default(),
+                changed: saved.changed,
+                name: saved.name,
+                warning: saved.warning,
+            },
+            library: saved.library,
+        },
+        Err(error) => ConfigureCompletion {
+            attempt_id,
+            result: ConfigureResult::rejected(error),
+            library: None,
+        },
+    }
+}
+
+/// Publishes committed metadata without changing focus; a delivery problem cannot reverse or misreport the commit.
+fn publish_saved(app: &AppHandle, completion: &mut ConfigureCompletion) {
+    if let Some(library) = &completion.library {
+        if let Err(error) = app.emit(LIBRARY_EVENT, library) {
+            eprintln!("{SAVED_LIBRARY_DELIVERY_FAILED}: {error}");
+        }
+    }
 }
 
 #[tauri::command]
-/// Supplies the main consumer with the matching native-validated draft once; event payloads never supply callback data.
-pub fn configure_claim(
-    attempt_id: u64,
+/// Returns the last native completion to the editor or owner for reconciliation; performs no disk writes or acknowledgements.
+pub fn configure_status(
     window: WebviewWindow,
     service: State<'_, ConfigureService>,
-) -> Result<ConfigureDraft, String> {
-    require_caller(&window, MAIN_WINDOW)?;
-    service.lock()?.claim(attempt_id)
+) -> Result<ConfigureStatus, String> {
+    if window.label() != MAIN_WINDOW && window.label() != CONFIGURE_WINDOW {
+        return Err(INVALID_CALLER.into());
+    }
+    let state = service.lock()?;
+    Ok(ConfigureStatus {
+        pending: state.pending.is_some(),
+        completion: state.completion.clone(),
+    })
 }
 
 #[tauri::command]
-/// Resolves only the matching active callback from the main window; duplicate/stale acknowledgements fail.
-pub fn configure_resolve(
-    attempt_id: u64,
-    result: ConfigureResult,
-    window: WebviewWindow,
-    service: State<'_, ConfigureService>,
-) -> Result<(), String> {
-    require_caller(&window, MAIN_WINDOW)?;
-    service.lock()?.resolve(attempt_id, result)
-}
-
-#[tauri::command]
-/// Closes the idle editor after cancellation or acknowledged success; active callbacks cannot be dismissed.
-/// A successful Save also honors application exit requested while the callback was pending.
+/// Closes the idle editor after cancellation or acknowledged success; active workers cannot be dismissed.
+/// A successful Save also honors application exit requested while the worker was pending.
 pub fn close_configure(
     window: WebviewWindow,
     app: AppHandle,
@@ -267,7 +317,7 @@ fn reset(app: &AppHandle) {
     }
 }
 
-/// Routes editor/owner lifecycle without blocking native events or dropping a pending callback's draft.
+/// Routes editor/owner lifecycle without blocking native events or dropping a pending worker's draft.
 pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if window.label() == CONFIGURE_WINDOW {
         editor_event(window, event);
@@ -309,7 +359,7 @@ fn editor_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     }
 }
 
-/// Defers application exit while a callback or editor creation is active; idle editor closure discards its local draft.
+/// Defers application exit while a worker or editor creation is active; idle editor closure discards its local draft.
 fn owner_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     let tauri::WindowEvent::CloseRequested { api, .. } = event else {
         return;

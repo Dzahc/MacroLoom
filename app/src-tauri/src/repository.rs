@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+pub mod property_save;
+
 pub const MACROS_DIRECTORY: &str = "macros";
 /// Diagnostic part for directory creation or enumeration failures.
 pub const DIAGNOSTIC_DIRECTORY: &str = "directory";

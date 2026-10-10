@@ -1,17 +1,23 @@
-import type { PlaybackProperties } from './macro-contract.ts';
+import type {
+  BackendLibraryState,
+  PlaybackProperties,
+} from './macro-contract.ts';
 
 export const CONFIGURE_QUERY = 'configure';
 export const CONFIGURE_WINDOW = 'configure';
+export const CONFIGURE_OUTCOME = {
+  success: 'success',
+  failure: 'failure',
+} as const;
+export const INITIAL_CONFIGURE_ATTEMPT = 0;
 export const CONFIGURE_COMMAND = {
   open: 'open_configure',
   snapshot: 'configure_snapshot',
   submit: 'configure_submit',
-  claim: 'configure_claim',
-  resolve: 'configure_resolve',
+  status: 'configure_status',
   close: 'close_configure',
 } as const;
 export const CONFIGURE_EVENT = {
-  submit: 'configure-submit',
   closed: 'configure-closed',
 } as const;
 export const CONFIGURE_LIMIT = {
@@ -70,11 +76,25 @@ export type ConfigureDraft = Readonly<{
 }>;
 export type ConfigureErrors = Partial<Record<ConfigureField, string>>;
 export type ConfigureResult =
-  | { ok: true }
-  | { ok: false; message: string; fields?: ConfigureErrors };
-export type ConfigureSave = (draft: ConfigureDraft) => Promise<ConfigureResult>;
-export type ConfigureSubmission = Readonly<{
+  | { ok: true; changed?: boolean; name?: string; warning?: string }
+  | {
+      ok: false;
+      message: string;
+      fields?: ConfigureErrors;
+      uncertain?: boolean;
+    };
+export type ConfigureSave = (
+  draft: ConfigureDraft,
+  recovering?: boolean,
+) => Promise<ConfigureResult>;
+export type ConfigureCompletion = Readonly<{
   attemptId: number;
+  result: ConfigureResult;
+  library: BackendLibraryState | null;
+}>;
+export type ConfigureStatus = Readonly<{
+  pending: boolean;
+  completion: ConfigureCompletion | null;
 }>;
 export const CONFIGURE_TEXT = {
   title: 'Configure macro',
@@ -90,6 +110,7 @@ export const CONFIGURE_TEXT = {
   intervalHint:
     'Up to three decimal places. The interval is not scaled by playback speed.',
   save: 'Save',
+  retry: 'Retry',
   saving: 'Saving…',
   cancel: 'Cancel',
   unavailable:
@@ -98,4 +119,11 @@ export const CONFIGURE_TEXT = {
     'Could not save changes. Your edits are retained; try again or Cancel.',
   loading: 'Loading macro properties…',
   openFailure: 'Could not open Configure',
+  uncertain:
+    'The Save result is unavailable. Your draft is retained. Retry to check the outcome before saving again.',
+  updated: 'Updated',
+  updateFailed: 'Could not update',
+  saveStatus: 'Save status for',
+  savedRefreshFailed:
+    'Saved, but the library could not refresh. Restart MacroLoom to reload the saved properties.',
 } as const;

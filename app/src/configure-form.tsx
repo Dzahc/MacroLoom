@@ -134,6 +134,7 @@ export function ConfigureForm({
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  const editingDisabled = state.pending || state.uncertain;
   const form = useRef<HTMLFormElement>(null);
   const name = useRef<HTMLInputElement>(null);
   const status = useRef<HTMLParagraphElement>(null);
@@ -196,7 +197,7 @@ export function ConfigureForm({
               type="text"
               autoComplete="off"
               value={state.input.name}
-              disabled={state.pending}
+              disabled={editingDisabled}
               onChange={
                 /** @param event Edited name. @returns Nothing. */ (event) =>
                   controller.edit(CONFIGURE_FIELD_KEY.name, event.target.value)
@@ -215,7 +216,7 @@ export function ConfigureForm({
             <select
               {...accessibility(CONFIGURE_FIELD_KEY.speed, state)}
               value={state.input.speed}
-              disabled={state.pending}
+              disabled={editingDisabled}
               onChange={
                 /** @param event Chosen preset. @returns Nothing. */ (event) =>
                   controller.edit(
@@ -248,7 +249,7 @@ export function ConfigureForm({
             <select
               {...accessibility(CONFIGURE_FIELD_KEY.repeatMode, state)}
               value={state.input.repeatMode}
-              disabled={state.pending}
+              disabled={editingDisabled}
               onChange={
                 /** @param event Chosen mode. @returns Nothing. */ (event) =>
                   controller.edit(
@@ -284,7 +285,7 @@ export function ConfigureForm({
               inputMode="numeric"
               value={state.input.totalRuns}
               disabled={
-                state.pending || state.input.repeatMode !== REPEAT_MODE.fixed
+                editingDisabled || state.input.repeatMode !== REPEAT_MODE.fixed
               }
               onChange={
                 /** @param event Edited count. @returns Nothing. */ (event) =>
@@ -311,7 +312,7 @@ export function ConfigureForm({
               inputMode="decimal"
               value={state.input.interval}
               disabled={
-                state.pending || state.input.repeatMode === REPEAT_MODE.once
+                editingDisabled || state.input.repeatMode === REPEAT_MODE.once
               }
               onChange={
                 /** @param event Edited seconds. @returns Nothing. */ (event) =>
@@ -338,7 +339,7 @@ export function ConfigureForm({
           </p>
           <button
             type="button"
-            disabled={state.pending}
+            disabled={editingDisabled}
             onClick={
               /** Discards idle local edits without submission. */ () => {
                 controller.cancel();
@@ -353,7 +354,7 @@ export function ConfigureForm({
             className="configure-save"
             disabled={state.pending}
           >
-            {CONFIGURE_TEXT.save}
+            {state.message ? CONFIGURE_TEXT.retry : CONFIGURE_TEXT.save}
           </button>
         </footer>
       </form>

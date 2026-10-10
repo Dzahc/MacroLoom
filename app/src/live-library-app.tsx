@@ -26,7 +26,7 @@ import {
   type SelectionChange,
 } from './library-model';
 import { useNativeConfigure } from './native-configure';
-import { CONFIGURE_TEXT, type ConfigureSave } from './configure-contract';
+import { CONFIGURE_TEXT, type ConfigureCompletion } from './configure-contract';
 import { WINDOW_COMMAND, type WindowViewRequest } from './compact-contract';
 import {
   isCompactPhase,
@@ -57,15 +57,13 @@ const ACTION_CALLBACK_FAILURE = 'Library action callback failed';
 
 /**
  * Presents the executable-relative saved library with worker-driven progress and persistent error toasts.
- * @param props Optional playback snapshot consumer and async property-draft consumer for later storage integration.
+ * @param props Optional playback snapshot consumer; property saves are backend-owned.
  * @returns The library view; native listeners and queue timers disconnect on unmount.
  */
 export function LiveLibraryApp({
   onPreparedAction,
-  onConfigureSave,
 }: {
   onPreparedAction?: (action: PreparedAction) => void;
-  onConfigureSave?: ConfigureSave;
 }) {
   const [controller] = useState(
     /** @returns One controller for this mounted application. */ () =>
@@ -77,9 +75,15 @@ export function LiveLibraryApp({
     controller.getSnapshot,
   );
   const mounted = useRef(false);
-  const configure = useNativeConfigure(onConfigureSave);
   const session = useSessionPresentation();
   const { controller: windowController, view } = useCompactWindow();
+  const configure = useNativeConfigure(
+    /** @param completion Authoritative native save receipt. @returns Nothing; applies metadata before announcing success. */
+    (completion: ConfigureCompletion) => controller.configured(completion),
+    /** @param reason Failed result query. @returns Nothing; reports uncertainty without claiming that disk persistence failed. */
+    (reason: unknown) =>
+      windowController.report(`${CONFIGURE_TEXT.uncertain} ${String(reason)}`),
+  );
   const desiredCompact = isCompactPhase(session.phase);
   const presentation = presentedLibrary(snapshot, session, view);
   const compact = isCompactView(presentation);

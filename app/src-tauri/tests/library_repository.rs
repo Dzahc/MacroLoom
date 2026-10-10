@@ -1,4 +1,6 @@
-use macroloom_lib::macro_format::{fields, MAX_EVENTS, MAX_FILE_BYTES, SCHEMA_VERSION};
+use macroloom_lib::macro_format::{
+    fields, RepeatMode, MAX_EVENTS, MAX_FILE_BYTES, MAX_SAFE_INTEGER, SCHEMA_VERSION, SPEEDS,
+};
 use macroloom_lib::repository::{
     Repository, DELETE_UNAVAILABLE, DIAGNOSTIC_DIRECTORY, DIAGNOSTIC_FILE,
 };
@@ -62,6 +64,24 @@ static DOCUMENT: LazyLock<String> = LazyLock::new(
     || DOCUMENT_TEMPLATE.replace(SCHEMA_PLACEHOLDER, &SCHEMA_VERSION.to_string()),
 );
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+const DOUBLE_SPEED_INDEX: usize = 3;
+const CONFIGURED_RUNS: u64 = 3;
+const CONFIGURED_INTERVAL_MS: u64 = 1250;
+const UNSUPPORTED_SPEED: f64 = 3.0;
+const FIRST_ITEM: usize = 0;
+const NO_RUNS: u64 = 0;
+const RANGE_INCREMENT: u64 = 1;
+const SPEED_ERROR_FIELD: &str = "playback.speed";
+const RUNS_ERROR_FIELD: &str = "playback.totalRuns";
+const INTERVAL_ERROR_FIELD: &str = "playback.intervalMs";
+const SINGLE_FILE_COUNT: usize = 1;
+
+/// Builds a loaded isolated repository; all tests exercise property saves through its public boundary.
+fn loaded_repository(folder: &LibraryFolder) -> Repository {
+    let repository = Repository::new(folder.0.clone());
+    repository.load(|_| {});
+    repository
+}
 
 /// Owns an isolated test library; cleanup is restricted to its named temporary root.
 struct LibraryFolder(PathBuf);
@@ -88,6 +108,216 @@ impl Drop for LibraryFolder {
             .starts_with(std::env::temp_dir().join(TEST_DIRECTORY)));
         fs::remove_dir_all(&self.0).expect("test directory cleanup must succeed");
     }
+}
+
+#[test]
+/// Complete property saves preserve identity, filename, all input/extension data, and survive a fresh repository restart.
+fn property_save_commits_complete_metadata_and_survives_restart() {
+    let folder = LibraryFolder::new();
+    let mut original: Value = serde_json::from_str(DOCUMENT.as_str()).unwrap();
+    original[ROOT_METADATA_FIELD] = json!(UNKNOWN_METADATA);
+    original[fields::PLAYBACK][EVENT_METADATA_FIELD] = json!(UNKNOWN_METADATA);
+    original[fields::EVENTS][FIRST_ITEM][EVENT_METADATA_FIELD] = json!(UNKNOWN_METADATA);
+    folder.write(FILE, &original.to_string());
+    let repository = loaded_repository(&folder);
+    let mut playback = repository.read(ID).unwrap().playback;
+    playback.extra.clear();
+    playback.speed = SPEEDS[DOUBLE_SPEED_INDEX];
+    playback.repeat_mode = RepeatMode::Fixed;
+    playback.total_runs = CONFIGURED_RUNS;
+    playback.interval_ms = CONFIGURED_INTERVAL_MS;
+    let saved = repository
+        .save_properties(ID, &format!("  {RENAMED_MACRO_NAME}  "), &playback)
+        .unwrap();
+    assert!(saved.changed);
+    assert!(saved.warning.is_empty());
+    assert_eq!(
+        saved.library.unwrap().macros[FIRST_ITEM].name,
+        RENAMED_MACRO_NAME
+    );
+    let disk: Value = serde_json::from_slice(&fs::read(folder.0.join(FILE)).unwrap()).unwrap();
+    assert_eq!(disk[fields::ID], ID);
+    assert_eq!(disk[fields::CREATED_AT], original[fields::CREATED_AT]);
+    assert_ne!(disk[fields::UPDATED_AT], original[fields::UPDATED_AT]);
+    assert_eq!(disk[fields::EVENTS], original[fields::EVENTS]);
+    assert_eq!(disk[fields::RECORDING], original[fields::RECORDING]);
+    assert_eq!(disk[ROOT_METADATA_FIELD], original[ROOT_METADATA_FIELD]);
+    assert_eq!(
+        disk[fields::PLAYBACK][EVENT_METADATA_FIELD],
+        UNKNOWN_METADATA
+    );
+    assert_eq!(fs::read_dir(&folder.0).unwrap().count(), SINGLE_FILE_COUNT);
+    let restarted = loaded_repository(&folder).read(ID).unwrap();
+    assert_eq!(restarted.name, RENAMED_MACRO_NAME);
+    assert_eq!(restarted.playback.speed, SPEEDS[DOUBLE_SPEED_INDEX]);
+    assert!(matches!(restarted.playback.repeat_mode, RepeatMode::Fixed));
+    assert_eq!(restarted.playback.total_runs, CONFIGURED_RUNS);
+    assert_eq!(restarted.playback.interval_ms, CONFIGURED_INTERVAL_MS);
+}
+
+#[test]
+/// Equal normalized settings leave original bytes and revision untouched; valid inactive settings still count as edits.
+fn unchanged_save_is_quiet_but_inactive_properties_are_saved() {
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = loaded_repository(&folder);
+    let mut playback = repository.read(ID).unwrap().playback;
+    let revision = repository.snapshot().unwrap().revision;
+    let saved = repository
+        .save_properties(ID, &format!("  {MACRO_NAME}  "), &playback)
+        .unwrap();
+    assert!(!saved.changed);
+    assert_eq!(repository.snapshot().unwrap().revision, revision);
+    assert_eq!(
+        fs::read_to_string(folder.0.join(FILE)).unwrap(),
+        DOCUMENT.as_str()
+    );
+    playback.total_runs = CONFIGURED_RUNS;
+    assert!(
+        repository
+            .save_properties(ID, MACRO_NAME, &playback)
+            .unwrap()
+            .changed
+    );
+    assert_eq!(
+        repository.read(ID).unwrap().playback.total_runs,
+        CONFIGURED_RUNS
+    );
+}
+
+#[test]
+/// Every setting is checked at the backend independently of GUI and repeat mode, with precise diagnostic fields and no writes.
+fn invalid_property_saves_leave_disk_and_library_unchanged() {
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = loaded_repository(&folder);
+    let playback = repository.read(ID).unwrap().playback;
+    assert_eq!(
+        repository
+            .save_properties(ID, "", &playback)
+            .err()
+            .unwrap()
+            .field,
+        fields::NAME
+    );
+    let mut invalid = playback.clone();
+    invalid.speed = UNSUPPORTED_SPEED;
+    assert_eq!(
+        repository
+            .save_properties(ID, MACRO_NAME, &invalid)
+            .err()
+            .unwrap()
+            .field,
+        SPEED_ERROR_FIELD
+    );
+    invalid = playback.clone();
+    invalid.total_runs = NO_RUNS;
+    assert_eq!(
+        repository
+            .save_properties(ID, MACRO_NAME, &invalid)
+            .err()
+            .unwrap()
+            .field,
+        RUNS_ERROR_FIELD
+    );
+    invalid = playback.clone();
+    invalid.interval_ms = MAX_SAFE_INTEGER + RANGE_INCREMENT;
+    assert_eq!(
+        repository
+            .save_properties(ID, MACRO_NAME, &invalid)
+            .err()
+            .unwrap()
+            .field,
+        INTERVAL_ERROR_FIELD
+    );
+    invalid = playback;
+    invalid
+        .extra
+        .insert(ROOT_METADATA_FIELD.into(), json!(UNKNOWN_METADATA));
+    assert_eq!(
+        repository
+            .save_properties(ID, MACRO_NAME, &invalid)
+            .err()
+            .unwrap()
+            .field,
+        fields::PLAYBACK
+    );
+    assert_eq!(
+        repository.snapshot().unwrap().macros[FIRST_ITEM].name,
+        MACRO_NAME
+    );
+    assert_eq!(
+        fs::read_to_string(folder.0.join(FILE)).unwrap(),
+        DOCUMENT.as_str()
+    );
+}
+
+#[test]
+/// External changes reject even no-op Saves; neither foreign bytes nor prior cached properties are overwritten.
+fn external_change_rejects_property_save_and_noop() {
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = loaded_repository(&folder);
+    let playback = repository.read(ID).unwrap().playback;
+    let external = DOCUMENT
+        .as_str()
+        .replace(MACRO_NAME, EXTERNALLY_EDITED_NAME);
+    folder.write(FILE, &external);
+    assert!(repository
+        .save_properties(ID, MACRO_NAME, &playback)
+        .is_err());
+    assert!(repository
+        .save_properties(ID, RENAMED_MACRO_NAME, &playback)
+        .is_err());
+    assert_eq!(fs::read_to_string(folder.0.join(FILE)).unwrap(), external);
+    assert_eq!(
+        repository.snapshot().unwrap().macros[FIRST_ITEM].name,
+        MACRO_NAME
+    );
+    fs::remove_file(folder.0.join(FILE)).unwrap();
+    assert!(repository
+        .save_properties(ID, RENAMED_MACRO_NAME, &playback)
+        .is_err());
+}
+
+#[cfg(windows)]
+#[test]
+/// A real Windows sharing violation fails atomic replacement, preserves bytes/cache, cleans staging, and permits Retry.
+fn locked_property_file_preserves_previous_version_then_retry_succeeds() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const READ_SHARING_ONLY: u32 = 0x00000001;
+    let folder = LibraryFolder::new();
+    folder.write(FILE, DOCUMENT.as_str());
+    let repository = loaded_repository(&folder);
+    let playback = repository.read(ID).unwrap().playback;
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(READ_SHARING_ONLY)
+        .open(folder.0.join(FILE))
+        .unwrap();
+    assert!(
+        !repository
+            .save_properties(ID, MACRO_NAME, &playback)
+            .unwrap()
+            .changed
+    );
+    assert!(repository
+        .save_properties(ID, RENAMED_MACRO_NAME, &playback)
+        .is_err());
+    assert_eq!(
+        fs::read_to_string(folder.0.join(FILE)).unwrap(),
+        DOCUMENT.as_str()
+    );
+    assert_eq!(repository.read(ID).unwrap().name, MACRO_NAME);
+    assert_eq!(fs::read_dir(&folder.0).unwrap().count(), SINGLE_FILE_COUNT);
+    drop(locked);
+    assert!(
+        repository
+            .save_properties(ID, RENAMED_MACRO_NAME, &playback)
+            .unwrap()
+            .changed
+    );
+    assert_eq!(repository.read(ID).unwrap().name, RENAMED_MACRO_NAME);
 }
 
 #[test]

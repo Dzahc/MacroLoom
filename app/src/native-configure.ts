@@ -10,15 +10,9 @@ import { listen } from '@tauri-apps/api/event';
 import {
   CONFIGURE_COMMAND,
   CONFIGURE_EVENT,
-  CONFIGURE_TEXT,
-  type ConfigureSave,
-  type ConfigureSubmission,
-  type ConfigureDraft,
+  type ConfigureCompletion,
+  type ConfigureStatus,
 } from './configure-contract';
-import {
-  deliverConfigureSubmission,
-  type ConfigureDelivery,
-} from './configure-delivery';
 import { ACTION, SOURCE, type LibraryAction } from './library-model';
 
 const FOCUS_TARGET = {
@@ -26,17 +20,7 @@ const FOCUS_TARGET = {
   rows: '[data-macro-id]',
   fallback: '.macro-library',
 } as const;
-const BRIDGE_FAILED = 'Configure callback bridge failed';
-const NATIVE_DELIVERY: ConfigureDelivery = {
-  /** @param attemptId Untrusted notification identity. @returns Matching native draft once, or native rejection. */
-  claim: (attemptId) =>
-    invoke<ConfigureDraft>(CONFIGURE_COMMAND.claim, { attemptId }),
-  /** @param attemptId Claimed identity. @param result Consumer acknowledgement. @returns Native acceptance or rejection. */
-  resolve: (attemptId, result) =>
-    invoke<void>(CONFIGURE_COMMAND.resolve, { attemptId, result }),
-  /** @param reason Rejected claim or acknowledgement. @returns Nothing; records bridge failures without changing modal state. */
-  report: (reason) => console.error(BRIDGE_FAILED, reason),
-};
+const LISTENER_FAILED = 'Configure dismissal listener registration failed';
 
 /** @param request Original opening control. @returns Nothing; restores actual control focus after the native owner is enabled. */
 function restoreFocus(request: LibraryAction | null): void {
@@ -57,67 +41,74 @@ function restoreFocus(request: LibraryAction | null): void {
   );
 }
 
-/** @returns A retained failure until the storage story supplies its consumer; never reports false saved data. */
-export const unavailableConfigureSave: ConfigureSave = () =>
-  Promise.resolve({ ok: false, message: CONFIGURE_TEXT.unavailable });
-
-/** @param save Supplied asynchronous consumer, independent of native window and form state. @returns Singleton opening callback and modal availability, with all native listeners released on teardown. */
+/** @param completed Native authoritative completion subscriber. @param failed Recovery failure reporter. @returns Singleton opening callback and modal availability; listeners disconnect on teardown. */
 export function useNativeConfigure(
-  save: ConfigureSave = unavailableConfigureSave,
+  completed: (completion: ConfigureCompletion) => void,
+  failed: (reason: unknown) => void,
 ) {
   const [busy, setBusy] = useState(false);
   const ready = useRef<Promise<void> | null>(null);
   const origin = useRef<LibraryAction | null>(null);
   const opening = useRef(false);
-  const consume = useEffectEvent(
-    /** @param submission Attempt notification. @returns Completion after a native claim; replayed events cannot invoke the consumer. */ (
-      submission: ConfigureSubmission,
-    ) => deliverConfigureSubmission(submission, save, NATIVE_DELIVERY),
-  );
+  const accept = useEffectEvent(completed);
+  const report = useEffectEvent(failed);
   useEffect(
     /** Subscribes before opening an editor and cleans up registrations that complete after teardown. */ () => {
       let disposed = false;
       let focusFrame: number | undefined;
       const cleanups: (() => void)[] = [];
+      /** @returns Native completion after dismissal; disconnected owners ignore late delivery, and querying never submits a save. */
+      async function reconcile() {
+        const status = await invoke<ConfigureStatus>(CONFIGURE_COMMAND.status);
+        if (!disposed && status.completion) accept(status.completion);
+      }
       /** @param cleanup Registered listener. @returns Nothing; disconnected owners release late registrations immediately. */
       function registered(cleanup: () => void) {
         if (disposed) cleanup();
         else cleanups.push(cleanup);
       }
       const registration = Promise.all([
-        listen<ConfigureSubmission>(
-          CONFIGURE_EVENT.submit,
-          /** @param event Untrusted attempt notification. @returns Nothing; native state authenticates its draft before delivery. */ (
-            event,
-          ) => {
-            if (!disposed) void consume(event.payload);
-          },
-        ).then(registered),
         listen<void>(
           CONFIGURE_EVENT.closed,
           /** Releases the view interlock and restores the initiating actual control. */ () => {
             if (disposed) return;
-            opening.current = false;
-            setBusy(false);
             const dismissed = origin.current;
-            if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
-            focusFrame = requestAnimationFrame(
-              /** Waits until disabled attributes update, suppressing restoration after reopening/teardown. */ () => {
-                if (!disposed && !opening.current) restoreFocus(dismissed);
-              },
-            );
+            void reconcile()
+              .catch(
+                /** @param reason Read-only result retrieval failure. @returns Nothing; records uncertainty without claiming a failed commit. */
+                (reason: unknown) => {
+                  if (!disposed) report(reason);
+                },
+              )
+              .finally(
+                /** Reenables controls only after result retrieval, preventing a new editor from replacing the receipt mid-query. */
+                () => {
+                  if (disposed) return;
+                  opening.current = false;
+                  setBusy(false);
+                  if (focusFrame !== undefined)
+                    cancelAnimationFrame(focusFrame);
+                  focusFrame = requestAnimationFrame(
+                    /** Restores the initiating control after disabled attributes update, without stealing external focus. */
+                    () => {
+                      if (!disposed && !opening.current)
+                        restoreFocus(dismissed);
+                    },
+                  );
+                },
+              );
           },
         ).then(registered),
       ]).then(
-        /** Completes both registrations before native editor creation. */ () => {},
+        /** Completes dismissal listener registration before native editor creation. */ () => {},
       );
       ready.current = registration;
       void registration.catch(
         /** @param reason Listener registration failure. @returns Nothing; opening remains unavailable. */ (
           reason: unknown,
-        ) => console.error(BRIDGE_FAILED, reason),
+        ) => console.error(LISTENER_FAILED, reason),
       );
-      /** Disconnects subscribers and prevents late callback delivery; the native lifecycle retains ownership during Save. */
+      /** Disconnects subscribers and prevents late receipt delivery; the native lifecycle retains ownership during Save. */
       return () => {
         disposed = true;
         if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
