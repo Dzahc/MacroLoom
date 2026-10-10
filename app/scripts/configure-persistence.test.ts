@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
 import {
   CONFIGURE_DEFAULT_PLAYBACK,
   CONFIGURE_FIELD_KEY,
   CONFIGURE_TEXT,
+  CONFIGURE_WINDOW,
   type ConfigureCompletion,
   type ConfigureDraft,
   type ConfigureStatus,
@@ -45,6 +47,24 @@ const COMPLETION: ConfigureCompletion = {
   library: null,
 };
 const DONE: ConfigureStatus = { pending: false, completion: COMPLETION };
+const CAPABILITY_PATH = 'src-tauri/capabilities/configure.json';
+const EVENT_PERMISSIONS = [
+  'core:default',
+  'core:event:default',
+  'core:event:allow-emit',
+  'core:event:allow-emit-to',
+] as const;
+
+/** Editor capabilities restrict the current persistence flow to validated native commands. */
+void test('editor cannot emit frontend events through event permissions', async () => {
+  const capability = JSON.parse(await readFile(CAPABILITY_PATH, 'utf8')) as {
+    windows: string[];
+    permissions: string[];
+  };
+  assert.deepEqual(capability.windows, [CONFIGURE_WINDOW]);
+  for (const permission of EVENT_PERMISSIONS)
+    assert.ok(!capability.permissions.includes(permission));
+});
 
 void test('lost acknowledgement polls native completion without submitting again' /** @returns Completion proving a committed result is recovered using only read-only queries. */, async () => {
   let submissions = 0;

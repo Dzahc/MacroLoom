@@ -20,7 +20,7 @@ const FOCUS_TARGET = {
   rows: '[data-macro-id]',
   fallback: '.macro-library',
 } as const;
-const BRIDGE_FAILED = 'Configure callback bridge failed';
+const LISTENER_FAILED = 'Configure dismissal listener registration failed';
 
 /** @param request Original opening control. @returns Nothing; restores actual control focus after the native owner is enabled. */
 function restoreFocus(request: LibraryAction | null): void {
@@ -100,15 +100,15 @@ export function useNativeConfigure(
           },
         ).then(registered),
       ]).then(
-        /** Completes both registrations before native editor creation. */ () => {},
+        /** Completes dismissal listener registration before native editor creation. */ () => {},
       );
       ready.current = registration;
       void registration.catch(
         /** @param reason Listener registration failure. @returns Nothing; opening remains unavailable. */ (
           reason: unknown,
-        ) => console.error(BRIDGE_FAILED, reason),
+        ) => console.error(LISTENER_FAILED, reason),
       );
-      /** Disconnects subscribers and prevents late callback delivery; the native lifecycle retains ownership during Save. */
+      /** Disconnects subscribers and prevents late receipt delivery; the native lifecycle retains ownership during Save. */
       return () => {
         disposed = true;
         if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);

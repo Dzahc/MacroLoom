@@ -87,9 +87,6 @@ export type ConfigureSave = (
   draft: ConfigureDraft,
   recovering?: boolean,
 ) => Promise<ConfigureResult>;
-export type ConfigureSubmission = Readonly<{
-  attemptId: number;
-}>;
 export type ConfigureCompletion = Readonly<{
   attemptId: number;
   result: ConfigureResult;
