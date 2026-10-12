@@ -120,16 +120,25 @@ does not establish the numerical 100 ms response target.
 
 October 12, 2026: `npm.cmd --prefix app run verify` — **PASS**, exit 0 against
 refreshed `origin/develop` at `1ef6578`. Formatting, type checking, ESLint,
-production frontend build, rustfmt, Clippy, 68 frontend/tooling tests, 50 Rust
-tests (two interactive tests ignored), 33 Python quality fixtures, and 396
-changed-file function/closure complexity checks passed, with no exceptions.
-Local full output: `app/.quality-output/ML-14-verify.log`.
+production frontend build, rustfmt, Clippy, 72 frontend/tooling tests, 58 Rust
+tests (two additional interactive tests ignored), 33 Python quality fixtures,
+and 978 function/closure complexity checks across index/worktree passed, with
+no exceptions. Implementation reviewed through `ffb01aa`.
+Local full output: `app/.quality-output/ML-14-verify-final.log`.
 
 `cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline native_shortcut_conflict_recovers_and_releases_stop -- --ignored --test-threads=1 --nocapture`
 — **PASS** using actual Windows global registration. This confirms conflict,
 retry, and release/handoff; it does not establish physical keyboard handling or
 target-application focus/Stop response.
 
-Independent Standards/Spec review and real-WebView smoke results will be appended
-after those checks finish. The owner-run target-application checklist remains
-pending.
+`cargo run --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --bin compact-preview-check`
+— **PASS**: real WebViews rendered the main and development controls, applied the
+preview state, and closed both windows normally. This is a presentation smoke
+check; native input hooks are disabled in this check build.
+
+Independent Standards and Spec reviews against starting commit `1ef6578` found
+no remaining actionable findings through `ffb01aa`. The Standards review retained
+an optional Data Clumps suggestion for the existing Windows key tuple; it is not
+a documented standards violation and does not affect acceptance.
+
+The owner-run target-application checklist remains pending.
