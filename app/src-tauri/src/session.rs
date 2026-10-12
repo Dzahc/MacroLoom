@@ -24,6 +24,7 @@ pub const REPLAY_CANCELLED: &str = "Playback stopped; injected input released.";
 pub const STATUS_INTERVAL: Duration = Duration::from_millis(100);
 const CONFIRMATION_OWNER_MAX: usize = 64;
 const INVALID_CONFIRMATION_OWNER: &str = "Invalid confirmation owner";
+const NO_CLOSE_REQUEST: &str = "No pending exit decision";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -238,9 +239,16 @@ impl Session {
             }
         }
     }
+    /// Queues idle startup behind short native/presentation work while rejecting active sessions before and after ownership acquisition.
+    fn start_transition(&self) -> Result<MutexGuard<'_, ()>, String> {
+        if self.lock()?.phase != Phase::Idle {
+            return Err(ACTIVE_SESSION.into());
+        }
+        self.transition.lock().map_err(|_| STATE_ERROR.into())
+    }
     /// Starts capture before native layout work so compact transitions never postpone the recording clock.
     pub fn record(&self) -> Result<Snapshot, String> {
-        let transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
+        let transition = self.start_transition()?;
         let reservation = self.prepare_start(true)?;
         let previous = self.begin_record(reservation)?;
         self.publish()?;
@@ -347,9 +355,10 @@ impl Session {
     }
     /// Releases outstanding holds then restores the window; failures retain Stopping and operation ownership.
     fn cleanup(&self) -> Result<(), String> {
-        let Ok(_transition) = self.transition.try_lock() else {
+        if self.lock()?.phase != Phase::Stopping {
             return Ok(());
-        };
+        }
+        let _transition = self.transition.lock().map_err(|_| STATE_ERROR)?;
         if self.lock()?.phase != Phase::Stopping {
             return Ok(());
         }
@@ -407,7 +416,7 @@ impl Session {
     }
     /// Runs temporary replay on one worker; Stop becomes effective before native entry and any input injection.
     pub fn play(self: &Arc<Self>) -> Result<Snapshot, String> {
-        let transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
+        let transition = self.start_transition()?;
         if self.lock()?.capture.events.is_empty() {
             return Err(NO_CAPTURE.into());
         }
@@ -483,7 +492,7 @@ impl Session {
     /// Atomically reserves/releases a native confirmation interlock so global Record cannot race a Delete dialog.
     pub fn confirmation(&self, owner: &str, blocked: bool) -> Result<Snapshot, String> {
         validate_confirmation_owner(owner)?;
-        let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
+        let _transition = self.transition.lock().map_err(|_| STATE_ERROR)?;
         if blocked {
             self.reserve_confirmation(owner)?;
         } else {
@@ -521,7 +530,7 @@ impl Session {
     }
     /// Transfers confirmed-dialog operation ownership directly to deletion without permitting an intervening session start.
     pub fn take_confirmation(&self, owner: Option<&str>) -> Result<Option<Box<dyn Send>>, String> {
-        let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
+        let _transition = self.transition.lock().map_err(|_| STATE_ERROR)?;
         let mut state = self.lock()?;
         if state.phase != Phase::Idle {
             return Err(ACTIVE_SESSION.into());
@@ -558,8 +567,10 @@ impl Session {
         if state.phase != Phase::Idle {
             return Err(ACTIVE_SESSION.into());
         }
+        if !state.close_requested {
+            return Err(NO_CLOSE_REQUEST.into());
+        }
         state.capture = Capture::default();
-        state.close_requested = false;
         Ok(())
     }
 }

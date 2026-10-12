@@ -68,10 +68,9 @@ pub async fn delete_macro(
     service: State<'_, LibraryService>,
 ) -> Result<LibraryState, String> {
     AppMode::current().require_library()?;
-    let reservation = deletion_reservation(&app, confirmation_owner.as_deref())?;
     let repository = service.repository()?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _reservation = reservation;
+        let _reservation = deletion_reservation(&app, confirmation_owner.as_deref())?;
         repository.delete(&macro_id, |state| {
             if let Err(error) = app.emit(LIBRARY_EVENT, state) {
                 eprintln!("Library update delivery failed: {error}");

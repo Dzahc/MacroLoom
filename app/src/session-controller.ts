@@ -7,6 +7,14 @@ import {
   type SnapshotCommand,
 } from './session-contract.ts';
 
+/** One native claim keeps cancellation intent until its potentially delayed acquisition settles. */
+type ConfirmationClaim = {
+  owner: string;
+  generation: number;
+  pending: boolean;
+  cancelled: boolean;
+};
+
 /** Owns revision reconciliation and disposable subscriptions to native lifecycle; commands never simulate success. */
 export class SessionController {
   private state: SessionSnapshot = INITIAL_SESSION;
@@ -14,7 +22,7 @@ export class SessionController {
   private generation = 0;
   private transport: SessionTransport;
   private owner = crypto.randomUUID();
-  private claims = new Map<string, number>();
+  private claims = new Map<string, ConfirmationClaim>();
   /** @param transport Native event/command adapter. Starts no input or subscriptions. */
   constructor(transport: SessionTransport) {
     this.transport = transport;
@@ -85,62 +93,95 @@ export class SessionController {
   get confirmationOwner(): string {
     return this.owner;
   }
+  /** @param owner Completed deletion's original confirmation identity. @returns Nothing; finishes client ownership and releases any residual native claim after handoff/error. */
+  confirmationDone(owner: string): void {
+    this.releaseOwner(owner);
+  }
   /** @param blocked Whether to claim or release this mounted owner's confirmation. @returns Success only if the owner remains mounted and the native claim succeeds. */
   async setConfirmation(blocked: boolean): Promise<boolean> {
-    const generation = this.generation;
-    if (blocked) this.owner = crypto.randomUUID();
-    const owner = this.owner;
     const confirmation = this.transport.confirmation;
     if (!confirmation) return false;
-    if (!blocked && !this.claims.has(owner)) return true;
-    if (blocked) this.claims.set(owner, generation);
+    const claim = this.prepareClaim(blocked);
+    if (!claim) return true;
     try {
-      const snapshot = await confirmation({ owner, blocked });
-      if (generation !== this.generation) {
-        if (blocked) this.releaseOwner(owner);
-        return false;
-      }
-      if (!blocked) this.claims.delete(owner);
-      this.receive(snapshot);
-      return true;
+      const snapshot = await confirmation({ owner: claim.owner, blocked });
+      return this.confirmationAccepted(claim, blocked, snapshot);
     } catch (reason) {
-      this.confirmationFailure(owner, blocked, generation, reason);
+      this.confirmationFailure(claim, blocked, reason);
       return false;
     }
   }
-  /** @param owner Failed claim identity. @param blocked Whether native acquisition may have succeeded before acknowledgement failed. @param generation Initiating mount. @param reason Native failure. @returns Nothing; releases uncertain claims and reports only to the current owner. */
-  private confirmationFailure(
-    owner: string,
+  /** @param blocked Acquisition or cancellation. @returns A per-dialog claim, preserving cancellation until pending acquisition settles. */
+  private prepareClaim(blocked: boolean): ConfirmationClaim | undefined {
+    if (blocked) {
+      this.owner = crypto.randomUUID();
+      const claim = {
+        owner: this.owner,
+        generation: this.generation,
+        pending: true,
+        cancelled: false,
+      };
+      this.claims.set(this.owner, claim);
+      return claim;
+    }
+    const claim = this.claims.get(this.owner);
+    if (claim) claim.cancelled = true;
+    return claim;
+  }
+  /** @param claim Owner of this receipt. @param blocked Whether it acquired a native reservation. @param snapshot Revisioned receipt. @returns Whether the current live owner may use the successful result. */
+  private confirmationAccepted(
+    claim: ConfirmationClaim,
     blocked: boolean,
-    generation: number,
+    snapshot: SessionSnapshot,
+  ): boolean {
+    if (blocked) claim.pending = false;
+    if (claim.generation !== this.generation || (blocked && claim.cancelled)) {
+      this.releaseOwner(claim.owner);
+      return false;
+    }
+    if (!blocked && !claim.pending) this.claims.delete(claim.owner);
+    this.receive(snapshot);
+    return true;
+  }
+  /** @param claim Failed native transaction owner. @param blocked Whether acquisition may have succeeded before acknowledgement failed. @param reason Native failure. @returns Nothing; releases uncertain claims and reports only to the current dialog. */
+  private confirmationFailure(
+    claim: ConfirmationClaim,
+    blocked: boolean,
     reason: unknown,
   ): void {
-    if (blocked) this.releaseOwner(owner);
-    if (generation === this.generation) this.fail(reason);
+    if (blocked) {
+      claim.pending = false;
+      this.releaseOwner(claim.owner);
+    }
+    if (claim.generation === this.generation && claim.owner === this.owner)
+      this.fail(reason);
   }
-  /** @param owner Abandoned owner identity. @returns Nothing; idempotently releases current or late native claims without releasing another owner. */
+  /** @param owner Abandoned claim identity. @returns Nothing; cancellation intent survives an early release until delayed acquisition is acknowledged. */
   private releaseOwner(owner: string): void {
     const generation = this.generation;
     const confirmation = this.transport.confirmation;
     if (!confirmation) return;
+    const claim = this.claims.get(owner);
+    if (claim) claim.cancelled = true;
     void confirmation({ owner, blocked: false })
       .then(
-        /** Deletes only the acknowledged claim; another dialog uses a different identity. */
+        /** Retains a cancelled claim while acquisition is pending; its later receipt triggers another release. */
         () => {
-          this.claims.delete(owner);
+          if (!claim?.pending) this.claims.delete(owner);
         },
       )
       .catch(
-        /** @param reason Native ownership release failure. @returns Nothing; reports a transport failure without silently swallowing it. */
+        /** @param reason Native ownership release failure. @returns Nothing; reports only to this current dialog owner. */
         (reason: unknown) => {
-          if (generation === this.generation) this.fail(reason);
+          if (generation === this.generation && owner === this.owner)
+            this.fail(reason);
         },
       );
   }
   /** @param generation Disconnected owner generation. @returns Nothing; leaves claims created by a remount untouched. */
   private releaseGeneration(generation: number): void {
-    for (const [owner, claimedGeneration] of this.claims) {
-      if (claimedGeneration === generation) this.releaseOwner(owner);
+    for (const [owner, claim] of this.claims) {
+      if (claim.generation === generation) this.releaseOwner(owner);
     }
   }
   /** @param reason Transport failure. @returns Nothing; preserves backend phase and displays actionable uncertainty. */

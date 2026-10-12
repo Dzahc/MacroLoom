@@ -5,6 +5,7 @@ use crate::input::{EventKind, Held};
 use crate::library_commands::LibraryService;
 use crate::presentation::{PresentationPhase, PresentationService, PreviewStatus};
 use crate::session::{Phase, Platform, Session, Snapshot, SESSION_EVENT, STATUS_INTERVAL};
+use crate::session_publication::Publications;
 use crate::shortcuts::Availability;
 use crate::window_view::ViewRequest;
 use crate::windows;
@@ -13,7 +14,7 @@ use std::sync::{mpsc, Arc};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const MAIN: &str = "main";
-const CONTENT_WIDTH: f64 = 600.0;
+const CONTENT_WIDTH: f64 = crate::window_view::MIN_CONTENT_WIDTH;
 const CONTENT_HEIGHT: f64 = 156.0;
 const NATIVE_UNAVAILABLE: &str = "Native session window is unavailable";
 const LIBRARY_UNAVAILABLE: &str = "Wait for library loading or the current operation to finish";
@@ -21,11 +22,13 @@ const WRONG_CALLER: &str = "Session command is unavailable in this window";
 const DEVELOPMENT_ONLY: &str = "Temporary replay is available only in development controls";
 const TEMPORARY_NAME: &str = "Temporary recording";
 const DELIVERY_FAILED: &str = "Session event delivery failed";
+const SUCCESS_EXIT: i32 = 0;
 
 /// Owned application handle bridges lifecycle effects; it never retains a raw borrowed window handle.
 pub struct NativePlatform {
     app: AppHandle,
     live_active: AtomicBool,
+    publications: Publications,
 }
 impl NativePlatform {
     /// Binds the running Tauri application without starting any native input.
@@ -33,6 +36,7 @@ impl NativePlatform {
         Self {
             app,
             live_active: AtomicBool::new(false),
+            publications: Publications::default(),
         }
     }
     /// Rejects starts during library discovery/deletion or when executable-relative storage is unavailable.
@@ -49,6 +53,24 @@ impl NativePlatform {
             return Err(LIBRARY_UNAVAILABLE.into());
         }
         Ok(())
+    }
+    /// Emits an already ordered live snapshot; old Idle snapshots cannot overwrite a newer active presentation.
+    fn publish_current(&self, snapshot: Snapshot) {
+        let status = presentation_status(&snapshot);
+        let active = snapshot.phase != Phase::Idle;
+        let was_active = self.live_active.swap(active, Ordering::AcqRel);
+        if active || was_active {
+            if let Err(error) = self
+                .app
+                .state::<PresentationService>()
+                .publish_live(&self.app, status)
+            {
+                eprintln!("{DELIVERY_FAILED}: {error}");
+            }
+        }
+        if let Err(error) = self.app.emit(SESSION_EVENT, snapshot) {
+            eprintln!("{DELIVERY_FAILED}: {error}");
+        }
     }
 }
 impl Platform for NativePlatform {
@@ -103,19 +125,10 @@ impl Platform for NativePlatform {
     }
     /// Publishes live compact status and revisioned session state without activating any window.
     fn publish(&self, snapshot: Snapshot) {
-        let status = presentation_status(&snapshot);
-        let active = snapshot.phase != Phase::Idle;
-        let was_active = self.live_active.swap(active, Ordering::AcqRel);
-        if active || was_active {
-            if let Err(error) = self
-                .app
-                .state::<PresentationService>()
-                .publish_live(&self.app, status)
-            {
-                eprintln!("{DELIVERY_FAILED}: {error}");
-            }
-        }
-        if let Err(error) = self.app.emit(SESSION_EVENT, snapshot) {
+        if let Err(error) = self
+            .publications
+            .send(snapshot, |snapshot| self.publish_current(snapshot))
+        {
             eprintln!("{DELIVERY_FAILED}: {error}");
         }
     }
@@ -267,8 +280,14 @@ pub fn session_discard_exit(
     session: State<'_, Arc<Session>>,
 ) -> Result<(), String> {
     require_caller(&window)?;
+    window
+        .app_handle()
+        .state::<ConfigureService>()
+        .require_operation()?;
     session.discard_exit()?;
-    window.close().map_err(|error| error.to_string())
+    windows::shutdown_hooks();
+    window.app_handle().exit(SUCCESS_EXIT);
+    Ok(())
 }
 /// Prevents native close until worker cleanup and an explicit unsaved-recording decision complete.
 pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {

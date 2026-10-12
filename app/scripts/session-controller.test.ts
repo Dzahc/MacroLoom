@@ -215,3 +215,39 @@ void test('a new dialog gets a distinct owner while old Cancel acknowledgement i
   assert.equal(await controller.setConfirmation(false), true);
   assert.ok(released.includes(nextOwner));
 });
+/** Child-only disposal can precede native acquisition while its parent controller remains mounted; late acquisition must be released again. */
+void test('early cancellation releases a later native claim in the same controller generation', async () => {
+  let reply: ((value: SessionSnapshot) => void) | undefined;
+  let nativeOwner: string | null = null;
+  const controller = new SessionController({
+    /** @returns Inert listener cleanup. */ listen: () =>
+      Promise.resolve(
+        /** No system subscriptions exist in this fixture. */ () => {},
+      ),
+    /** @returns Startup state. */ invoke: () =>
+      Promise.resolve(snapshot(EARLY_REVISION)),
+    /** @param request Owner-specific claim/release. @returns Acquisition whose backend execution is delayed until after an early Cancel. */
+    confirmation: (request) => {
+      if (!request.blocked) {
+        if (nativeOwner === request.owner) nativeOwner = null;
+        return Promise.resolve(snapshot(EARLY_REVISION));
+      }
+      return new Promise(
+        /** @param resolve Delayed native receipt. @returns Nothing. */
+        (resolve) => {
+          reply = (value) => {
+            nativeOwner = request.owner;
+            resolve(value);
+          };
+        },
+      );
+    },
+  });
+  const opening = controller.setConfirmation(true);
+  assert.equal(await controller.setConfirmation(false), true);
+  assert.ok(reply);
+  reply(snapshot(LATER_REVISION));
+  assert.equal(await opening, false);
+  await settle();
+  assert.equal(nativeOwner, null);
+});

@@ -133,7 +133,11 @@ export function LiveLibraryApp({
   }
   /** @param macroId Deliberately confirmed stable ID. @returns Worker deletion completion; outcomes are controller-owned. */
   function confirmDelete(macroId: string) {
-    return controller.deleteConfirmed(macroId);
+    const owner = nativeSession.controller.confirmationOwner;
+    return controller.deleteConfirmed(macroId).finally(
+      /** Retires the original dialog owner after worker completion; a newer dialog has a distinct token. */
+      () => nativeSession.controller.confirmationDone(owner),
+    );
   }
   const openDelete = useCallback(
     /** Claims the native confirmation interlock before the dialog appears. @returns Whether confirmation may open. */

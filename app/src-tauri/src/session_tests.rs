@@ -346,13 +346,28 @@ fn stop_during_compact_entry_cannot_be_lost() {
 /// Controlled preview validation/publication holds the same start guard; active sessions reject every preview update.
 fn preview_publication_and_session_start_are_serialized() {
     let session = Session::new(Arc::new(Desktop::default()));
+    let waiting = session.clone();
+    let (completed_start, started) = std::sync::mpsc::sync_channel(1);
     session
         .preview(|| {
-            assert!(session.record().is_err());
+            std::thread::spawn(move || {
+                let _ = completed_start.send(waiting.record());
+            });
+            assert_eq!(
+                session.snapshot().expect("Snapshot during preview").phase,
+                Phase::Idle
+            );
             Ok(())
         })
         .expect("Idle preview");
-    session.record().expect("Record after preview");
+    assert_eq!(
+        started
+            .recv_timeout(TEST_DEADLINE)
+            .expect("Queued start must complete")
+            .expect("Record after preview")
+            .phase,
+        Phase::Recording
+    );
     assert!(session.preview(|| Ok(())).is_err());
 }
 #[test]
@@ -458,4 +473,62 @@ fn failed_shortcut_cleanup_is_visible_and_retryable() {
             .phase,
         Phase::Idle
     );
+}
+#[test]
+/// Delayed Idle status cannot obtain a newer presentation revision after Recording has already been delivered.
+fn delayed_idle_publication_cannot_replace_newer_recording() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    let old_idle = session.snapshot().expect("Initial idle snapshot");
+    let recording = session.record().expect("Recording snapshot");
+    let publications = crate::session_publication::Publications::default();
+    let phases = Mutex::new(Vec::new());
+    publications
+        .send(recording, |snapshot| {
+            phases.lock().expect("Fixture phases").push(snapshot.phase)
+        })
+        .expect("New active delivery");
+    publications
+        .send(old_idle, |snapshot| {
+            phases.lock().expect("Fixture phases").push(snapshot.phase)
+        })
+        .expect("Old delivery is ignored");
+    assert_eq!(
+        *phases.lock().expect("Delivered phases"),
+        vec![Phase::Recording]
+    );
+}
+#[test]
+/// Confirmation cancellation queues behind a short presentation/availability transition instead of leaving a stranded lease.
+fn confirmation_cancel_waits_for_transient_transition_and_recovers() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    session
+        .confirmation(CONFIRMATION_OWNER, true)
+        .expect("Confirmation");
+    let waiting = session.clone();
+    let (started, starting) = std::sync::mpsc::sync_channel(1);
+    let (sent, completed_cancel) = std::sync::mpsc::sync_channel(1);
+    session
+        .preview(|| {
+            std::thread::spawn(move || {
+                let _ = started.send(());
+                let _ = sent.send(waiting.confirmation(CONFIRMATION_OWNER, false));
+            });
+            starting
+                .recv_timeout(TEST_DEADLINE)
+                .expect("Cancellation is scheduled");
+            assert!(
+                completed_cancel.recv_timeout(TEST_POLL).is_err(),
+                "Cancellation must queue rather than fail while a transient transition is held"
+            );
+            Ok(())
+        })
+        .expect("Transient presentation guard");
+    assert!(
+        completed_cancel
+            .recv_timeout(TEST_DEADLINE)
+            .expect("Queued cancellation completes")
+            .expect("Cancellation succeeds")
+            .can_record
+    );
+    assert!(session.record().is_ok());
 }

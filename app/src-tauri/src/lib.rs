@@ -9,6 +9,7 @@ mod presentation;
 pub mod repository;
 mod session;
 mod session_native;
+mod session_publication;
 mod shortcuts;
 mod window_view;
 mod windows;
