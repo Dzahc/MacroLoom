@@ -1,38 +1,20 @@
+//! Compile-time routing metadata; library builds now support native recording while temporary replay remains a debug control.
 use serde::Serialize;
-
-#[cfg(all(debug_assertions, feature = "input-prototype"))]
-const INPUT_PROTOTYPE_ENABLED: bool = true;
-#[cfg(not(all(debug_assertions, feature = "input-prototype")))]
-const INPUT_PROTOTYPE_ENABLED: bool = false;
-const PROTOTYPE_DISABLED: &str = "Live input is disabled in the library preview";
-const LIBRARY_DISABLED: &str = "Saved macro deletion is unavailable in the input prototype";
-
+const LIBRARY_DISABLED: &str = "Saved-library actions are unavailable in the input prototype";
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// Serialized launch metadata; only explicit debug prototype builds may enable live input.
+/// Selects an explicit debug prototype route; release builds always use the real library.
 pub struct AppMode {
     pub input_prototype: bool,
 }
-
 impl AppMode {
-    /// Returns compile-time mode metadata without starting hooks or registering shortcuts.
-    /// Release builds always return library mode, even with the prototype feature selected.
+    /// Returns compile-time routing metadata without starting native input or shortcuts.
     pub fn current() -> Self {
         Self {
-            input_prototype: INPUT_PROTOTYPE_ENABLED,
+            input_prototype: cfg!(all(debug_assertions, feature = "input-prototype")),
         }
     }
-    /// Checks this mode before a live input command can change session state.
-    /// Returns `Ok(())` when enabled, otherwise the library-mode error with no side effects.
-    pub fn require_input(self) -> Result<(), String> {
-        if self.input_prototype {
-            Ok(())
-        } else {
-            Err(PROTOTYPE_DISABLED.into())
-        }
-    }
-    /// Allows saved-library mutation only when native prototype capture/playback cannot run.
-    /// Returns a mode error before disk access in builds using the separate input prototype.
+    /// Rejects saved-library operations in the separately routed temporary input prototype.
     pub fn require_library(self) -> Result<(), String> {
         if self.input_prototype {
             Err(LIBRARY_DISABLED.into())
@@ -41,20 +23,17 @@ impl AppMode {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    /// Saved-library deletion is available only in modes where prototype input cannot start.
-    fn deletion_and_native_prototype_are_mutually_exclusive() {
-        assert_eq!(
-            AppMode {
-                input_prototype: false
-            }
-            .require_library(),
-            Ok(())
-        );
+    /// Saved-library mutations are allowed in the default route and rejected in the explicit prototype route.
+    fn saved_library_mutation_requires_library_mode() {
+        assert!(AppMode {
+            input_prototype: false
+        }
+        .require_library()
+        .is_ok());
         assert_eq!(
             AppMode {
                 input_prototype: true
@@ -62,48 +41,5 @@ mod tests {
             .require_library(),
             Err(LIBRARY_DISABLED.into())
         );
-    }
-
-    #[test]
-    #[cfg(not(feature = "input-prototype"))]
-    /// Verifies default builds reject live commands without enabling the prototype feature.
-    fn default_build_cannot_start_live_input() {
-        assert_eq!(
-            AppMode::current().require_input(),
-            Err(PROTOTYPE_DISABLED.into())
-        );
-    }
-
-    #[test]
-    #[cfg(all(debug_assertions, feature = "input-prototype"))]
-    /// Verifies an explicitly selected debug feature permits live commands.
-    fn explicit_debug_feature_enables_live_input() {
-        assert_eq!(AppMode::current().require_input(), Ok(()));
-    }
-
-    #[test]
-    #[cfg(not(debug_assertions))]
-    /// Verifies release builds reject live commands regardless of feature selection.
-    fn release_build_cannot_start_live_input() {
-        assert_eq!(
-            AppMode::current().require_input(),
-            Err(PROTOTYPE_DISABLED.into())
-        );
-    }
-    #[test]
-    /// Verifies constructed library metadata fails the command precondition.
-    fn library_mode_rejects_live_commands() {
-        let mode = AppMode {
-            input_prototype: false,
-        };
-        assert_eq!(mode.require_input(), Err(PROTOTYPE_DISABLED.into()));
-    }
-    #[test]
-    /// Verifies constructed prototype metadata passes the command precondition.
-    fn explicitly_enabled_prototype_accepts_live_commands() {
-        let mode = AppMode {
-            input_prototype: true,
-        };
-        assert_eq!(mode.require_input(), Ok(()));
     }
 }

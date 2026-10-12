@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 export type Snapshot = {
-  phase: 'idle' | 'recording' | 'playing';
+  phase: 'idle' | 'recording' | 'playing' | 'stopping';
   eventCount: number;
   dragMoveCount: number;
   lastRelease: [number, number] | null;
@@ -20,18 +20,25 @@ export type Command = 'start_recording' | 'stop' | 'play';
 type StateProps = { state: Snapshot | null };
 type ActionProps = { onAction: (command: Command) => Promise<void> };
 
+const MILLISECONDS_PER_SECOND = 1000;
+const DISPLAY_PRECISION = 1;
+const MISSING_METRIC = '—';
+/** @param value Millisecond duration or missing initial state. @returns Seconds with one decimal place. */
 function durationSeconds(value: number | undefined): string {
-  return ((value ?? 0) / 1000).toFixed(1);
+  return ((value ?? 0) / MILLISECONDS_PER_SECOND).toFixed(DISPLAY_PRECISION);
 }
 
+/** @param value Available timing/count metric. @returns The value or an explicit missing indicator. */
 function displayMetric(value: number | null | undefined): number | string {
-  return value ?? '—';
+  return value ?? MISSING_METRIC;
 }
 
+/** @param value Recorded/replayed physical point. @returns Signed coordinate text or an explicit missing indicator. */
 function displayPoint(value: [number, number] | null | undefined): string {
-  return value?.join(', ') ?? '—';
+  return value?.join(', ') ?? MISSING_METRIC;
 }
 
+/** @param props Backend state and native action callback. @returns Guarded temporary capture/replay controls. */
 function Controls({ state, onAction }: StateProps & ActionProps) {
   const active = (state?.phase ?? 'idle') !== 'idle';
   return (
@@ -57,12 +64,18 @@ function Controls({ state, onAction }: StateProps & ActionProps) {
   );
 }
 
+/** @param props Current lifecycle and command error. @returns Readable status through active cleanup. */
 function StatusBanner({
   state,
   error,
   phase,
 }: StateProps & { error: string; phase: Snapshot['phase'] }) {
-  const labels = { idle: 'Ready', recording: 'Recording', playing: 'Playing' };
+  const labels = {
+    idle: 'Ready',
+    recording: 'Recording',
+    playing: 'Playing',
+    stopping: 'Stopping…',
+  };
   return (
     <section className={`banner ${phase}`} role="status" aria-live="polite">
       <span className="dot" />
@@ -75,6 +88,7 @@ function StatusBanner({
   );
 }
 
+/** @param props Metric label and available value. @returns A bounded development metric. */
 function Metric({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
@@ -84,6 +98,7 @@ function Metric({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+/** @param props Native release points. @returns Recorded/replayed coordinates when available. */
 function ReleaseMetric({ state }: StateProps) {
   return (
     <Metric
@@ -98,6 +113,7 @@ function ReleaseMetric({ state }: StateProps) {
   );
 }
 
+/** @param props Available native metrics and measured command-to-frame response. @returns Development timing feedback. */
 function TimingMetrics({
   state,
   uiResponse,
@@ -129,6 +145,7 @@ function TimingMetrics({
   );
 }
 
+/** @param props Temporary recording and available metrics. @returns Unsaved capture details and shared-input instructions. */
 function IdleContent({
   state,
   uiResponse,
@@ -160,6 +177,7 @@ function IdleContent({
   );
 }
 
+/** @param props Authoritative prototype presentation and native controls. @returns Optional development-only temporary session view. */
 export function PrototypeView({
   state,
   error,

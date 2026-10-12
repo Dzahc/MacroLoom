@@ -3,9 +3,15 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PrototypeView, type Command, type Snapshot } from './prototype-view';
 import './prototype.css';
+import {
+  SESSION_COMMAND,
+  SESSION_EVENT,
+  type SessionSnapshot,
+} from './session-contract';
+import { prototypeSnapshot } from './prototype-session';
 
-const SNAPSHOT_COMMAND = 'snapshot';
-const STATE_EVENT = 'prototype-state';
+const SNAPSHOT_COMMAND = SESSION_COMMAND.snapshot;
+const STATE_EVENT = SESSION_EVENT;
 const POLL_MS = 100;
 
 /**
@@ -26,10 +32,10 @@ export function PrototypeApp() {
         if (!disposed) setError(String(reason));
       }
       /** @param value Backend snapshot applied only while this subscription is mounted. @returns Nothing. */
-      function receive(value: Snapshot) {
-        if (!disposed) setState(value);
+      function receive(value: SessionSnapshot) {
+        if (!disposed) setState(prototypeSnapshot(value));
       }
-      const off = listen<Snapshot>(
+      const off = listen<SessionSnapshot>(
         STATE_EVENT,
         /** @param event Typed state event. @returns Nothing; forwards its snapshot while mounted. */
         (event) => receive(event.payload),
@@ -37,7 +43,9 @@ export function PrototypeApp() {
       void off.catch(failed);
       /** Requests a typed snapshot without blocking; results/errors use mount-aware handlers. */
       function refresh() {
-        void invoke<Snapshot>(SNAPSHOT_COMMAND).then(receive).catch(failed);
+        void invoke<SessionSnapshot>(SNAPSHOT_COMMAND)
+          .then(receive)
+          .catch(failed);
       }
       refresh();
       const timer = window.setInterval(refresh, POLL_MS);
@@ -64,8 +72,8 @@ export function PrototypeApp() {
     const start = performance.now();
     setError('');
     try {
-      const next = await invoke<Snapshot>(command);
-      setState(next);
+      const next = await invoke<SessionSnapshot>(command);
+      setState(prototypeSnapshot(next));
       requestAnimationFrame(
         /** Records command-to-next-frame elapsed milliseconds as response feedback. */
         () => setUiResponse(Math.round(performance.now() - start)),

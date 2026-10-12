@@ -44,6 +44,7 @@ type ViewProps = LibraryCallbacks & {
   notifications?: ReactNode;
   onDeleteConfirmed: DeleteConfirmed;
   onDeleteCancelled?: DeleteConfirmed;
+  onDeleteOpening?: () => Promise<boolean>;
   onLayout?: (request: WindowViewRequest) => void;
 };
 type MenuAnchor = { macroId: string; x: number; y: number };
@@ -268,6 +269,7 @@ function MacroRow({
 export function LibraryView(props: ViewProps) {
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [attempt, setAttempt] = useState<DeleteConfirmation | null>(null);
+  const opening = useRef(false);
   const owner = useRef<HTMLElement>(null);
   const previousAttempt = useRef<DeleteConfirmation | null>(null);
   const suppressDismissalGesture = useRef(false);
@@ -317,8 +319,22 @@ export function LibraryView(props: ViewProps) {
       (macro) => macro.id === request.macroId,
     );
     if (!target) return;
-    setMenu(null);
-    setAttempt(new DeleteConfirmation(target, request.source));
+    void openDelete(target, request.source);
+  }
+
+  /** @param target Frozen library metadata. @param source Initiating control. @returns Completion after reserving native exclusion, or no dialog after rejection. */
+  async function openDelete(target: MacroSummary, source: ActionSource) {
+    if (opening.current) return;
+    opening.current = true;
+    try {
+      if (props.onDeleteOpening) {
+        if (!(await props.onDeleteOpening())) return;
+      }
+      setMenu(null);
+      setAttempt(new DeleteConfirmation(target, source));
+    } finally {
+      opening.current = false;
+    }
   }
 
   /** @param event Optional pointer cancellation; absent for Escape/invalidation. @returns Nothing; closes without confirmation and consumes pointer continuations. */

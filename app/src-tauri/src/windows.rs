@@ -1,14 +1,21 @@
+use crate::session::Session;
+use crate::shortcuts::{
+    Availability, Control, KeySequences, RECORD_ID, RECORD_KEY, STOP_ID, STOP_KEY,
+};
 use crate::window_view::{ContentSize, Position, WindowAdapter};
-use crate::{Engine, EventKind, Held, MouseButton};
+use crate::{EventKind, Held, MouseButton};
 use std::mem::size_of;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::{mpsc, LazyLock, Mutex};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForWindow, SetProcessDpiAwarenessContext,
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -17,23 +24,47 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, SendInput, UnregisterHotKey, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE,
     KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOD_NOREPEAT,
     MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, VK_F8, VK_F9,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
 };
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
     GetSystemMetrics, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId,
-    SetWindowLongW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT,
-    MSG, MSLLHOOKSTRUCT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
-    SW_SHOWNOACTIVATE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_HOTKEY, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    PeekMessageW, PostThreadMessageW, SetWindowLongW, SetWindowPlacement, SetWindowPos,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE,
+    HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
+    MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+    SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP,
+    WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
+    WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
 };
 
-static ENGINE: OnceLock<Arc<Engine>> = OnceLock::new();
-const RECORD_HOTKEY: i32 = 1;
-const STOP_HOTKEY: i32 = 2;
+static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
+static HOOK_JOBS: OnceLock<mpsc::Sender<ReservationJob>> = OnceLock::new();
+static CONTROL_JOBS: OnceLock<mpsc::Sender<ControlJob>> = OnceLock::new();
+static HOOK_THREAD: AtomicU32 = AtomicU32::new(0);
+static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+static RESERVED: LazyLock<Mutex<Availability>> =
+    LazyLock::new(|| Mutex::new(Availability::default()));
+static SEQUENCES: LazyLock<Mutex<KeySequences>> =
+    LazyLock::new(|| Mutex::new(KeySequences::default()));
+const RESERVATION_MESSAGE: u32 = WM_APP + 1;
+const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
+const HOOK_FAILED: &str =
+    "Native input capture is unavailable; Retry shortcuts or restart MacroLoom.";
+const UNREGISTER_FAILED: &str = "Could not release a global shortcut reservation.";
+const POWER_SUBCLASS: usize = 14;
+const POWER_HOOK_FAILED: &str = "Could not observe computer sleep notifications.";
+const COMPACT_COLLISION: &str =
+    "Playback target overlaps MacroLoom; move the compact window and retry.";
+const NORMALIZED_MAX: i64 = 65535;
+const CONFLICT_HELPER_FAILED: &str = "The requested key is already reserved. Close MacroLoom/the conflicting application and try again.";
+const CONFLICT_HELPER_DISABLED: &str = "Shortcut conflict helper is development-only.";
+const CONFLICT_RECORD: &str = "record";
+const CONFLICT_STOP: &str = "stop";
+const CONFLICT_USAGE: &str = "Use: shortcut-conflict-check record|stop";
 const EXTRA_INFO: usize = 0x4D4C_3038;
 const BASE_DPI: u32 = 96;
 const FULL_MIN_WIDTH: f64 = 360.0;
@@ -318,211 +349,364 @@ fn clamp_window_bounds(bounds: RECT) -> Result<RECT, String> {
     })
 }
 
-pub struct WindowState {
-    hwnd: isize,
-    original: Option<RECT>,
+/// Owns native registration requests on the same message thread that installed the hooks.
+struct ReservationJob {
+    record: bool,
+    stop: bool,
+    reply: mpsc::SyncSender<Result<Availability, String>>,
 }
-
-impl WindowState {
-    pub fn new(hwnd: isize) -> Self {
-        Self {
-            hwnd,
-            original: None,
+#[derive(Clone, Copy)]
+/// Work queued by short native callbacks; no window or storage work runs inside a hook.
+enum ControlJob {
+    Record,
+    Stop,
+    Suspend,
+}
+/// Actual thread-owned reservations plus the last explicit Stop availability check.
+struct HookRuntime {
+    record: bool,
+    stop: bool,
+    stop_available: bool,
+    hooks_ready: bool,
+}
+impl HookRuntime {
+    /// Reconciles physical reservations; errors retain actual ownership rather than pretending unregistration succeeded.
+    fn apply(&mut self, record: bool, stop: bool) -> Result<Availability, String> {
+        if !self.hooks_ready {
+            return Err(HOOK_FAILED.into());
         }
+        self.record = update_registration(self.record, RECORD_ID, RECORD_KEY, record)?;
+        self.stop = update_registration(self.stop, STOP_ID, STOP_KEY, stop)?;
+        if stop {
+            self.stop_available = self.stop;
+        }
+        *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
+            record: self.record,
+            stop: self.stop,
+        };
+        Ok(Availability {
+            record: self.record,
+            stop: self.stop_available,
+        })
     }
-
-    pub fn compact(&mut self, compact: bool) -> Result<(), String> {
-        let hwnd = self.hwnd as HWND;
-        // SAFETY: hwnd comes from Tauri's live main window. RECT storage is initialized
-        // before reading it; SetWindowPos receives values, and failures are propagated.
-        unsafe {
-            if compact {
-                if self.original.is_some() {
-                    return Ok(());
-                }
-                let mut rect = std::mem::zeroed();
-                if GetWindowRect(hwnd, &mut rect) == 0 {
-                    return Err("Could not read window bounds".into());
-                }
-                let width = rect.right - rect.left;
-                let height = 230 * (GetDpiForWindow(hwnd) as i32).max(96) / 96;
-                if SetWindowPos(
-                    hwnd,
-                    HWND_TOPMOST,
-                    rect.left,
-                    rect.top,
-                    width,
-                    height,
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
-                ) == 0
-                {
-                    return Err("Could not enter compact window state".into());
-                }
-                self.original = Some(rect);
-            } else if let Some(rect) = self.original {
-                if SetWindowPos(
-                    hwnd,
-                    HWND_NOTOPMOST,
-                    rect.left,
-                    rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
-                ) == 0
-                {
-                    return Err("Could not restore window state".into());
-                }
-                self.original = None;
+}
+/// Registers/unregisters one OS key on the hook thread, retaining current ownership on failure.
+fn update_registration(current: bool, id: i32, key: u16, wanted: bool) -> Result<bool, String> {
+    if current == wanted {
+        return Ok(current);
+    }
+    if wanted {
+        // SAFETY: thread-owned hotkey identifiers and by-value virtual key/modifier constants; no pointers are retained.
+        return Ok(unsafe { RegisterHotKey(null_mut(), id, MOD_NOREPEAT, u32::from(key)) } != 0);
+    }
+    // SAFETY: this thread owns this successfully registered identifier and uses a null HWND for thread registration.
+    if unsafe { UnregisterHotKey(null_mut(), id) } == 0 {
+        return Err(UNREGISTER_FAILED.into());
+    }
+    Ok(false)
+}
+/// Updates native reservations and waits for acknowledgement only from a worker, never a hook/UI callback.
+pub fn configure_shortcuts(record: bool, stop: bool) -> Result<Availability, String> {
+    let jobs = HOOK_JOBS.get().ok_or(HOOK_FAILED)?;
+    let (reply, receive) = mpsc::sync_channel(1);
+    jobs.send(ReservationJob {
+        record,
+        stop,
+        reply,
+    })
+    .map_err(|_| HOOK_FAILED)?;
+    wake_hook(RESERVATION_MESSAGE)?;
+    receive
+        .recv_timeout(HOOK_TIMEOUT)
+        .map_err(|_| HOOK_FAILED)?
+}
+/// Posts a by-value thread message to the live hook thread; no borrowed data crosses threads.
+fn wake_hook(message: u32) -> Result<(), String> {
+    let thread = HOOK_THREAD.load(Ordering::Acquire);
+    // SAFETY: the thread created its message queue before publishing its ID; the message contains no borrowed pointers.
+    if unsafe { PostThreadMessageW(thread, message, 0, 0) } == 0 {
+        return Err(HOOK_FAILED.into());
+    }
+    Ok(())
+}
+/// Installs capture callbacks and starts a backend control worker; failures remain distinct from shortcut conflicts.
+pub fn start_hooks(session: Arc<Session>, hwnd: isize) -> Result<(), String> {
+    ENGINE.set(session.clone()).map_err(|_| HOOK_FAILED)?;
+    MAIN_HWND.store(hwnd, Ordering::Release);
+    let (jobs, receive_jobs) = mpsc::channel();
+    HOOK_JOBS.set(jobs).map_err(|_| HOOK_FAILED)?;
+    let (controls, receive_controls) = mpsc::channel();
+    CONTROL_JOBS.set(controls).map_err(|_| HOOK_FAILED)?;
+    let (ready, startup) = mpsc::sync_channel(1);
+    std::thread::spawn(move || hook_loop(receive_jobs, ready));
+    startup
+        .recv_timeout(HOOK_TIMEOUT)
+        .map_err(|_| HOOK_FAILED)??;
+    std::thread::spawn(move || control_loop(session, receive_controls));
+    Ok(())
+}
+/// Processes direct backend controls sequentially, reporting errors even when the frontend is disconnected.
+fn control_loop(session: Arc<Session>, controls: mpsc::Receiver<ControlJob>) {
+    while let Ok(control) = controls.recv() {
+        let result = match control {
+            ControlJob::Record => session.record(),
+            ControlJob::Stop => session.stop(),
+            ControlJob::Suspend => session.suspend(),
+        };
+        if let Err(error) = result {
+            if error != crate::session::ACTIVE_SESSION {
+                session.report(error);
             }
         }
-        Ok(())
     }
 }
-
-pub fn start_hooks(engine: Arc<Engine>) {
-    let _ = ENGINE.set(engine.clone());
-    // SAFETY: hooks use static callbacks; message storage is initialized and all
-    // successfully installed hooks/hotkeys are released on message-loop exit.
-    std::thread::spawn(move || unsafe {
-        let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), null_mut(), 0);
-        let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), null_mut(), 0);
-        let f9 = RegisterHotKey(null_mut(), RECORD_HOTKEY, MOD_NOREPEAT, VK_F9 as u32) != 0;
-        let f8 = RegisterHotKey(null_mut(), STOP_HOTKEY, MOD_NOREPEAT, VK_F8 as u32) != 0;
-        engine.set_hotkeys(f9, f8 && !keyboard.is_null() && !mouse.is_null());
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            handle_hook_message(&engine, &msg);
-        }
-        if f9 {
-            UnregisterHotKey(null_mut(), RECORD_HOTKEY);
-        }
-        if f8 {
-            UnregisterHotKey(null_mut(), STOP_HOTKEY);
-        }
-        if !keyboard.is_null() {
+/// Pumps hooks and reservation jobs; every installed hook and actual registration is released before thread exit.
+fn hook_loop(jobs: mpsc::Receiver<ReservationJob>, ready: mpsc::SyncSender<Result<(), String>>) {
+    // SAFETY: initialized MSG is synchronous output storage; peeking creates this thread's queue before its ID is shared.
+    let mut message: MSG = unsafe { std::mem::zeroed() };
+    unsafe {
+        PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+    }
+    HOOK_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
+    // SAFETY: static callbacks remain live until these hooks are uninstalled; global Session ownership outlives the loop.
+    let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), null_mut(), 0) };
+    // SAFETY: the same static-lifetime callback and process-local thread hook contract applies to mouse input.
+    let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), null_mut(), 0) };
+    let mut runtime = HookRuntime {
+        record: false,
+        stop: false,
+        stop_available: false,
+        hooks_ready: !keyboard.is_null() && !mouse.is_null(),
+    };
+    if runtime.hooks_ready {
+        let _ = runtime.apply(false, true);
+        let _ = runtime.apply(false, false);
+    }
+    let _ = ready.send(Ok(()));
+    // SAFETY: message is initialized writable storage and each successful call returns a valid thread/window message.
+    while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
+        pump_hook_message(&message, &jobs, &mut runtime);
+    }
+    let _ = runtime.apply(false, false);
+    // SAFETY: only handles successfully returned by installation are unhooked, after callbacks have stopped dispatching.
+    if !keyboard.is_null() {
+        unsafe {
             UnhookWindowsHookEx(keyboard);
         }
-        if !mouse.is_null() {
+    }
+    // SAFETY: mouse is likewise an installed, thread-owned live hook handle.
+    if !mouse.is_null() {
+        unsafe {
             UnhookWindowsHookEx(mouse);
         }
-    });
+    }
+    HOOK_THREAD.store(0, Ordering::Release);
 }
-
-unsafe fn handle_hook_message(engine: &Engine, message: &MSG) {
-    // SAFETY: the caller supplies an initialized MSG returned by GetMessageW.
-    if message.message == WM_HOTKEY {
-        if message.wParam == RECORD_HOTKEY as usize {
-            let _ = engine.start_recording();
+/// Applies reservation jobs without callback work; reserved keyboard callbacks already queue control actions directly.
+fn pump_hook_message(
+    message: &MSG,
+    jobs: &mpsc::Receiver<ReservationJob>,
+    runtime: &mut HookRuntime,
+) {
+    if message.message == RESERVATION_MESSAGE {
+        while let Ok(job) = jobs.try_recv() {
+            let result = runtime.apply(job.record, job.stop);
+            let _ = job.reply.send(result);
         }
-        if message.wParam == STOP_HOTKEY as usize {
-            let _ = engine.stop();
+    } else if message.message != WM_HOTKEY {
+        // SAFETY: caller supplied an initialized message returned by GetMessageW; dispatch retains no local pointer.
+        unsafe {
+            TranslateMessage(message);
+            DispatchMessageW(message);
         }
-    } else {
-        TranslateMessage(message);
-        DispatchMessageW(message);
     }
 }
-
+/// Queues a control without waiting for a frontend callback; Stop freezes/cancels input before worker delivery.
+fn queue_control(control: ControlJob) {
+    if let Some(session) = ENGINE.get() {
+        if matches!(control, ControlJob::Stop | ControlJob::Suspend) {
+            if let Err(error) = session.signal_stop(matches!(control, ControlJob::Suspend)) {
+                session.report(error);
+            }
+        }
+    }
+    if let Some(sender) = CONTROL_JOBS.get() {
+        let _ = sender.send(control);
+    }
+}
+/// Requests worker-owned cleanup following a native close request.
+pub fn queue_stop() {
+    queue_control(ControlJob::Stop);
+}
+/// Stops native hook pumping when the owned main window is destroyed.
+pub fn shutdown_hooks() {
+    let _ = wake_hook(WM_QUIT);
+}
+/// Returns whether the hook message thread remains live, for bounded progress-worker teardown.
+pub fn hooks_running() -> bool {
+    HOOK_THREAD.load(Ordering::Acquire) != 0
+}
+/// Checks external target focus; process-owned control windows are never captured.
 fn own_window_focused() -> bool {
-    // SAFETY: foreground HWND is OS-owned; process output points to live local storage.
-    unsafe {
-        let foreground = GetForegroundWindow();
-        let mut process = 0;
-        if !foreground.is_null() {
+    // SAFETY: foreground HWND is OS-owned; process output points to initialized local storage for the synchronous getter.
+    let foreground = unsafe { GetForegroundWindow() };
+    let mut process = 0;
+    if !foreground.is_null() {
+        unsafe {
             GetWindowThreadProcessId(foreground, &mut process);
         }
-        process == GetCurrentProcessId()
     }
+    // SAFETY: this by-value process identifier getter has no pointer or lifetime requirements.
+    process == unsafe { GetCurrentProcessId() }
 }
-
+/// Returns whether a physical position is inside the current actual main-window frame.
 fn own_point(point: POINT) -> bool {
-    // SAFETY: hwnd is held by Tauri and rect points to initialized local storage.
-    unsafe {
-        let Some(engine) = ENGINE.get() else {
-            return false;
-        };
-        let hwnd = engine.window.lock().unwrap().hwnd as HWND;
-        let mut rect = std::mem::zeroed();
-        GetWindowRect(hwnd, &mut rect) != 0
-            && point.x >= rect.left
+    point_in_window(MAIN_HWND.load(Ordering::Acquire), point).unwrap_or(true)
+}
+/// Reads actual physical native bounds, propagating failure instead of assuming hidden library geometry.
+fn point_in_window(hwnd: isize, point: POINT) -> Result<bool, String> {
+    // SAFETY: zero RECT is valid initialized output storage; the HWND is retained by the owned live Tauri window.
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetWindowRect(hwnd as HWND, &mut rect) } == 0 {
+        return Err(WINDOW_BOUNDS_ERROR.into());
+    }
+    Ok(
+        point.x >= rect.left
             && point.x < rect.right
             && point.y >= rect.top
-            && point.y < rect.bottom
-    }
+            && point.y < rect.bottom,
+    )
 }
-
+/// Consumes physical reserved key sequences including repeats and trailing releases after reservation changes.
+fn control_key(input: &KBDLLHOOKSTRUCT, down: bool) -> bool {
+    if input.flags & LLKHF_INJECTED != 0 {
+        return false;
+    }
+    let Ok(reserved) = RESERVED.lock() else {
+        return false;
+    };
+    let Ok(mut sequences) = SEQUENCES.lock() else {
+        return false;
+    };
+    let (consumed, control) = sequences.key(input.vkCode as u16, down, *reserved);
+    drop(sequences);
+    drop(reserved);
+    if let Some(control) = control {
+        queue_control(match control {
+            Control::Record => ControlJob::Record,
+            Control::Stop => ControlJob::Stop,
+        });
+    }
+    consumed
+}
+/// Copies valid native key data into capture, or consumes reserved controls; negative hook codes always chain.
 unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
-    // SAFETY: for a nonnegative hook code Windows supplies a KBDLLHOOKSTRUCT
-    // valid for this callback. We never retain its pointer, and always chain the hook.
-    if code >= 0 && !own_window_focused() {
-        let input = &*(data as *const KBDLLHOOKSTRUCT);
-        if is_capture_key(input) {
-            let down = message == WM_KEYDOWN as usize || message == WM_SYSKEYDOWN as usize;
-            let up = message == WM_KEYUP as usize || message == WM_SYSKEYUP as usize;
-            if down || up {
-                if let Some(engine) = ENGINE.get() {
-                    engine.capture(EventKind::Key {
-                        vk: input.vkCode as u16,
-                        scan: input.scanCode as u16,
-                        extended: input.flags & 1 != 0,
-                        down,
-                    });
-                }
-            }
-        }
-    }
-    CallNextHookEx(null_mut(), code, message, data)
-}
-
-fn is_capture_key(input: &KBDLLHOOKSTRUCT) -> bool {
-    input.dwExtraInfo != EXTRA_INFO && input.vkCode != VK_F8 as u32 && input.vkCode != VK_F9 as u32
-}
-
-unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
-    // SAFETY: a nonnegative mouse-hook code supplies a live MSLLHOOKSTRUCT.
-    // Its data is copied into owned events before this callback returns.
     if code >= 0 {
-        let input = &*(data as *const MSLLHOOKSTRUCT);
+        // SAFETY: a nonnegative hook code supplies a KBDLLHOOKSTRUCT valid for this callback; no pointer is retained.
+        let input = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
+        if handle_keyboard(input, message) {
+            return 1;
+        }
+    }
+    // SAFETY: chaining passes Windows' original hook arguments without retaining their pointers.
+    unsafe { CallNextHookEx(null_mut(), code, message, data) }
+}
+/// Handles a valid down/up message; unrelated messages and injected MacroLoom input are ignored.
+fn handle_keyboard(input: &KBDLLHOOKSTRUCT, message: WPARAM) -> bool {
+    let down = message == WM_KEYDOWN as usize || message == WM_SYSKEYDOWN as usize;
+    let up = message == WM_KEYUP as usize || message == WM_SYSKEYUP as usize;
+    if !down && !up {
+        return false;
+    }
+    if control_key(input, down) {
+        return true;
+    }
+    if input.dwExtraInfo == EXTRA_INFO || own_window_focused() {
+        return false;
+    }
+    if let Some(session) = ENGINE.get() {
+        session.capture(EventKind::Key {
+            vk: input.vkCode as u16,
+            scan: input.scanCode as u16,
+            extended: input.flags & LLKHF_EXTENDED != 0,
+            down,
+        });
+    }
+    false
+}
+/// Copies valid native mouse data into capture; control-window interactions and our injected events are excluded.
+unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
+    if code >= 0 {
+        // SAFETY: Windows supplies a live MSLLHOOKSTRUCT for nonnegative codes, copied before this callback returns.
+        let input = unsafe { &*(data as *const MSLLHOOKSTRUCT) };
         if input.dwExtraInfo != EXTRA_INFO && !own_point(input.pt) {
-            let kind = match message as u32 {
-                WM_LBUTTONDOWN => Some(EventKind::Mouse {
-                    button: MouseButton::Left,
-                    down: true,
-                    x: input.pt.x,
-                    y: input.pt.y,
-                }),
-                WM_LBUTTONUP => Some(EventKind::Mouse {
-                    button: MouseButton::Left,
-                    down: false,
-                    x: input.pt.x,
-                    y: input.pt.y,
-                }),
-                WM_RBUTTONDOWN => Some(EventKind::Mouse {
-                    button: MouseButton::Right,
-                    down: true,
-                    x: input.pt.x,
-                    y: input.pt.y,
-                }),
-                WM_RBUTTONUP => Some(EventKind::Mouse {
-                    button: MouseButton::Right,
-                    down: false,
-                    x: input.pt.x,
-                    y: input.pt.y,
-                }),
-                WM_MOUSEMOVE => Some(EventKind::Move {
-                    x: input.pt.x,
-                    y: input.pt.y,
-                }),
-                _ => None,
-            };
-            if let (Some(engine), Some(kind)) = (ENGINE.get(), kind) {
-                engine.capture(kind);
+            if let (Some(session), Some(kind)) =
+                (ENGINE.get(), mouse_kind(message as u32, input.pt))
+            {
+                session.capture(kind);
             }
         }
     }
-    CallNextHookEx(null_mut(), code, message, data)
+    // SAFETY: original arguments are forwarded while Windows' callback storage remains valid.
+    unsafe { CallNextHookEx(null_mut(), code, message, data) }
+}
+/// Converts supported positioned mouse transitions without inventing gestures or free movement playback.
+fn mouse_kind(message: u32, point: POINT) -> Option<EventKind> {
+    let transition = match message {
+        WM_LBUTTONDOWN => Some((MouseButton::Left, true)),
+        WM_LBUTTONUP => Some((MouseButton::Left, false)),
+        WM_RBUTTONDOWN => Some((MouseButton::Right, true)),
+        WM_RBUTTONUP => Some((MouseButton::Right, false)),
+        _ => None,
+    };
+    if let Some((button, down)) = transition {
+        return Some(EventKind::Mouse {
+            button,
+            down,
+            x: point.x,
+            y: point.y,
+        });
+    }
+    if message == WM_MOUSEMOVE {
+        return Some(EventKind::Move {
+            x: point.x,
+            y: point.y,
+        });
+    }
+    None
+}
+/// Installs a main-thread subclass for computer-sleep notification without replacing Tauri's window procedure.
+pub fn watch_suspend(hwnd: isize) -> Result<(), String> {
+    // SAFETY: called on the thread that owns the live main HWND; callback is static and retains no borrowed data.
+    if unsafe { SetWindowSubclass(hwnd as HWND, Some(power_message), POWER_SUBCLASS, 0) } == 0 {
+        return Err(POWER_HOOK_FAILED.into());
+    }
+    Ok(())
+}
+/// Signals interruption immediately on sleep, then lets the backend worker finish cleanup and retained capture.
+unsafe extern "system" fn power_message(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _: usize,
+    _: usize,
+) -> LRESULT {
+    if message == WM_POWERBROADCAST && wparam == PBT_APMSUSPEND as usize {
+        queue_control(ControlJob::Suspend);
+    }
+    if message == WM_NCDESTROY {
+        // SAFETY: this subclass identifier was installed on this same HWND; callback is removed before native destruction finishes.
+        unsafe {
+            RemoveWindowSubclass(hwnd, Some(power_message), POWER_SUBCLASS);
+        }
+        shutdown_hooks();
+    }
+    // SAFETY: forwards original arguments through the remaining valid subclass chain.
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
+/// Reads current signed physical cursor coordinates; initialized zero coordinates are retained if the getter fails.
 pub fn cursor_position() -> (i32, i32) {
     let mut point = POINT { x: 0, y: 0 };
     // SAFETY: the OS writes to an initialized, live POINT on this stack.
@@ -532,6 +716,7 @@ pub fn cursor_position() -> (i32, i32) {
     (point.x, point.y)
 }
 
+/// Builds a physical virtual-desktop movement event tagged to exclude our own injected input from capture.
 fn mouse_move(x: i32, y: i32) -> INPUT {
     // SAFETY: GetSystemMetrics takes only documented metric identifiers.
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
@@ -555,10 +740,13 @@ fn mouse_move(x: i32, y: i32) -> INPUT {
     }
 }
 
+/// Maps one signed desktop pixel into the bounded Windows absolute-input coordinate range.
 fn normalize_pixel(pixel: i32, origin: i32, span: i32) -> i32 {
-    ((pixel as i64 - origin as i64) * 65535 / (span - 1).max(1) as i64).clamp(0, 65535) as i32
+    ((pixel as i64 - origin as i64) * NORMALIZED_MAX / (span - 1).max(1) as i64)
+        .clamp(0, NORMALIZED_MAX) as i32
 }
 
+/// Builds one tagged supported mouse-button transition without moving the cursor.
 fn mouse_button(button: MouseButton, down: bool) -> INPUT {
     let flags = match (button, down) {
         (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
@@ -581,6 +769,7 @@ fn mouse_button(button: MouseButton, down: bool) -> INPUT {
     }
 }
 
+/// Builds a tagged keyboard transition, preferring scan codes and preserving extended-key metadata.
 fn keyboard(vk: u16, scan: u16, extended: bool, down: bool) -> INPUT {
     let mut flags = if scan != 0 { KEYEVENTF_SCANCODE } else { 0 };
     if extended {
@@ -603,6 +792,7 @@ fn keyboard(vk: u16, scan: u16, extended: bool, down: bool) -> INPUT {
     }
 }
 
+/// Sends initialized inputs and rejects partial/failed injection instead of claiming success.
 fn send(inputs: &[INPUT]) -> Result<(), String> {
     // SAFETY: inputs is a live contiguous slice of initialized INPUT values;
     // its count and size describe exactly that slice for the duration of the call.
@@ -620,6 +810,7 @@ fn send(inputs: &[INPUT]) -> Result<(), String> {
     }
 }
 
+/// Injects one supported event; positioned mouse dispatch splits movement from transition so successful holds are trackable.
 pub fn send_event(kind: &EventKind) -> Result<(), String> {
     match kind {
         EventKind::Key {
@@ -629,16 +820,65 @@ pub fn send_event(kind: &EventKind) -> Result<(), String> {
             down,
         } => send(&[keyboard(*vk, *scan, *extended, *down)]),
         EventKind::Mouse { button, down, x, y } => {
-            send(&[mouse_move(*x, *y), mouse_button(*button, *down)])
+            send(&[mouse_move(*x, *y)])?;
+            send(&[mouse_button(*button, *down)])
         }
         EventKind::Move { x, y } => send(&[mouse_move(*x, *y)]),
     }
 }
 
+/// Rejects physical targets overlapping the actual compact frame before any movement or button injection.
+pub fn send_session_event(hwnd: isize, kind: &EventKind) -> Result<(), String> {
+    let target = match kind {
+        EventKind::Key { .. } => None,
+        EventKind::Mouse { x, y, .. } | EventKind::Move { x, y } => Some(POINT { x: *x, y: *y }),
+    };
+    if let Some(point) = target {
+        if point_in_window(hwnd, point)? {
+            return Err(COMPACT_COLLISION.into());
+        }
+    }
+    send_event(kind)
+}
+/// Releases one session-owned injected input at its current position and propagates rejection for Retry cleanup.
 pub fn release(held: Held) -> Result<(), String> {
     match held {
         Held::Key(vk, scan, extended) => send(&[keyboard(vk, scan, extended, false)]),
         Held::Button(button) => send(&[mouse_button(button, false)]),
+    }
+}
+
+/// Holds a development-only global key until Enter; RAII always releases the reservation on normal/error exit.
+pub fn hold_conflict_shortcut() -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Err(CONFLICT_HELPER_DISABLED.into());
+    }
+    let requested = std::env::args().nth(1).ok_or(CONFLICT_USAGE)?;
+    let (id, key) = match requested.as_str() {
+        CONFLICT_RECORD => (RECORD_ID, RECORD_KEY),
+        CONFLICT_STOP => (STOP_ID, STOP_KEY),
+        _ => return Err(CONFLICT_USAGE.into()),
+    };
+    if !update_registration(false, id, key, true)? {
+        return Err(CONFLICT_HELPER_FAILED.into());
+    }
+    let _reservation = TestReservation(id);
+    println!("Holding {requested} shortcut. Test MacroLoom, then press Enter here to release it.");
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+/// Test/helper-owned key on the current thread; never overlaps session-owned registration identifiers in another process.
+struct TestReservation(i32);
+impl Drop for TestReservation {
+    /// Releases only this successfully reserved identifier before the helper's owning thread exits.
+    fn drop(&mut self) {
+        // SAFETY: constructed only after successful thread-local registration; null HWND matches that registration.
+        unsafe {
+            UnregisterHotKey(null_mut(), self.0);
+        }
     }
 }
 
@@ -647,25 +887,63 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Negative monitor origins map to the same bounded absolute coordinates as positive desktop pixels.
     fn maps_negative_virtual_desktop_coordinates_to_absolute_input() {
         assert_eq!(normalize_pixel(-1920, -1920, 3840), 0);
         assert_eq!(normalize_pixel(1919, -1920, 3840), 65535);
         assert!(normalize_pixel(-1, -1920, 3840) < normalize_pixel(0, -1920, 3840));
     }
-
     #[test]
-    fn capture_excludes_control_keys_and_our_injected_input() {
-        let input = |vk_code, extra| KBDLLHOOKSTRUCT {
-            vkCode: vk_code,
-            scanCode: 0,
-            flags: 0,
-            time: 0,
-            dwExtraInfo: extra,
+    #[ignore = "Requires an interactive Windows desktop with F8 initially unreserved"]
+    /// Actual OS conflict blocks required Stop, recovery acquires it, and terminal unregistration returns F8 to another owner.
+    fn native_shortcut_conflict_recovers_and_releases_stop() {
+        let (ready, installed) = mpsc::sync_channel(1);
+        let (release, wait_release) = mpsc::sync_channel(1);
+        let helper = std::thread::spawn(move || {
+            let registered = update_registration(false, STOP_ID, STOP_KEY, true)
+                .expect("Native fixture registration call");
+            let _reservation = registered.then_some(TestReservation(STOP_ID));
+            ready
+                .send(registered)
+                .expect("Fixture receiver remains alive");
+            wait_release
+                .recv()
+                .expect("Fixture release is sent before join");
+        });
+        let installed = installed
+            .recv_timeout(HOOK_TIMEOUT)
+            .expect("Native fixture must become ready");
+        if !installed {
+            release.send(()).expect("Release fixture");
+            helper.join().expect("Fixture thread");
+            panic!("F8 is already reserved by another application; close it before this integration check");
+        }
+        let mut runtime = HookRuntime {
+            record: false,
+            stop: false,
+            stop_available: false,
+            hooks_ready: true,
         };
-        assert!(is_capture_key(&input(65, 0)));
-        assert!(!is_capture_key(&input(VK_F8 as u32, 0)));
-        assert!(!is_capture_key(&input(VK_F9 as u32, 0)));
-        assert!(!is_capture_key(&input(65, EXTRA_INFO)));
+        assert!(
+            !runtime
+                .apply(false, true)
+                .expect("Conflict is an availability outcome")
+                .stop
+        );
+        release.send(()).expect("Release fixture");
+        helper.join().expect("Fixture thread");
+        assert!(
+            runtime
+                .apply(false, true)
+                .expect("Retry acquires Stop")
+                .stop
+        );
+        runtime
+            .apply(false, false)
+            .expect("Terminal cleanup releases Stop");
+        assert!(update_registration(false, STOP_ID, STOP_KEY, true)
+            .expect("Another owner can acquire released Stop"));
+        let _reservation = TestReservation(STOP_ID);
     }
 }
 

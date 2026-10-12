@@ -35,6 +35,9 @@ import {
 } from './compact-presentation';
 import { useCompactWindow, useSessionPresentation } from './native-compact';
 import { DEV_TEXT } from './library-samples';
+import { useNativeSession } from './native-session';
+import { SessionControls } from './session-controls';
+import { SESSION_COMMAND, type SessionSnapshot } from './session-contract';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -76,6 +79,7 @@ export function LiveLibraryApp({
   );
   const mounted = useRef(false);
   const session = useSessionPresentation();
+  const nativeSession = useNativeSession();
   const { controller: windowController, view } = useCompactWindow();
   const configure = useNativeConfigure(
     /** @param completion Authoritative native save receipt. @returns Nothing; applies metadata before announcing success. */
@@ -85,7 +89,14 @@ export function LiveLibraryApp({
       windowController.report(`${CONFIGURE_TEXT.uncertain} ${String(reason)}`),
   );
   const desiredCompact = isCompactPhase(session.phase);
-  const presentation = presentedLibrary(snapshot, session, view);
+  const presentation = {
+    ...presentedLibrary(snapshot, session, view),
+    message: snapshot.loading
+      ? snapshot.message
+      : nativeSession.snapshot.message,
+    recordingAvailable: nativeSession.snapshot.canRecord,
+    playbackAvailable: false,
+  };
   const compact = isCompactView(presentation);
   const layout = useCallback(
     /** @param request Measured logical content. @returns Nothing; the serialized controller converts native rejections to timed toasts. */
@@ -113,11 +124,46 @@ export function LiveLibraryApp({
     controller.select(change);
   }
   /** @param macroId Deliberately confirmed stable ID. @returns Worker deletion completion; outcomes are controller-owned. */
-  function confirmDelete(macroId: string) {
+  async function confirmDelete(macroId: string) {
+    await invoke<SessionSnapshot>(SESSION_COMMAND.confirmation, {
+      blocked: false,
+    });
     return controller.deleteConfirmed(macroId);
+  }
+  const openDelete = useCallback(
+    /** Claims the native confirmation interlock before the dialog appears. @returns Whether confirmation may open. */
+    async () => {
+      try {
+        await invoke<SessionSnapshot>(SESSION_COMMAND.confirmation, {
+          blocked: true,
+        });
+        return true;
+      } catch (reason) {
+        windowController.report(String(reason));
+        return false;
+      }
+    },
+    [windowController],
+  );
+  /** Releases the native reservation on Cancel or dialog-owner cleanup; errors stay visible. */
+  function cancelDelete() {
+    void invoke<SessionSnapshot>(SESSION_COMMAND.confirmation, {
+      blocked: false,
+    }).catch(
+      /** @param reason Failed interlock release. @returns Nothing; reports actionable native failure. */
+      (reason: unknown) => windowController.report(String(reason)),
+    );
   }
   /** @param request Available operation. @returns Nothing; asynchronously supplies data to later-story consumer. */
   function action(request: LibraryAction) {
+    if (request.action === ACTION.record || request.action === ACTION.stop) {
+      const command =
+        request.action === ACTION.record
+          ? SESSION_COMMAND.record
+          : SESSION_COMMAND.stop;
+      void nativeSession.controller.request(command);
+      return;
+    }
     if (configure.busy) return;
     if (request.action === ACTION.configure) {
       void configure.open(request).catch(
@@ -172,11 +218,17 @@ export function LiveLibraryApp({
           onSelect={select}
           onAction={action}
           onDeleteConfirmed={confirmDelete}
+          onDeleteOpening={openDelete}
+          onDeleteCancelled={cancelDelete}
           onLayout={layout}
           notifications={
             <>
               <OutcomeToasts queue={controller.queue} compact={compact} />
               <OutcomeToasts queue={windowController.failures} />
+              <SessionControls
+                snapshot={nativeSession.snapshot}
+                controller={nativeSession.controller}
+              />
             </>
           }
         />

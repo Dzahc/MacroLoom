@@ -186,6 +186,16 @@ impl PresentationService {
         current.status = status;
         Ok(current.clone())
     }
+    /// Publishes authoritative live session progress without performing native layout or activating the window.
+    pub(crate) fn publish_live(
+        &self,
+        app: &AppHandle,
+        status: PreviewStatus,
+    ) -> Result<(), String> {
+        let snapshot = self.publish(status)?;
+        app.emit_to(MAIN_WINDOW, PRESENTATION_EVENT, snapshot)
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// Enforces development and library-mode preconditions at the backend, independent of hidden controls.
@@ -212,10 +222,22 @@ pub fn preview_presentation(
     service: State<'_, PresentationService>,
 ) -> Result<PresentationSnapshot, String> {
     require_preview()?;
+    require_idle_session(&app)?;
     let snapshot = service.publish(status)?;
     app.emit_to(MAIN_WINDOW, PRESENTATION_EVENT, &snapshot)
         .map_err(|error| error.to_string())?;
     Ok(snapshot)
+}
+
+/// Keeps development presentation controls from overriding a real session or pending unsaved-close decision.
+fn require_idle_session(app: &AppHandle) -> Result<(), String> {
+    if let Some(session) = app.try_state::<std::sync::Arc<crate::session::Session>>() {
+        let snapshot = session.snapshot()?;
+        if snapshot.phase != crate::session::Phase::Idle || snapshot.close_requested {
+            return Err(crate::session::ACTIVE_SESSION.into());
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -311,6 +333,9 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 /// Restores idle presentation when development controls close, keeping the main window reachable without session actions.
 fn preview_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if !matches!(event, tauri::WindowEvent::Destroyed) {
+        return;
+    }
+    if require_idle_session(window.app_handle()).is_err() {
         return;
     }
     let Some(service) = window.try_state::<PresentationService>() else {
