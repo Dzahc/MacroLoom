@@ -1,6 +1,9 @@
 //! Interactive regression for the real IPC/window-creation path, separate from pure frame-policy tests.
 
-use super::{desktop_builder, presentation::PREVIEW_WINDOW, windows, MAIN_WINDOW_LABEL};
+use super::{
+    desktop_builder, presentation::PREVIEW_WINDOW, session::READY, windows, MAIN_WINDOW_LABEL,
+};
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -10,18 +13,28 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const OPEN_PREVIEW: &str = "window.__TAURI_INTERNALS__.invoke('open_presentation_preview')";
 const MAIN_READY: &str = "!!document.querySelector('.development-toggle button')";
 const PREVIEW_READY: &str = "document.querySelectorAll('.native-development .scenario-buttons button').length === 7 && document.querySelector('.native-development [role=status]')?.textContent === 'Presentation applied to the main window.'";
+const SESSION_MESSAGE: &str =
+    "document.querySelector('.native-development fieldset p')?.textContent";
+const SESSION_FAILURE: &str = "Session control failed";
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CALLBACK_CAPACITY: usize = 1;
 const CALLBACK_ABANDONED: &str = "Readiness observer disconnected";
 const MAIN_LOADED: &str = "Main controls rendered; invoking development preview";
 const PREVIEW_LOADED: &str =
-    "Development controls rendered and applied; requesting normal window closure";
+    "Development controls rendered, session subscription initialized, and preview applied; requesting normal window closure";
 const CHECK_PASSED: &str =
-    "PASS: development controls rendered, applied state, and both windows closed normally";
+    "PASS: development controls rendered, session subscription initialized, applied state, and both windows closed normally";
 const FAILURE_EXIT: i32 = 1;
 const SUCCESS_EXIT: i32 = 0;
 const PREVIEW_TIMEOUT: &str =
     "FAIL: development WebView did not load and close normally before timeout";
+
+#[derive(Deserialize)]
+/// Actual DOM readiness and session transport failure; a visible permission failure terminates this isolated check immediately.
+struct Readiness {
+    ready: bool,
+    failure: Option<String>,
+}
 
 /// Terminates only this explicitly invoked test process if the native event loop wedges and cannot service normal close.
 fn watch_timeout(finished: Arc<AtomicBool>) {
@@ -38,6 +51,9 @@ fn watch_timeout(finished: Arc<AtomicBool>) {
 /// Reads a boolean DOM readiness condition from the actual WebView; timeout or malformed results fail the isolated check.
 fn ready(webview: &Webview, script: &str) -> bool {
     let (sender, receiver) = mpsc::sync_channel(CALLBACK_CAPACITY);
+    let script = format!(
+        "({{ready: ({script}), failure: ({SESSION_MESSAGE})?.startsWith('{SESSION_FAILURE}') ? ({SESSION_MESSAGE}) : null}})"
+    );
     webview
         .eval_with_callback(script, move |result| {
             // Only a terminated observer can reject this owned readiness result.
@@ -49,7 +65,13 @@ fn ready(webview: &Webview, script: &str) -> bool {
     let result = receiver
         .recv_timeout(TEST_TIMEOUT)
         .expect("Event loop must service readiness before timeout");
-    serde_json::from_str(&result).expect("Readiness script must return a boolean")
+    let state: Readiness =
+        serde_json::from_str(&result).expect("Owned readiness script must return its typed result");
+    if let Some(failure) = state.failure {
+        eprintln!("{failure}");
+        std::process::exit(FAILURE_EXIT);
+    }
+    state.ready
 }
 
 /// Waits on a worker for actual React controls, excluding network error pages and loading placeholders from success.
@@ -89,7 +111,11 @@ pub fn preview_window_loads_and_closes_through_real_ipc() {
                 let app = webview.app_handle().clone();
                 std::thread::spawn(move || {
                     // Closing from a worker allows native navigation callbacks to return before window dispatch.
-                    wait_ready(&webview, PREVIEW_READY);
+                    let expected_message = serde_json::to_string(READY)
+                        .expect("Static session message must serialize");
+                    let preview_ready =
+                        format!("({PREVIEW_READY}) && ({SESSION_MESSAGE}) === {expected_message}");
+                    wait_ready(&webview, &preview_ready);
                     observed.store(true, Ordering::SeqCst);
                     eprintln!("{PREVIEW_LOADED}");
                     app.get_webview_window(PREVIEW_WINDOW)

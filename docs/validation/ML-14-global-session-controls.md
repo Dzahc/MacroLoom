@@ -142,3 +142,37 @@ an optional Data Clumps suggestion for the existing Windows key tuple; it is not
 a documented standards violation and does not affect acceptance.
 
 The owner-run target-application checklist remains pending.
+
+## Owner feedback and development subscription fix
+
+October 12, 2026: the owner reported **Record, repeats, focus, and Stop passed**.
+Temporary playback/cancellation was blocked when opening development controls:
+`Session control failed: event.listen not allowed on window "compact-development"`.
+Playback/cancellation acceptance remains pending; this report establishes no
+successful playback evidence.
+
+The real-WebView check was strengthened to require the development pane's
+listener-first session snapshot, and to fail immediately on its visible session
+transport error. The same command above reproduced the exact denial with exit 1.
+Adding a separate capability for `compact-development`, granting only
+`core:event:allow-listen` and `core:event:allow-unlisten`, made the check pass
+with exit 0. The main window's broader capability remains scoped to `main`.
+
+Restart the native application before retrying **Temporary playback and
+cancellation**, because capabilities are embedded in the native build. The
+previously reported Record/Stop result remains recorded; repeat it only if a
+regression appears.
+
+Follow-up verification: `npm.cmd --prefix app run verify` — **PASS**, exit 0,
+with `CARGO_TARGET_DIR` set to the workspace-local
+`app/.quality-output/ML-14-verification-target`. The initial default-directory
+attempt was prevented by Windows locking the owner's running `macroloom.exe`;
+the separate cache allowed verification while preserving that process.
+All gate checks passed: 72 frontend/tooling tests, 58 Rust tests (two additional
+interactive tests ignored), 33 Python fixtures, and 988 function/closure
+complexity checks across index/worktree, with no exceptions. Full output:
+`app/.quality-output/ML-14-permission-verify.log`.
+
+`cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
+also passed for the strengthened native regression. Follow-up Standards review:
+no actionable findings. Follow-up Spec review: no actionable findings.

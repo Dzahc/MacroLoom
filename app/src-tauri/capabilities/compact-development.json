@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "compact-development",
+  "description": "Receive session status and release event listeners in the development controls window",
+  "windows": ["compact-development"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}
