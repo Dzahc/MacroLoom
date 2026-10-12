@@ -6,6 +6,7 @@ import {
   SESSION_COMMAND,
   type SessionSnapshot,
   type SessionTransport,
+  type ConfirmationRequest,
 } from '../src/session-contract.ts';
 import { PHASE, ACTION, canRequest } from '../src/library-model.ts';
 
@@ -127,4 +128,90 @@ void test('toolbar availability respects native recording and deferred playback'
     canRequest({ ...LIBRARY, playbackAvailable: false }, ACTION.play),
     false,
   );
+});
+
+/** A pending successful native claim is released after unmount, and its old owner cannot release the remounted owner's claim. */
+void test('late confirmation claim is released with its original owner', async () => {
+  let reply: ((value: SessionSnapshot) => void) | undefined;
+  const releases: ConfirmationRequest[] = [];
+  const controller = new SessionController({
+    /** @returns An immediately installed listener cleanup. */
+    listen: () =>
+      Promise.resolve(/** Fixture owns no native event resources. */ () => {}),
+    /** @returns Startup state for a current owner. */
+    invoke: () => Promise.resolve(snapshot(EARLY_REVISION)),
+    /** @param request Native owner claim/release. @returns One delayed acquisition and immediate cleanup results. */
+    confirmation: (request) => {
+      if (!request.blocked) {
+        releases.push(request);
+        return Promise.resolve(snapshot(EARLY_REVISION));
+      }
+      return new Promise(
+        /** @param resolve Delayed claim receipt. @returns Nothing. */
+        (resolve) => {
+          reply = resolve;
+        },
+      );
+    },
+  });
+  const disconnect = controller.connect();
+  const claim = controller.setConfirmation(true);
+  const owner = controller.confirmationOwner;
+  disconnect();
+  const disconnectNext = controller.connect();
+  assert.notEqual(controller.confirmationOwner, owner);
+  assert.ok(reply);
+  reply(snapshot(LATER_REVISION));
+  assert.equal(await claim, false);
+  await settle();
+  assert.ok(releases.length > 0);
+  assert.ok(
+    releases.every(
+      /** @param release Abandoned native claim release. @returns Whether it targets only the original owner. */
+      (release) => release.owner === owner,
+    ),
+  );
+  disconnectNext();
+});
+
+/** Sequential dialogs in one mounted window have distinct owners, so delayed Cancel acknowledgement cannot clear the newer claim. */
+void test('a new dialog gets a distinct owner while old Cancel acknowledgement is delayed', async () => {
+  let oldOwner: string | undefined;
+  let oldReply: ((value: SessionSnapshot) => void) | undefined;
+  const released: string[] = [];
+  const controller = new SessionController({
+    /** @returns Inert fixture event cleanup. */ listen: () =>
+      Promise.resolve(
+        /** No native subscriptions are acquired by this command fixture. */ () => {},
+      ),
+    /** @returns Current native snapshot. */ invoke: () =>
+      Promise.resolve(snapshot(EARLY_REVISION)),
+    /** @param request Owner-specific claim/release. @returns A delayed first Cancel acknowledgement with newer requests completing normally. */
+    confirmation: (request) => {
+      if (request.blocked) {
+        oldOwner ??= request.owner;
+        return Promise.resolve(snapshot(EARLY_REVISION));
+      }
+      released.push(request.owner);
+      if (request.owner !== oldOwner)
+        return Promise.resolve(snapshot(LATER_REVISION));
+      return new Promise(
+        /** @param resolve Old Cancel acknowledgement. @returns Nothing. */
+        (resolve) => {
+          oldReply = resolve;
+        },
+      );
+    },
+  });
+  assert.equal(await controller.setConfirmation(true), true);
+  const firstOwner = controller.confirmationOwner;
+  const cancel = controller.setConfirmation(false);
+  assert.equal(await controller.setConfirmation(true), true);
+  const nextOwner = controller.confirmationOwner;
+  assert.notEqual(nextOwner, firstOwner);
+  assert.ok(oldReply);
+  oldReply(snapshot(EARLY_REVISION));
+  await cancel;
+  assert.equal(await controller.setConfirmation(false), true);
+  assert.ok(released.includes(nextOwner));
 });

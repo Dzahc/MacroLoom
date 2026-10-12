@@ -222,22 +222,23 @@ pub fn preview_presentation(
     service: State<'_, PresentationService>,
 ) -> Result<PresentationSnapshot, String> {
     require_preview()?;
-    require_idle_session(&app)?;
-    let snapshot = service.publish(status)?;
-    app.emit_to(MAIN_WINDOW, PRESENTATION_EVENT, &snapshot)
-        .map_err(|error| error.to_string())?;
-    Ok(snapshot)
+    with_idle_session(&app, || {
+        let snapshot = service.publish(status)?;
+        app.emit_to(MAIN_WINDOW, PRESENTATION_EVENT, &snapshot)
+            .map_err(|error| error.to_string())?;
+        Ok(snapshot)
+    })
 }
 
 /// Keeps development presentation controls from overriding a real session or pending unsaved-close decision.
-fn require_idle_session(app: &AppHandle) -> Result<(), String> {
+fn with_idle_session<R>(
+    app: &AppHandle,
+    update: impl FnOnce() -> Result<R, String>,
+) -> Result<R, String> {
     if let Some(session) = app.try_state::<std::sync::Arc<crate::session::Session>>() {
-        let snapshot = session.snapshot()?;
-        if snapshot.phase != crate::session::Phase::Idle || snapshot.close_requested {
-            return Err(crate::session::ACTIVE_SESSION.into());
-        }
+        return session.preview(update);
     }
-    Ok(())
+    update()
 }
 
 #[tauri::command]
@@ -335,21 +336,23 @@ fn preview_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if !matches!(event, tauri::WindowEvent::Destroyed) {
         return;
     }
-    if require_idle_session(window.app_handle()).is_err() {
-        return;
-    }
     let Some(service) = window.try_state::<PresentationService>() else {
         return;
     };
-    let result = service
-        .publish(PreviewStatus::default())
-        .and_then(|snapshot| {
-            window
-                .app_handle()
-                .emit_to(MAIN_WINDOW, PRESENTATION_EVENT, snapshot)
-                .map_err(|error| error.to_string())
-        });
+    let result = with_idle_session(window.app_handle(), || {
+        service
+            .publish(PreviewStatus::default())
+            .and_then(|snapshot| {
+                window
+                    .app_handle()
+                    .emit_to(MAIN_WINDOW, PRESENTATION_EVENT, snapshot)
+                    .map_err(|error| error.to_string())
+            })
+    });
     if let Err(error) = result {
+        if error == crate::session::ACTIVE_SESSION {
+            return;
+        }
         eprintln!("{PREVIEW_CLOSE_FAILED}: {error}");
     }
 }

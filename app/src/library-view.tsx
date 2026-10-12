@@ -45,6 +45,8 @@ type ViewProps = LibraryCallbacks & {
   onDeleteConfirmed: DeleteConfirmed;
   onDeleteCancelled?: DeleteConfirmed;
   onDeleteOpening?: () => Promise<boolean>;
+  onDeleteDisposed?: () => void;
+  sessionControls?: ReactNode;
   onLayout?: (request: WindowViewRequest) => void;
 };
 type MenuAnchor = { macroId: string; x: number; y: number };
@@ -105,7 +107,13 @@ function Toolbar(props: ViewProps) {
 }
 
 /** @param props Supplied status snapshot. @returns A polite two-line status with session progress or full-view shortcut hints. */
-function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
+function MessageBanner({
+  snapshot,
+  controls,
+}: {
+  snapshot: LibrarySnapshot;
+  controls?: ReactNode;
+}) {
   const banner = sessionBanner(snapshot);
   return (
     <section
@@ -118,6 +126,7 @@ function MessageBanner({ snapshot }: { snapshot: LibrarySnapshot }) {
       <div>
         <strong title={banner.title}>{banner.title}</strong>
         <span>{banner.detail}</span>
+        {controls}
       </div>
     </section>
   );
@@ -270,6 +279,20 @@ export function LibraryView(props: ViewProps) {
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [attempt, setAttempt] = useState<DeleteConfirmation | null>(null);
   const opening = useRef(false);
+  const ownerGeneration = useRef(0);
+  const disposed = props.onDeleteDisposed;
+  useEffect(
+    /** Tracks dialog ownership and releases native confirmation resources on child unmount or owner replacement. */
+    () => {
+      ownerGeneration.current += 1;
+      /** Invalidates pending open replies before releasing the owner's native reservation. */
+      return () => {
+        ownerGeneration.current += 1;
+        if (disposed) disposed();
+      };
+    },
+    [disposed],
+  );
   const owner = useRef<HTMLElement>(null);
   const previousAttempt = useRef<DeleteConfirmation | null>(null);
   const suppressDismissalGesture = useRef(false);
@@ -326,9 +349,14 @@ export function LibraryView(props: ViewProps) {
   async function openDelete(target: MacroSummary, source: ActionSource) {
     if (opening.current) return;
     opening.current = true;
+    const generation = ownerGeneration.current;
     try {
       if (props.onDeleteOpening) {
         if (!(await props.onDeleteOpening())) return;
+      }
+      if (generation !== ownerGeneration.current) {
+        if (disposed) disposed();
+        return;
       }
       setMenu(null);
       setAttempt(new DeleteConfirmation(target, source));
@@ -410,7 +438,10 @@ export function LibraryView(props: ViewProps) {
       }
     >
       <Toolbar {...viewProps} />
-      <MessageBanner snapshot={props.snapshot} />
+      <MessageBanner
+        snapshot={props.snapshot}
+        controls={props.sessionControls}
+      />
       {props.notifications}
       <section
         className="macro-library"

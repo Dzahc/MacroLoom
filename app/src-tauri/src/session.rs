@@ -22,6 +22,8 @@ pub const CLEANUP_FAILED: &str =
 pub const REPLAY_COMPLETE: &str = "Temporary playback complete.";
 pub const REPLAY_CANCELLED: &str = "Playback stopped; injected input released.";
 pub const STATUS_INTERVAL: Duration = Duration::from_millis(100);
+const CONFIRMATION_OWNER_MAX: usize = 64;
+const INVALID_CONFIRMATION_OWNER: &str = "Invalid confirmation owner";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -89,6 +91,7 @@ struct State {
     cleanup_failed: bool,
     close_requested: bool,
     confirmation: Option<Box<dyn Send>>,
+    confirmation_owner: Option<String>,
 }
 impl Default for State {
     /// Initializes an idle owner with no input, cancellation, or reservations.
@@ -109,6 +112,7 @@ impl Default for State {
             cleanup_failed: false,
             close_requested: false,
             confirmation: None,
+            confirmation_owner: None,
         }
     }
 }
@@ -178,6 +182,9 @@ impl Session {
     }
     /// Acquires idle Record and probes Stop without retaining its reservation in inactive states.
     fn idle_shortcuts(&self) -> Result<(), String> {
+        if self.lock()?.phase != Phase::Idle {
+            return Ok(());
+        }
         let available = self.platform.available() && self.idle_available()?;
         let result = self.platform.shortcuts(available, false)?;
         let mut state = self.lock()?;
@@ -282,6 +289,16 @@ impl Session {
         state.message = error.into();
         Ok(())
     }
+    /// Runs a controlled presentation update only while Idle, holding the same transition guard as real session starts.
+    pub fn preview<R>(&self, update: impl FnOnce() -> Result<R, String>) -> Result<R, String> {
+        let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
+        let state = self.lock()?;
+        if state.phase != Phase::Idle || state.close_requested {
+            return Err(ACTIVE_SESSION.into());
+        }
+        drop(state);
+        update()
+    }
     /// Appends one observed event only while recording; short callbacks never do persistence or window transitions.
     pub fn capture(&self, kind: EventKind) {
         if let Ok(mut state) = self.lock() {
@@ -343,7 +360,18 @@ impl Session {
         if let Err(error) = self.platform.view(false) {
             return self.cleanup_error(format!("{CLEANUP_FAILED} {error}"));
         }
-        self.finish_cleanup()
+        self.complete_cleanup()
+    }
+    /// Makes resource-release failure actionable while allowing idle Record conflicts to remain ordinary availability errors.
+    fn complete_cleanup(&self) -> Result<(), String> {
+        if let Err(error) = self.finish_cleanup() {
+            if self.lock()?.phase == Phase::Stopping {
+                self.cleanup_error(format!("{CLEANUP_FAILED} {error}"))?;
+            } else {
+                self.report(error);
+            }
+        }
+        Ok(())
     }
     /// Releases only outstanding session-owned input, retaining every failed release for an explicit retry.
     fn release_outstanding(&self) -> Result<(), String> {
@@ -434,14 +462,14 @@ impl Session {
         }
         let _ = self.publish();
     }
-    /// Serializes cancellation against the final injection check; tracks only successful input.
+    /// Checks cancellation before native injection and tracks success afterwards; never holds session state across a callback-producing OS call.
     fn dispatch(&self, kind: &EventKind, cancel: &AtomicBool) -> Result<(), String> {
-        let mut state = self.lock()?;
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
         self.platform.inject(kind)?;
-        track_held(&mut state.held, kind);
+        // The playback worker retains ownership until this in-flight call and tracking complete, so Stop cannot start cleanup early.
+        track_held(&mut self.lock()?.held, kind);
         Ok(())
     }
     /// Stops the worker on injection failure and gives failure precedence over successful completion.
@@ -449,25 +477,60 @@ impl Session {
         if let Ok(mut state) = self.lock() {
             state.cancel.store(true, Ordering::Release);
             state.terminal = format!("Playback failed: {error}");
+            state.phase = Phase::Stopping;
         }
     }
     /// Atomically reserves/releases a native confirmation interlock so global Record cannot race a Delete dialog.
-    pub fn confirmation(&self, blocked: bool) -> Result<Snapshot, String> {
+    pub fn confirmation(&self, owner: &str, blocked: bool) -> Result<Snapshot, String> {
+        validate_confirmation_owner(owner)?;
         let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
         if blocked {
-            let mut state = self.lock()?;
-            if state.phase != Phase::Idle {
-                return Err(ACTIVE_SESSION.into());
-            }
-            if state.confirmation.is_none() {
-                state.confirmation = Some(self.platform.reserve()?);
-            }
+            self.reserve_confirmation(owner)?;
         } else {
-            self.lock()?.confirmation = None;
+            self.release_confirmation(owner)?;
         }
         self.idle_shortcuts()?;
         self.publish()?;
         self.snapshot()
+    }
+    /// Claims a confirmation for exactly one frontend owner; stale/reconnected owners cannot reuse another dialog's reservation.
+    fn reserve_confirmation(&self, owner: &str) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.phase != Phase::Idle {
+            return Err(ACTIVE_SESSION.into());
+        }
+        if let Some(existing) = &state.confirmation_owner {
+            if existing != owner {
+                return Err(ACTIVE_SESSION.into());
+            }
+        }
+        if state.confirmation.is_none() {
+            state.confirmation = Some(self.platform.reserve()?);
+            state.confirmation_owner = Some(owner.into());
+        }
+        Ok(())
+    }
+    /// Releases only the calling owner's confirmation, leaving a newer owner's reservation untouched.
+    fn release_confirmation(&self, owner: &str) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.confirmation_owner.as_deref() == Some(owner) {
+            state.confirmation = None;
+            state.confirmation_owner = None;
+        }
+        Ok(())
+    }
+    /// Transfers confirmed-dialog operation ownership directly to deletion without permitting an intervening session start.
+    pub fn take_confirmation(&self, owner: Option<&str>) -> Result<Option<Box<dyn Send>>, String> {
+        let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
+        let mut state = self.lock()?;
+        if state.phase != Phase::Idle {
+            return Err(ACTIVE_SESSION.into());
+        }
+        if state.confirmation_owner.as_deref() != owner {
+            return Err(ACTIVE_SESSION.into());
+        }
+        state.confirmation_owner = None;
+        Ok(state.confirmation.take())
     }
     /// Prevents exit until active work stops and any unsaved recording receives an explicit discard decision.
     pub fn request_close(&self) -> Result<bool, String> {
@@ -519,6 +582,13 @@ fn update_shortcut_message(state: &mut State, availability: Availability) {
     } else if state.message == STOP_UNAVAILABLE || state.message == RECORD_UNAVAILABLE {
         state.message = state.terminal.clone();
     }
+}
+/// Validates externally supplied owner IDs before they can acquire or release native operation ownership.
+fn validate_confirmation_owner(owner: &str) -> Result<(), String> {
+    if owner.is_empty() || owner.len() > CONFIRMATION_OWNER_MAX || !owner.is_ascii() {
+        return Err(INVALID_CONFIRMATION_OWNER.into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

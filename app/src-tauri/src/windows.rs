@@ -375,19 +375,25 @@ impl HookRuntime {
         if !self.hooks_ready {
             return Err(HOOK_FAILED.into());
         }
+        let result = self.apply_keys(record, stop);
+        *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
+            record: self.record,
+            stop: self.stop,
+        };
+        result?;
+        Ok(Availability {
+            record: self.record,
+            stop: self.stop_available,
+        })
+    }
+    /// Updates individual physical reservations; the caller publishes actual ownership even after partial failure.
+    fn apply_keys(&mut self, record: bool, stop: bool) -> Result<(), String> {
         self.record = update_registration(self.record, RECORD_ID, RECORD_KEY, record)?;
         self.stop = update_registration(self.stop, STOP_ID, STOP_KEY, stop)?;
         if stop {
             self.stop_available = self.stop;
         }
-        *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
-            record: self.record,
-            stop: self.stop,
-        };
-        Ok(Availability {
-            record: self.record,
-            stop: self.stop_available,
-        })
+        Ok(())
     }
 }
 /// Registers/unregisters one OS key on the hook thread, retaining current ownership on failure.

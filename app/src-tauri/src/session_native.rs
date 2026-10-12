@@ -241,12 +241,13 @@ pub async fn play(
 /// Reserves/releases a frontend confirmation through the backend interlock before displaying it.
 pub async fn session_confirmation(
     blocked: bool,
+    owner: String,
     window: WebviewWindow,
     session: State<'_, Arc<Session>>,
 ) -> Result<Snapshot, String> {
     require_caller(&window)?;
     let session = session.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || session.confirmation(blocked))
+    tauri::async_runtime::spawn_blocking(move || session.confirmation(&owner, blocked))
         .await
         .map_err(|error| error.to_string())?
 }

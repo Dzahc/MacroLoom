@@ -64,12 +64,17 @@ export const INITIAL_SESSION: SessionSnapshot = {
   closeRequested: false,
   unsaved: false,
 };
+/** Commands whose input is empty and whose result is a revisioned session snapshot. */
+export type SnapshotCommand = Exclude<
+  (typeof SESSION_COMMAND)[keyof typeof SESSION_COMMAND],
+  typeof SESSION_COMMAND.confirmation | typeof SESSION_COMMAND.discardExit
+>;
+/** Validated native confirmation claim/release; each mounted owner uses a distinct identity. */
+export type ConfirmationRequest = Readonly<{ owner: string; blocked: boolean }>;
 
 /** Native subscription and command boundaries; no timer or session lifecycle is implemented in the frontend. */
 export type SessionTransport = {
   listen: (receive: (snapshot: SessionSnapshot) => void) => Promise<() => void>;
-  invoke: (
-    command: string,
-    args?: Record<string, unknown>,
-  ) => Promise<SessionSnapshot>;
+  invoke: (command: SnapshotCommand) => Promise<SessionSnapshot>;
+  confirmation?: (request: ConfirmationRequest) => Promise<SessionSnapshot>;
 };
