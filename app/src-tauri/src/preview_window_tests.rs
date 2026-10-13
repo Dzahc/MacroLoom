@@ -12,6 +12,7 @@ use tauri::{webview::PageLoadEvent, Manager, Webview};
 const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const OPEN_PREVIEW: &str = "window.__TAURI_INTERNALS__.invoke('open_presentation_preview')";
 const MAIN_READY: &str = "!!document.querySelector('.development-toggle button')";
+const FOCUS_READY: &str = "document.hasFocus()";
 const PREVIEW_READY: &str = "document.querySelectorAll('.native-development .scenario-buttons button').length === 7 && document.querySelector('.native-development [role=status]')?.textContent === 'Presentation applied to the main window.'";
 const SESSION_MESSAGE: &str =
     "document.querySelector('.native-development fieldset p')?.textContent";
@@ -23,7 +24,7 @@ const MAIN_LOADED: &str = "Main controls rendered; invoking development preview"
 const PREVIEW_LOADED: &str =
     "Development controls rendered, session subscription initialized, and preview applied; requesting normal window closure";
 const CHECK_PASSED: &str =
-    "PASS: development controls rendered, session subscription initialized, applied state, and both windows closed normally";
+    "PASS: real focused-window F9 hook delivery, development session subscription, applied state, and normal closure";
 const FAILURE_EXIT: i32 = 1;
 const SUCCESS_EXIT: i32 = 0;
 const PREVIEW_TIMEOUT: &str =
@@ -81,6 +82,22 @@ fn wait_ready(webview: &Webview, script: &str) {
     }
 }
 
+/// Focuses only the owned test window and verifies a genuine OS-delivered F9 release; missing delivery fails the isolated check.
+fn check_delivery(webview: &Webview) {
+    let window = webview
+        .app_handle()
+        .get_webview_window(webview.label())
+        .expect("Loaded test WebView must retain its owned window");
+    window
+        .set_focus()
+        .expect("Owned test window must accept focus");
+    wait_ready(webview, FOCUS_READY);
+    if let Err(error) = windows::check_focused_key_delivery() {
+        eprintln!("FAIL: {error}");
+        std::process::exit(FAILURE_EXIT);
+    }
+}
+
 /// Opens the actual preview through frontend IPC, waits for its WebView to finish loading, and closes both real windows normally.
 pub fn preview_window_loads_and_closes_through_real_ipc() {
     windows::enable_physical_dpi();
@@ -100,6 +117,7 @@ pub fn preview_window_loads_and_closes_through_real_ipc() {
                 std::thread::spawn(move || {
                     // Release the native load callback before dispatching the same IPC used by the development button.
                     wait_ready(&webview, MAIN_READY);
+                    check_delivery(&webview);
                     eprintln!("{MAIN_LOADED}");
                     webview
                         .eval(OPEN_PREVIEW)
@@ -116,6 +134,7 @@ pub fn preview_window_loads_and_closes_through_real_ipc() {
                     let preview_ready =
                         format!("({PREVIEW_READY}) && ({SESSION_MESSAGE}) === {expected_message}");
                     wait_ready(&webview, &preview_ready);
+                    check_delivery(&webview);
                     observed.store(true, Ordering::SeqCst);
                     eprintln!("{PREVIEW_LOADED}");
                     app.get_webview_window(PREVIEW_WINDOW)

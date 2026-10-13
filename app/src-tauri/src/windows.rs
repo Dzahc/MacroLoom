@@ -365,7 +365,7 @@ struct ReservationJob {
     stop: bool,
     reply: mpsc::SyncSender<Result<Availability, String>>,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 /// Work queued by short native callbacks; no window or storage work runs inside a hook.
 enum ControlJob {
     Record,
@@ -447,7 +447,6 @@ fn wake_hook(message: u32) -> Result<(), String> {
 }
 /// Installs capture callbacks and starts a backend control worker; failures remain distinct from shortcut conflicts.
 pub fn start_hooks(session: Arc<Session>, hwnd: isize) -> Result<(), String> {
-    crate::shortcut_trace::start();
     ENGINE.set(session.clone()).map_err(|_| HOOK_FAILED)?;
     MAIN_HWND.store(hwnd, Ordering::Release);
     let (jobs, receive_jobs) = mpsc::channel();
@@ -470,7 +469,6 @@ fn control_loop(session: Arc<Session>, controls: mpsc::Receiver<ControlJob>) {
             ControlJob::Stop => session.stop(),
             ControlJob::Suspend => session.suspend(),
         };
-        crate::shortcut_trace::completed(control, &result);
         if let Err(error) = result {
             if error != crate::session::ACTIVE_SESSION {
                 session.report(error);
@@ -577,6 +575,121 @@ fn own_window_focused() -> bool {
     // SAFETY: this by-value process identifier getter has no pointer or lifetime requirements.
     process == unsafe { GetCurrentProcessId() }
 }
+
+#[cfg(feature = "native-checks")]
+static CHECK_KEY_DELIVERY: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "native-checks")]
+const CHECK_KEY_DOWN: u32 = 1;
+#[cfg(feature = "native-checks")]
+const CHECK_KEY_UP: u32 = 2;
+#[cfg(feature = "native-checks")]
+const CHECK_KEY_COMPLETE: u32 = CHECK_KEY_UP;
+#[cfg(feature = "native-checks")]
+const CHECK_KEY_POLL: Duration = Duration::from_millis(10);
+
+#[cfg(feature = "native-checks")]
+/// Owns one isolated observation thread; dropping it stops the pump and releases its test hook before returning.
+struct DeliveryObserver {
+    thread: u32,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+#[cfg(feature = "native-checks")]
+impl DeliveryObserver {
+    /// Starts a genuine low-level observer with a message pump, publishing its thread only after successful installation.
+    fn start() -> Result<Self, String> {
+        let (ready, receive) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || delivery_observer_loop(ready));
+        let thread = receive
+            .recv_timeout(HOOK_TIMEOUT)
+            .map_err(|error| error.to_string())??;
+        Ok(Self {
+            thread,
+            worker: Some(worker),
+        })
+    }
+}
+#[cfg(feature = "native-checks")]
+impl Drop for DeliveryObserver {
+    /// Requests shutdown of only this test-owned pump; joining ensures the static callback is uninstalled before later checks.
+    fn drop(&mut self) {
+        // SAFETY: startup publishes this thread only after creating its queue; WM_QUIT carries no pointers.
+        unsafe {
+            PostThreadMessageW(self.thread, WM_QUIT, 0, 0);
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+#[cfg(feature = "native-checks")]
+/// Observes OS-delivered tagged F9 down/up without consuming them; negative codes and unrelated input always chain normally.
+unsafe extern "system" fn delivery_observer(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
+    if code >= 0 {
+        // SAFETY: Windows provides live callback storage for a nonnegative code; nothing is retained beyond this call.
+        let input = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
+        if input.dwExtraInfo == EXTRA_INFO && input.vkCode == u32::from(RECORD_KEY) {
+            let bit = match message as u32 {
+                WM_KEYDOWN => CHECK_KEY_DOWN,
+                WM_KEYUP => CHECK_KEY_UP,
+                _ => 0,
+            };
+            CHECK_KEY_DELIVERY.fetch_or(bit, Ordering::Release);
+        }
+    }
+    // SAFETY: the original live hook arguments are forwarded without retaining the callback pointer.
+    unsafe { CallNextHookEx(null_mut(), code, message, data) }
+}
+#[cfg(feature = "native-checks")]
+/// Installs and pumps the test observer on its own thread; every successful installation is unhooked before thread exit.
+fn delivery_observer_loop(ready: mpsc::SyncSender<Result<u32, String>>) {
+    // SAFETY: zeroed MSG is writable output storage; peeking creates this thread's message queue before it is published.
+    let mut message: MSG = unsafe { std::mem::zeroed() };
+    unsafe {
+        PeekMessageW(&mut message, null_mut(), 0, 0, PM_NOREMOVE);
+    }
+    // SAFETY: the callback is static and the hook is uninstalled on this thread before it exits.
+    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(delivery_observer), null_mut(), 0) };
+    if hook.is_null() {
+        let _ = ready.send(Err(HOOK_FAILED.into()));
+        return;
+    }
+    // SAFETY: this getter has no borrowed pointers and identifies the thread owning the hook and initialized queue.
+    if ready.send(Ok(unsafe { GetCurrentThreadId() })).is_err() {
+        // SAFETY: startup was abandoned; this thread still owns the live hook and releases it before returning.
+        unsafe {
+            UnhookWindowsHookEx(hook);
+        }
+        return;
+    }
+    // SAFETY: message remains initialized synchronous output storage throughout this test-owned message pump.
+    while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {}
+    // SAFETY: this thread still owns the valid hook returned above, after its message loop has stopped dispatching.
+    unsafe {
+        UnhookWindowsHookEx(hook);
+    }
+}
+#[cfg(feature = "native-checks")]
+/// Checks actual Windows-to-hook delivery while a test app window is focused, rather than directly calling our handler.
+/// Sends only a tagged F9 release, avoiding injected holds even if dispatch fails; requires an interactive quiet desktop.
+pub(crate) fn check_focused_key_delivery() -> Result<(), String> {
+    if !own_window_focused() {
+        return Err("The isolated check must own foreground focus before sending F9".into());
+    }
+    let _observer = DeliveryObserver::start()?;
+    CHECK_KEY_DELIVERY.store(0, Ordering::Release);
+    send(&[keyboard(RECORD_KEY, 0, false, false)])?;
+    let deadline = std::time::Instant::now() + HOOK_TIMEOUT;
+    while CHECK_KEY_DELIVERY.load(Ordering::Acquire) != CHECK_KEY_COMPLETE {
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("F9 hook delivery missing with test app focused: observed mask={}, expected mask={CHECK_KEY_COMPLETE}", CHECK_KEY_DELIVERY.load(Ordering::Acquire)));
+        }
+        std::thread::sleep(CHECK_KEY_POLL);
+    }
+    if !own_window_focused() {
+        return Err("The isolated check lost foreground focus during F9 delivery".into());
+    }
+    Ok(())
+}
 /// Returns whether a physical position is inside the current actual main-window frame.
 fn own_point(point: POINT) -> bool {
     point_in_window(MAIN_HWND.load(Ordering::Acquire), point).unwrap_or(true)
@@ -622,34 +735,12 @@ unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM
     if code >= 0 {
         // SAFETY: a nonnegative hook code supplies a KBDLLHOOKSTRUCT valid for this callback; no pointer is retained.
         let input = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
-        let consumed = handle_keyboard(input, message);
-        trace_key(input, message, consumed);
-        if consumed {
+        if handle_keyboard(input, message) {
             return 1;
         }
     }
     // SAFETY: chaining passes Windows' original hook arguments without retaining their pointers.
     unsafe { CallNextHookEx(null_mut(), code, message, data) }
-}
-/// Queues only F8/F9 metadata for opt-in diagnostics; never logs recorded keys or performs terminal I/O in the callback.
-fn trace_key(input: &KBDLLHOOKSTRUCT, message: WPARAM, consumed: bool) {
-    if input.vkCode != u32::from(RECORD_KEY) && input.vkCode != u32::from(STOP_KEY) {
-        return;
-    }
-    if !crate::shortcut_trace::enabled() {
-        return;
-    }
-    let reserved = RESERVED.lock().map(|value| *value).unwrap_or_default();
-    crate::shortcut_trace::key(crate::shortcut_trace::KeyTrace {
-        key: input.vkCode,
-        flags: input.flags,
-        injected: input.flags & LLKHF_INJECTED != 0,
-        message,
-        app_focused: own_window_focused(),
-        record_reserved: reserved.record,
-        stop_reserved: reserved.stop,
-        consumed,
-    });
 }
 /// Handles a valid down/up message; unrelated messages and injected MacroLoom input are ignored.
 fn handle_keyboard(input: &KBDLLHOOKSTRUCT, message: WPARAM) -> bool {

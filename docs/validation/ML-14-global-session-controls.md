@@ -182,8 +182,8 @@ no actionable findings. Follow-up Spec review: no actionable findings.
 October 12, 2026: the owner confirmed **Temporary playback and cancellation**
 passed. The owner delegated **Controlled registration conflicts** to the agent
 and reported physical F8/F9 were ineffective with either the main window or
-development pane focused. That physical-keyboard failure remains unresolved;
-app-focused control dispatch is intended to work.
+development pane focused. The subsequent trace and real-delivery regression below
+identified the focused-window runtime issue.
 
 The agent ran:
 
@@ -209,34 +209,59 @@ gate checks passed. Full output: `app/.quality-output/ML-14-controls-verify.log`
 The final native control check also passed with opt-in tracing enabled; output:
 `app/.quality-output/ML-14-native-controls.log`. Clippy with `--features native-checks
 --all-targets -- -D warnings` passed. Follow-up Standards and Spec reviews found
-no remaining actionable findings; physical focused-window acceptance remains
-pending the owner's diagnostic trace.
+no remaining actionable findings. The owner subsequently supplied the diagnostic
+trace summarized below.
 
-## Diagnose physical shortcuts with MacroLoom focused
+## Focused-window hook delivery regression and fix
 
-Launch the normal app with opt-in development tracing:
+October 12, 2026: the owner's trace showed real non-injected F9/F8 callbacks and
+successful Record/Stop with `app_focused=false`, and no callbacks at all with
+either MacroLoom window focused. Direct callback fixtures had skipped the failing
+Windows-to-hook delivery path.
 
-```powershell
-$env:MACROLOOM_TRACE_SHORTCUTS = '1'
-npm.cmd --prefix app run tauri -- dev
-```
+The real-WebView `compact-preview-check` now focuses each owned test window,
+installs a genuine low-level observer with its own message pump, and sends tagged
+F9 release through Windows `SendInput`. It requires the OS-delivered callback;
+the injected tag is excluded from session capture and control actions. The initial
+down/up version reproduced the missing-delivery symptom before the fix: observed
+mask 0, expected mask 3, exit 1. Output:
+`app/.quality-output/ML-14-focused-hook-red.log`.
+
+Setting `.device_event_filter(tauri::DeviceEventFilter::Always)` on the desktop
+builder made the identical check pass for both main and development windows,
+exit 0. `Always` filters Tao's raw device events; the pinned Tao implementation
+removes its raw keyboard/mouse registration. MacroLoom continues using its native
+hooks. This matches the [upstream focused-hook report](https://github.com/tauri-apps/wry/issues/1761)
+and its reported setting. No DOM shortcut fallback or duplicate action path was
+added. Output: `app/.quality-output/ML-14-focused-hook-green.log`.
+
+Temporary shortcut tracing and its environment switch were removed after the
+cause was reproduced. To confirm on the owner's physical keyboard, restart the
+normal development app with the Launch command above, then:
 
 1. Wait for library loading to finish. With the **main window** focused, tap F9.
-   Expect recording to start and the compact view to appear. If it starts, tap F8
-   without changing focus; expect it to stop and restore the full view.
-2. Repeat with the **development pane** focused. If F9 fails, try the main
-   toolbar Record button and then F8 while MacroLoom remains focused. Report
-   whether the button starts recording and the banner text shown.
-3. Repeat F9/F8 with **Notepad** focused as a comparison. Stop any active session
-   before each fresh F9 attempt.
-4. Paste the terminal lines beginning `[ML-14 shortcut trace]`, identifying which
-   attempts used each focused window. Tracing records only control-key metadata,
-   reservation/focus flags, and backend outcomes, without recording text in logs.
-   If only the startup trace line appears, report that too.
+   Expect recording and the compact view. Tap F8 without changing focus; expect
+   recording to stop and the full view to return.
+2. Repeat with the **development pane** focused. Expect the same lifecycle.
+3. Repeat with **Notepad** focused to check the existing global path. F8 only
+   stops active work; no phase change is expected from F8 while idle.
 
-F8 only stops active work; no session change is expected from F8 while idle.
-The environment switch is disabled in release builds. After this diagnostic run:
+Physical-keyboard acceptance for this fix remains pending the owner's retest.
 
-```powershell
-Remove-Item Env:MACROLOOM_TRACE_SHORTCUTS
-```
+The final review required safer native test failure handling: abandon and release
+an observer when readiness delivery fails, and send only a release so partial
+injection cannot leave a held key. Those changes are applied. The check also waits
+for the asynchronous focus request to settle through `document.hasFocus()` before
+probing, and verifies foreground ownership after delivery.
+
+After the usage-limit interruption, the final release-only check passed in both
+windows, exit 0. Output: `app/.quality-output/ML-14-focused-hook-final.log`.
+Native-feature Clippy passed. Standards review found no remaining fixture or
+standards findings; Spec review found no actionable findings.
+
+Final `npm.cmd --prefix app run verify` — **PASS**, exit 0, with the separate
+workspace-local Cargo target directory: 72 frontend/tooling tests, 58 Rust tests
+(two additional interactive tests ignored), 33 Python fixtures, and 1094
+function/closure complexity checks across index/worktree, with no exceptions.
+Formatting, type checking, lint, production build, and all other gate checks
+passed. Full output: `app/.quality-output/ML-14-focused-verify.log`.

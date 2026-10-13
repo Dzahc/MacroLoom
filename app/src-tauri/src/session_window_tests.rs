@@ -138,9 +138,7 @@ fn physical_key(key: u16, down: bool) -> bool {
     } else {
         WM_KEYUP as usize
     };
-    let consumed = handle_keyboard(&input, message);
-    trace_key(&input, message, consumed);
-    consumed
+    handle_keyboard(&input, message)
 }
 /// Exercises reserved controls with the selected real app window focused, while ordinary own-window keys remain excluded.
 fn focused_controls(window: &WebviewWindow, session: &Session) -> Result<(), String> {

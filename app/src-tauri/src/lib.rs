@@ -10,7 +10,6 @@ pub mod repository;
 mod session;
 mod session_native;
 mod session_publication;
-mod shortcut_trace;
 mod shortcuts;
 mod window_view;
 mod windows;
@@ -50,6 +49,8 @@ pub fn hold_conflict_shortcut() -> Result<(), String> {
 /// Registers services and lifecycle owners; input_enabled selects real hooks or an isolated presentation-only check.
 fn desktop_builder(input_enabled: bool) -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        // Always filters Tao raw device events, removing its keyboard registration that suppresses our focused-window hooks.
+        .device_event_filter(tauri::DeviceEventFilter::Always)
         .setup(move |app| {
             app.manage(configure::ConfigureService::default());
             app.manage(library_commands::LibraryService::new());
@@ -103,7 +104,7 @@ fn desktop_builder(input_enabled: bool) -> tauri::Builder<tauri::Wry> {
 #[cfg(feature = "native-checks")]
 mod preview_window_tests;
 #[cfg(feature = "native-checks")]
-/// Runs the isolated real-WebView development check with no input hooks; requires Vite and closes its own windows.
+/// Runs the isolated real-WebView check without session capture hooks; observes actual tagged keyboard delivery and closes its own windows.
 pub fn check_development_preview() {
     const CHECK_SUPPORTED: &str =
         "Native preview checks require development library mode without input hooks";
