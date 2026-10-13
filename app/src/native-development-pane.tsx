@@ -13,6 +13,9 @@ import {
   previewStatus,
   type SessionScenario,
 } from './session-samples';
+import { useNativeSession } from './native-session';
+import { SESSION_COMMAND, SESSION_TEXT } from './session-contract';
+import { PHASE } from './library-model';
 
 const PREVIEW_TEXT = {
   title: 'Compact development preview',
@@ -27,6 +30,7 @@ const PREVIEW_TEXT = {
 
 /** @returns Development-only native controls in their own window, preserving access while the main view is compact. */
 export function NativeDevelopmentPane() {
+  const nativeSession = useNativeSession();
   const [scenario, setScenario] = useState<SessionScenario>(
     SESSION_SCENARIO.idle,
   );
@@ -97,6 +101,41 @@ export function NativeDevelopmentPane() {
     >
       <h2>{PREVIEW_TEXT.title}</h2>
       <p>{PREVIEW_TEXT.hint}</p>
+      <fieldset>
+        <legend>{SESSION_TEXT.replay}</legend>
+        <p>{nativeSession.snapshot.message}</p>
+        <p>
+          {nativeSession.snapshot.eventCount} events ·{' '}
+          {nativeSession.snapshot.durationMs} ms
+        </p>
+        <button
+          type="button"
+          disabled={
+            nativeSession.snapshot.phase !== PHASE.idle ||
+            !nativeSession.snapshot.unsaved
+          }
+          onClick={
+            /** Replays only the temporary in-memory capture; the first recorded target click establishes playback focus. */
+            () => {
+              void nativeSession.controller.request(SESSION_COMMAND.replay);
+            }
+          }
+        >
+          {SESSION_TEXT.replay}
+        </button>
+        <button
+          type="button"
+          disabled={nativeSession.snapshot.phase === PHASE.idle}
+          onClick={
+            /** Stops the real backend session directly through its shared command boundary. */
+            () => {
+              void nativeSession.controller.request(SESSION_COMMAND.stop);
+            }
+          }
+        >
+          {SESSION_TEXT.cleanup}
+        </button>
+      </fieldset>
       <label>
         <input
           type="checkbox"

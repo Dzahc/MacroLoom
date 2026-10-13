@@ -35,6 +35,9 @@ import {
 } from './compact-presentation';
 import { useCompactWindow, useSessionPresentation } from './native-compact';
 import { DEV_TEXT } from './library-samples';
+import { useNativeSession } from './native-session';
+import { SessionControls } from './session-controls';
+import { SESSION_COMMAND } from './session-contract';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -65,9 +68,18 @@ export function LiveLibraryApp({
 }: {
   onPreparedAction?: (action: PreparedAction) => void;
 }) {
+  const nativeSession = useNativeSession();
   const [controller] = useState(
     /** @returns One controller for this mounted application. */ () =>
-      new LibraryController(NATIVE_TRANSPORT),
+      new LibraryController({
+        ...NATIVE_TRANSPORT,
+        /** @param id Explicitly confirmed macro. @returns Deletion result with native confirmation ownership transferred atomically. */
+        delete: (id) =>
+          invoke<BackendLibraryState>(LIBRARY_COMMAND.delete, {
+            macroId: id,
+            confirmationOwner: nativeSession.controller.confirmationOwner,
+          }),
+      }),
   );
   const snapshot = useSyncExternalStore(
     controller.subscribe,
@@ -85,7 +97,14 @@ export function LiveLibraryApp({
       windowController.report(`${CONFIGURE_TEXT.uncertain} ${String(reason)}`),
   );
   const desiredCompact = isCompactPhase(session.phase);
-  const presentation = presentedLibrary(snapshot, session, view);
+  const presentation = {
+    ...presentedLibrary(snapshot, session, view),
+    message: snapshot.loading
+      ? snapshot.message
+      : nativeSession.snapshot.message,
+    recordingAvailable: nativeSession.snapshot.canRecord,
+    playbackAvailable: false,
+  };
   const compact = isCompactView(presentation);
   const layout = useCallback(
     /** @param request Measured logical content. @returns Nothing; the serialized controller converts native rejections to timed toasts. */
@@ -114,10 +133,35 @@ export function LiveLibraryApp({
   }
   /** @param macroId Deliberately confirmed stable ID. @returns Worker deletion completion; outcomes are controller-owned. */
   function confirmDelete(macroId: string) {
-    return controller.deleteConfirmed(macroId);
+    const owner = nativeSession.controller.confirmationOwner;
+    return controller.deleteConfirmed(macroId).finally(
+      /** Retires the original dialog owner after worker completion; a newer dialog has a distinct token. */
+      () => nativeSession.controller.confirmationDone(owner),
+    );
   }
+  const openDelete = useCallback(
+    /** Claims the native confirmation interlock before the dialog appears. @returns Whether confirmation may open. */
+    () => nativeSession.controller.setConfirmation(true),
+    [nativeSession.controller],
+  );
+  /** Releases the native reservation on Cancel or dialog-owner cleanup; errors stay visible. */
+  const cancelDelete = useCallback(
+    /** Releases this owner's native confirmation on Cancel or dialog unmount; late owners cannot release a newer claim. */
+    () => {
+      void nativeSession.controller.setConfirmation(false);
+    },
+    [nativeSession.controller],
+  );
   /** @param request Available operation. @returns Nothing; asynchronously supplies data to later-story consumer. */
   function action(request: LibraryAction) {
+    if (request.action === ACTION.record || request.action === ACTION.stop) {
+      const command =
+        request.action === ACTION.record
+          ? SESSION_COMMAND.record
+          : SESSION_COMMAND.stop;
+      void nativeSession.controller.request(command);
+      return;
+    }
     if (configure.busy) return;
     if (request.action === ACTION.configure) {
       void configure.open(request).catch(
@@ -172,6 +216,15 @@ export function LiveLibraryApp({
           onSelect={select}
           onAction={action}
           onDeleteConfirmed={confirmDelete}
+          onDeleteOpening={openDelete}
+          onDeleteCancelled={cancelDelete}
+          onDeleteDisposed={cancelDelete}
+          sessionControls={
+            <SessionControls
+              snapshot={nativeSession.snapshot}
+              controller={nativeSession.controller}
+            />
+          }
           onLayout={layout}
           notifications={
             <>

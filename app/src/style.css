@@ -130,6 +130,16 @@ svg {
   min-width: 0;
   flex: 1;
 }
+.session-controls:empty {
+  display: none;
+}
+.session-controls p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.session-controls button {
+  margin: 0.25rem 0.4rem 0 0;
+}
 .library-window.compact {
   flex: none;
   width: 100%;

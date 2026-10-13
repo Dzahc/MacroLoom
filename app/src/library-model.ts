@@ -90,6 +90,10 @@ export type LibrarySnapshot = Readonly<{
   message: string;
   loading?: boolean;
   writable?: boolean;
+  /** Native session availability includes the required global Stop reservation check. */
+  recordingAvailable?: boolean;
+  /** Saved-library playback remains unavailable until its implementation story is integrated. */
+  playbackAvailable?: boolean;
   /** Stable ID being removed; selection and scrolling remain available while actions are blocked. */
   deleting?: string | null;
   /** UI confirmation interlock; future native shortcut/session guards must enforce the same exclusion. */
@@ -146,16 +150,26 @@ export function canRequest(
       /** @param phase Stop-capable phase. @returns Whether the current phase matches. */
       (phase) => phase === snapshot.phase,
     );
-  if (snapshot.phase !== PHASE.idle) return false;
-  if (snapshot.deleting) return false;
-  if (snapshot.confirmationOpen) return false;
-  if (action === ACTION.record) return snapshot.writable !== false;
+  if (!canStartOperation(snapshot)) return false;
+  if (action === ACTION.record)
+    return snapshot.writable !== false && snapshot.recordingAvailable !== false;
+  if (action === ACTION.play && snapshot.playbackAvailable === false)
+    return false;
   if (action === ACTION.delete) {
     if (snapshot.writable === false) return false;
   }
   return snapshot.macros.some(
     /** @param macro Candidate entry. @returns Whether the requested ID exists. */
     (macro) => macro.id === macroId,
+  );
+}
+
+/** @param snapshot Backend-derived library/session interlocks. @returns Whether a new mutating operation may be requested. */
+function canStartOperation(snapshot: LibrarySnapshot): boolean {
+  return (
+    snapshot.phase === PHASE.idle &&
+    !snapshot.deleting &&
+    !snapshot.confirmationOpen
   );
 }
 
