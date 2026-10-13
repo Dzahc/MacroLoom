@@ -246,7 +246,11 @@ normal development app with the Launch command above, then:
 3. Repeat with **Notepad** focused to check the existing global path. F8 only
    stops active work; no phase change is expected from F8 while idle.
 
-Physical-keyboard acceptance for this fix remains pending the owner's retest.
+October 12, 2026: the owner explicitly confirmed **F8/F9 work now with MacroLoom
+focused**. Physical-keyboard acceptance for the focused-window fix is **PASS**.
+The earlier Record/repeats/focus/Stop and temporary playback/cancellation passes
+remain recorded. Close, sleep, and operation-exclusion manual observations remain
+pending; this confirmation does not establish a numerical Stop response time.
 
 The final review required safer native test failure handling: abandon and release
 an observer when readiness delivery fails, and send only a release so partial
