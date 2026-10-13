@@ -27,6 +27,8 @@ stops active work and requires explicit Discard and exit or Keep open.
 - Record button and F9 use the same backend start validation and session owner.
   Repeated/held Record never restarts or toggles capture; recording and playback
   cannot overlap or overlap Configure, deletion, or library initialization.
+- Record/Stop shortcuts also work with the main window or development controls
+  focused. Ordinary typing into MacroLoom stays excluded from capture.
 - Reserve F9 while idle/recording, releasing it in other unavailable states.
   Reserve F8 before committing any session start and keep it through recording,
   playback, waits, and cleanup. Release it after terminal cleanup.

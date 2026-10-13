@@ -10,6 +10,7 @@ pub mod repository;
 mod session;
 mod session_native;
 mod session_publication;
+mod shortcut_trace;
 mod shortcuts;
 mod window_view;
 mod windows;
@@ -38,7 +39,7 @@ fn snapshot(session: State<'_, Arc<Session>>) -> Result<session::Snapshot, Strin
 /// Runs the desktop event loop after physical DPI initialization; a startup failure is fatal because no recovery window exists.
 pub fn run() {
     windows::enable_physical_dpi();
-    desktop_builder()
+    desktop_builder(!cfg!(feature = "native-checks"))
         .run(tauri::generate_context!())
         .expect(DESKTOP_START_FAILURE);
 }
@@ -46,10 +47,10 @@ pub fn run() {
 pub fn hold_conflict_shortcut() -> Result<(), String> {
     windows::hold_conflict_shortcut()
 }
-/// Registers services before installing native input and connects all lifecycle events to their owners.
-fn desktop_builder() -> tauri::Builder<tauri::Wry> {
+/// Registers services and lifecycle owners; input_enabled selects real hooks or an isolated presentation-only check.
+fn desktop_builder(input_enabled: bool) -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             app.manage(configure::ConfigureService::default());
             app.manage(library_commands::LibraryService::new());
             let window = app
@@ -61,7 +62,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             )));
             app.manage(session.clone());
             // The isolated presentation-check executable deliberately starts no input hooks.
-            if !cfg!(feature = "native-checks") {
+            if input_enabled {
                 let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
                 windows::start_hooks(session.clone(), hwnd)?;
                 windows::watch_suspend(hwnd)?;
@@ -108,4 +109,11 @@ pub fn check_development_preview() {
         "Native preview checks require development library mode without input hooks";
     presentation::require_preview().expect(CHECK_SUPPORTED);
     preview_window_tests::preview_window_loads_and_closes_through_real_ipc();
+}
+
+#[cfg(feature = "native-checks")]
+/// Runs bounded real-registration and focused-window control checks; requires Vite and closes only its test windows.
+pub fn check_session_controls() {
+    presentation::require_preview().expect("Session checks require development library mode");
+    windows::check_session_controls();
 }

@@ -78,6 +78,16 @@ const WINDOW_CONTENT_ERROR: &str = "Compact content does not fit the display wor
 const WINDOW_RESTORE_ERROR: &str = "Could not restore full window placement";
 const COMPACT_ROLLBACK_FAILED: &str = "compact rollback failed";
 
+#[cfg(feature = "native-checks")]
+#[path = "session_window_tests.rs"]
+mod session_window_tests;
+
+#[cfg(feature = "native-checks")]
+/// Runs the isolated session check using genuine OS reservations and hook-dispatch fixtures, with no desktop injection.
+pub(crate) fn check_session_controls() {
+    session_window_tests::run();
+}
+
 /// Enables per-monitor physical-coordinate handling before creating any application windows.
 pub fn enable_physical_dpi() {
     // SAFETY: this process-wide Win32 call takes a documented constant, with no borrowed pointers.
@@ -355,7 +365,7 @@ struct ReservationJob {
     stop: bool,
     reply: mpsc::SyncSender<Result<Availability, String>>,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 /// Work queued by short native callbacks; no window or storage work runs inside a hook.
 enum ControlJob {
     Record,
@@ -437,6 +447,7 @@ fn wake_hook(message: u32) -> Result<(), String> {
 }
 /// Installs capture callbacks and starts a backend control worker; failures remain distinct from shortcut conflicts.
 pub fn start_hooks(session: Arc<Session>, hwnd: isize) -> Result<(), String> {
+    crate::shortcut_trace::start();
     ENGINE.set(session.clone()).map_err(|_| HOOK_FAILED)?;
     MAIN_HWND.store(hwnd, Ordering::Release);
     let (jobs, receive_jobs) = mpsc::channel();
@@ -459,6 +470,7 @@ fn control_loop(session: Arc<Session>, controls: mpsc::Receiver<ControlJob>) {
             ControlJob::Stop => session.stop(),
             ControlJob::Suspend => session.suspend(),
         };
+        crate::shortcut_trace::completed(control, &result);
         if let Err(error) = result {
             if error != crate::session::ACTIVE_SESSION {
                 session.report(error);
@@ -610,12 +622,34 @@ unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM
     if code >= 0 {
         // SAFETY: a nonnegative hook code supplies a KBDLLHOOKSTRUCT valid for this callback; no pointer is retained.
         let input = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
-        if handle_keyboard(input, message) {
+        let consumed = handle_keyboard(input, message);
+        trace_key(input, message, consumed);
+        if consumed {
             return 1;
         }
     }
     // SAFETY: chaining passes Windows' original hook arguments without retaining their pointers.
     unsafe { CallNextHookEx(null_mut(), code, message, data) }
+}
+/// Queues only F8/F9 metadata for opt-in diagnostics; never logs recorded keys or performs terminal I/O in the callback.
+fn trace_key(input: &KBDLLHOOKSTRUCT, message: WPARAM, consumed: bool) {
+    if input.vkCode != u32::from(RECORD_KEY) && input.vkCode != u32::from(STOP_KEY) {
+        return;
+    }
+    if !crate::shortcut_trace::enabled() {
+        return;
+    }
+    let reserved = RESERVED.lock().map(|value| *value).unwrap_or_default();
+    crate::shortcut_trace::key(crate::shortcut_trace::KeyTrace {
+        key: input.vkCode,
+        flags: input.flags,
+        injected: input.flags & LLKHF_INJECTED != 0,
+        message,
+        app_focused: own_window_focused(),
+        record_reserved: reserved.record,
+        stop_reserved: reserved.stop,
+        consumed,
+    });
 }
 /// Handles a valid down/up message; unrelated messages and injected MacroLoom input are ignored.
 fn handle_keyboard(input: &KBDLLHOOKSTRUCT, message: WPARAM) -> bool {

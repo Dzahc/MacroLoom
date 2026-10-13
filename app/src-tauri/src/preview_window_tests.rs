@@ -89,7 +89,7 @@ pub fn preview_window_loads_and_closes_through_real_ipc() {
     let opened = Arc::new(AtomicBool::new(false));
     watch_timeout(finished.clone());
     let observed = loaded.clone();
-    let app = desktop_builder()
+    let app = desktop_builder(false)
         .on_page_load(move |webview, payload| {
             // Load-start notifications cannot establish readiness or invoke the frontend bridge.
             if payload.event() != PageLoadEvent::Finished {

@@ -176,3 +176,67 @@ complexity checks across index/worktree, with no exceptions. Full output:
 `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
 also passed for the strengthened native regression. Follow-up Standards review:
 no actionable findings. Follow-up Spec review: no actionable findings.
+
+## Further owner acceptance and controlled conflicts
+
+October 12, 2026: the owner confirmed **Temporary playback and cancellation**
+passed. The owner delegated **Controlled registration conflicts** to the agent
+and reported physical F8/F9 were ineffective with either the main window or
+development pane focused. That physical-keyboard failure remains unresolved;
+app-focused control dispatch is intended to work.
+
+The agent ran:
+
+```powershell
+cargo run --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --bin session-control-check
+```
+
+**PASS** using competing real Windows F9/F8 registrations and actual React
+controls in real WebViews: visible conflict text and Retry shortcuts, Record
+button fallback with F9 unavailable, F8 conflict rejecting startup while retaining
+the previous capture, and retry recovery after releasing each competing key.
+The check also focused the real main and development windows and exercised
+non-injected callback fixtures through the native shortcut handler: F9 started,
+F8 stopped, and own-window ordinary typing stayed excluded. Callback fixtures
+do not establish that physical hardware events arrive correctly on the owner's
+desktop. No keyboard input was sent to another application.
+
+Final follow-up `npm.cmd --prefix app run verify` — **PASS**, exit 0: 72
+frontend/tooling tests, 58 Rust tests (two additional interactive tests ignored),
+33 Python fixtures, and 1046 function/closure complexity checks across
+index/worktree. Formatting, lint, type checking, production build, and all other
+gate checks passed. Full output: `app/.quality-output/ML-14-controls-verify.log`.
+The final native control check also passed with opt-in tracing enabled; output:
+`app/.quality-output/ML-14-native-controls.log`. Clippy with `--features native-checks
+--all-targets -- -D warnings` passed. Follow-up Standards and Spec reviews found
+no remaining actionable findings; physical focused-window acceptance remains
+pending the owner's diagnostic trace.
+
+## Diagnose physical shortcuts with MacroLoom focused
+
+Launch the normal app with opt-in development tracing:
+
+```powershell
+$env:MACROLOOM_TRACE_SHORTCUTS = '1'
+npm.cmd --prefix app run tauri -- dev
+```
+
+1. Wait for library loading to finish. With the **main window** focused, tap F9.
+   Expect recording to start and the compact view to appear. If it starts, tap F8
+   without changing focus; expect it to stop and restore the full view.
+2. Repeat with the **development pane** focused. If F9 fails, try the main
+   toolbar Record button and then F8 while MacroLoom remains focused. Report
+   whether the button starts recording and the banner text shown.
+3. Repeat F9/F8 with **Notepad** focused as a comparison. Stop any active session
+   before each fresh F9 attempt.
+4. Paste the terminal lines beginning `[ML-14 shortcut trace]`, identifying which
+   attempts used each focused window. Tracing records only control-key metadata,
+   reservation/focus flags, and backend outcomes, without recording text in logs.
+   If only the startup trace line appears, report that too.
+
+F8 only stops active work; no session change is expected from F8 while idle.
+The environment switch is disabled in release builds. After this diagnostic run:
+
+```powershell
+Remove-Item Env:MACROLOOM_TRACE_SHORTCUTS
+```
