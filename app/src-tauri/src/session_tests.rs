@@ -1,6 +1,7 @@
 //! Behavior tests through session commands and snapshots, substituting only desktop effects.
 use crate::input::{EventKind, Held};
 use crate::session::{Phase, Platform, Session, Snapshot, ACTIVE_SESSION};
+use crate::session_control::ControlRequest;
 use crate::shortcuts::Availability;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,10 @@ const TEST_SCAN: u16 = 0x1e;
 const REJECTED: &str = "Injected native failure";
 const TEST_DEADLINE: Duration = Duration::from_secs(2);
 const TEST_POLL: Duration = Duration::from_millis(1);
+const STARTUP_CANCEL_CONTROLS: [ControlRequest; 2] =
+    [ControlRequest::Stop, ControlRequest::Suspend];
+const STARTUP_RECORD_STOP_CONTROLS: [ControlRequest; 2] =
+    [ControlRequest::Record, ControlRequest::Stop];
 
 #[derive(Default)]
 /// A deterministic desktop-effect substitute; never replaces session state or lifecycle logic.
@@ -28,6 +33,8 @@ struct Desktop {
     registered: Mutex<Availability>,
     on_inject: Mutex<Option<Box<dyn Fn() + Send>>>,
     unregister_failure: AtomicBool,
+    on_shortcuts: Mutex<Option<Box<dyn Fn() + Send>>>,
+    injections: std::sync::atomic::AtomicUsize,
 }
 impl Platform for Desktop {
     /// Returns an owned external-operation token, with no native input effects.
@@ -53,6 +60,16 @@ impl Platform for Desktop {
             record,
             stop: stop && !self.stop_conflict.load(Ordering::Acquire),
         };
+        if stop {
+            let callback = self
+                .on_shortcuts
+                .lock()
+                .expect("Fixture shortcut callback")
+                .take();
+            if let Some(callback) = callback {
+                callback();
+            }
+        }
         Ok(Availability {
             record,
             stop: !self.stop_conflict.load(Ordering::Acquire),
@@ -85,6 +102,7 @@ impl Platform for Desktop {
     }
     /// Can reject key-up after a successful key-down to leave session-owned held input.
     fn inject(&self, kind: &EventKind) -> Result<(), String> {
+        self.injections.fetch_add(1, Ordering::AcqRel);
         let callback = self
             .on_inject
             .lock()
@@ -151,6 +169,234 @@ fn completed(session: &Session) -> Snapshot {
             "Worker failed to reach a terminal or recoverable state"
         );
         std::thread::sleep(TEST_POLL);
+    }
+}
+
+#[test]
+/// A second F9 observed during compact entry must not become a new recording after immediate F8 cleanup reaches Idle.
+fn queued_record_during_startup_cannot_replace_stopped_capture() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    let queued = Arc::new(Mutex::new(Vec::new()));
+    let received = queued.clone();
+    let weak = Arc::downgrade(&session);
+    *desktop.on_entry.lock().expect("Fixture callback") = Some(Box::new(move || {
+        let session = weak.upgrade().expect("Startup session remains owned");
+        session.capture(key(true));
+        session.capture(key(false));
+        for control in STARTUP_RECORD_STOP_CONTROLS {
+            if let Some(job) = control.receive(&session).expect("Native control arrival") {
+                received.lock().expect("Native job fixture").push(job);
+            }
+        }
+    }));
+    let initial = ControlRequest::Record
+        .receive(&session)
+        .expect("Initial F9")
+        .expect("Idle accepts F9");
+    let stopped = initial
+        .execute(&session)
+        .expect("Startup completes cancellation");
+    *desktop.on_entry.lock().expect("Fixture callback") = None;
+    for job in queued.lock().expect("Native job fixture").drain(..) {
+        job.execute(&session).expect("Queued control completes");
+    }
+    let final_state = session.snapshot().expect("Snapshot");
+    assert_eq!(final_state.phase, Phase::Idle);
+    assert_eq!(
+        final_state.event_count, stopped.event_count,
+        "Stale F9 must preserve the stopped recording"
+    );
+    assert!(final_state.unsaved);
+}
+
+#[test]
+/// Two Record requests received before worker dispatch share eligibility; the delayed request cannot replace a stopped capture.
+fn queued_idle_record_cannot_replace_a_completed_generation() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    let first = session
+        .start_request()
+        .expect("Initial arrival")
+        .expect("Idle");
+    let delayed = session
+        .start_request()
+        .expect("Second arrival")
+        .expect("Idle");
+    session
+        .record_requested(first)
+        .expect("First worker starts");
+    session.capture(key(true));
+    let retained = session.stop().expect("Stop first recording");
+    let obsolete = session
+        .record_requested(delayed)
+        .expect("Obsolete worker resolves");
+    assert_eq!(obsolete.phase, Phase::Idle);
+    assert_eq!(obsolete.event_count, retained.event_count);
+    assert_eq!(obsolete.duration_ms, retained.duration_ms);
+}
+#[test]
+/// Stop or sleep received before worker dispatch invalidates both Record and Play intents without clearing data or injecting input.
+fn idle_cancellation_invalidates_queued_start_commands() {
+    for control in STARTUP_CANCEL_CONTROLS {
+        let desktop = Arc::new(Desktop::default());
+        let session = Session::new(desktop.clone());
+        session.record().expect("Original recording");
+        session.capture(key(true));
+        let retained = session.stop().expect("Retain recording");
+        let record = session
+            .start_request()
+            .expect("Record arrival")
+            .expect("Idle");
+        let play = session
+            .start_request()
+            .expect("Play arrival")
+            .expect("Idle");
+        control
+            .receive(&session)
+            .expect("Cancellation arrival")
+            .expect("Cleanup job")
+            .execute(&session)
+            .expect("Cancellation resolves");
+        session
+            .record_requested(record)
+            .expect("Obsolete Record resolves");
+        session
+            .play_requested(play)
+            .expect("Obsolete Play resolves");
+        let state = session.snapshot().expect("Snapshot");
+        assert_eq!(state.phase, Phase::Idle);
+        assert_eq!(state.event_count, retained.event_count);
+        assert_eq!(state.duration_ms, retained.duration_ms);
+        assert_eq!(desktop.injections.load(Ordering::Acquire), 0);
+    }
+}
+#[test]
+/// A delayed cleanup job belongs to the stopped generation and cannot cancel a newer recording after startup completes cleanup.
+fn delayed_cleanup_cannot_stop_a_new_generation() {
+    for control in STARTUP_CANCEL_CONTROLS {
+        let session = Session::new(Arc::new(Desktop::default()));
+        session.record().expect("First recording");
+        let delayed = control
+            .receive(&session)
+            .expect("Cancellation arrival")
+            .expect("Cleanup job");
+        session.stop().expect("Complete first cleanup");
+        session.record().expect("Fresh recording");
+        session.capture(key(true));
+        let current = delayed
+            .execute(&session)
+            .expect("Obsolete cleanup resolves");
+        assert_eq!(current.phase, Phase::Recording);
+        assert!(current.unsaved);
+        session.stop().expect("Finish fixture");
+    }
+}
+
+/// Waits for a queued start to claim eligibility without waiting for its blocked native transition.
+fn starting_claimed(session: &Session) {
+    let deadline = Instant::now() + TEST_DEADLINE;
+    while session
+        .start_request()
+        .expect("Start eligibility")
+        .is_some()
+    {
+        assert!(Instant::now() < deadline, "Start did not claim ownership");
+        std::thread::sleep(TEST_POLL);
+    }
+}
+#[test]
+/// Cancellation remains effective while startup waits behind a preview transition, before any native reservation exists.
+fn cancellation_while_waiting_for_presentation_prevents_start() {
+    for control in STARTUP_CANCEL_CONTROLS {
+        let desktop = Arc::new(Desktop::default());
+        let session = Session::new(desktop.clone());
+        session.record().expect("Original recording");
+        session.capture(key(true));
+        let retained = session.stop().expect("Retain recording");
+        let waiting = session.clone();
+        let (sent, finished) = std::sync::mpsc::sync_channel(1);
+        session
+            .preview(|| {
+                std::thread::spawn(move || {
+                    let _ = sent.send(waiting.record());
+                });
+                starting_claimed(&session);
+                assert!(!desktop.operation.load(Ordering::Acquire));
+                control
+                    .receive(&session)
+                    .expect("Cancellation arrival")
+                    .expect("Cleanup job")
+                    .execute(&session)
+                    .expect("Cancellation signals without deadlock");
+                assert_eq!(session.snapshot().expect("Snapshot").phase, Phase::Stopping);
+                Ok(())
+            })
+            .expect("Preview releases transition");
+        let stopped = finished
+            .recv_timeout(TEST_DEADLINE)
+            .expect("Startup resolves")
+            .expect("Cancelled startup completes");
+        assert_eq!(stopped.phase, Phase::Idle);
+        assert_eq!(stopped.event_count, retained.event_count);
+        assert!(!desktop.operation.load(Ordering::Acquire));
+        assert!(!desktop.registered.lock().expect("Reservations").stop);
+    }
+}
+
+/// Installs one stop/suspend action during the real startup reservation boundary, preserving the session's own cancellation handling.
+fn cancel_during_reservation(desktop: &Desktop, session: &Arc<Session>, control: ControlRequest) {
+    let weak = Arc::downgrade(session);
+    *desktop.on_shortcuts.lock().expect("Fixture callback") = Some(Box::new(move || {
+        let session = weak.upgrade().expect("Startup session remains owned");
+        match control {
+            ControlRequest::Stop => {
+                session.stop().expect("Stop during reservation");
+            }
+            ControlRequest::Suspend => {
+                session.suspend().expect("Sleep during reservation");
+            }
+            ControlRequest::Record => {
+                unreachable!("Cancellation fixtures use Stop or suspend only")
+            }
+        }
+    }));
+}
+#[test]
+/// Stop or sleep after F8 acquisition but before capture activation must end startup and retain the previous capture.
+fn cancellation_during_reservation_cannot_start_recording() {
+    for control in STARTUP_CANCEL_CONTROLS {
+        let desktop = Arc::new(Desktop::default());
+        let session = Session::new(desktop.clone());
+        session.record().expect("Previous recording");
+        session.capture(key(true));
+        let retained = session.stop().expect("Retain previous capture");
+        cancel_during_reservation(&desktop, &session, control);
+        let stopped = session
+            .record()
+            .expect("Cancelled startup resolves normally");
+        assert_eq!(stopped.phase, Phase::Idle);
+        assert_eq!(stopped.event_count, retained.event_count);
+        assert_eq!(stopped.duration_ms, retained.duration_ms);
+    }
+}
+#[test]
+/// Stop or sleep during playback reservation must prevent all injection rather than starting a worker after interruption.
+fn cancellation_during_reservation_cannot_start_playback() {
+    for control in STARTUP_CANCEL_CONTROLS {
+        let desktop = Arc::new(Desktop::default());
+        let session = Session::new(desktop.clone());
+        session.record().expect("Record replay data");
+        session.capture(key(true));
+        session.stop().expect("Retain replay data");
+        let before = desktop.injections.load(Ordering::Acquire);
+        cancel_during_reservation(&desktop, &session, control);
+        session.play().expect("Cancelled startup resolves normally");
+        assert_eq!(completed(&session).phase, Phase::Idle);
+        assert_eq!(
+            desktop.injections.load(Ordering::Acquire),
+            before,
+            "Interrupted startup must dispatch no playback input"
+        );
     }
 }
 #[test]

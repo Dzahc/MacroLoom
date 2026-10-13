@@ -8,6 +8,7 @@ pub mod macro_format;
 mod presentation;
 pub mod repository;
 mod session;
+mod session_control;
 mod session_native;
 mod session_publication;
 mod shortcuts;

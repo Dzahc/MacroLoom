@@ -1,4 +1,5 @@
 use crate::session::Session;
+use crate::session_control::{ControlRequest as ControlJob, QueuedControl};
 use crate::shortcuts::{
     Availability, Control, KeySequences, RECORD_ID, RECORD_KEY, STOP_ID, STOP_KEY,
 };
@@ -43,7 +44,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
 static HOOK_JOBS: OnceLock<mpsc::Sender<ReservationJob>> = OnceLock::new();
-static CONTROL_JOBS: OnceLock<mpsc::Sender<ControlJob>> = OnceLock::new();
+static CONTROL_JOBS: OnceLock<mpsc::Sender<QueuedControl>> = OnceLock::new();
 static HOOK_THREAD: AtomicU32 = AtomicU32::new(0);
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
 static RESERVED: LazyLock<Mutex<Availability>> =
@@ -365,13 +366,6 @@ struct ReservationJob {
     stop: bool,
     reply: mpsc::SyncSender<Result<Availability, String>>,
 }
-#[derive(Clone, Copy)]
-/// Work queued by short native callbacks; no window or storage work runs inside a hook.
-enum ControlJob {
-    Record,
-    Stop,
-    Suspend,
-}
 /// Actual thread-owned reservations plus the last explicit Stop availability check.
 struct HookRuntime {
     record: bool,
@@ -462,13 +456,9 @@ pub fn start_hooks(session: Arc<Session>, hwnd: isize) -> Result<(), String> {
     Ok(())
 }
 /// Processes direct backend controls sequentially, reporting errors even when the frontend is disconnected.
-fn control_loop(session: Arc<Session>, controls: mpsc::Receiver<ControlJob>) {
+fn control_loop(session: Arc<Session>, controls: mpsc::Receiver<QueuedControl>) {
     while let Ok(control) = controls.recv() {
-        let result = match control {
-            ControlJob::Record => session.record(),
-            ControlJob::Stop => session.stop(),
-            ControlJob::Suspend => session.suspend(),
-        };
+        let result = control.execute(&session);
         if let Err(error) = result {
             if error != crate::session::ACTIVE_SESSION {
                 session.report(error);
@@ -539,15 +529,17 @@ fn pump_hook_message(
 }
 /// Queues a control without waiting for a frontend callback; Stop freezes/cancels input before worker delivery.
 fn queue_control(control: ControlJob) {
-    if let Some(session) = ENGINE.get() {
-        if matches!(control, ControlJob::Stop | ControlJob::Suspend) {
-            if let Err(error) = session.signal_stop(matches!(control, ControlJob::Suspend)) {
-                session.report(error);
+    let Some(session) = ENGINE.get() else {
+        return;
+    };
+    match control.receive(session) {
+        Ok(Some(job)) => {
+            if let Some(sender) = CONTROL_JOBS.get() {
+                let _ = sender.send(job);
             }
         }
-    }
-    if let Some(sender) = CONTROL_JOBS.get() {
-        let _ = sender.send(control);
+        Ok(None) => {}
+        Err(error) => session.report(error),
     }
 }
 /// Requests worker-owned cleanup following a native close request.

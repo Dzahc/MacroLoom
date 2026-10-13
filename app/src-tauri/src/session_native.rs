@@ -4,7 +4,10 @@ use crate::configure::ConfigureService;
 use crate::input::{EventKind, Held};
 use crate::library_commands::LibraryService;
 use crate::presentation::{PresentationPhase, PresentationService, PreviewStatus};
-use crate::session::{Phase, Platform, Session, Snapshot, SESSION_EVENT, STATUS_INTERVAL};
+use crate::session::{
+    Phase, Platform, Session, Snapshot, StartRequest, ACTIVE_SESSION, SESSION_EVENT,
+    STATUS_INTERVAL,
+};
 use crate::session_publication::Publications;
 use crate::shortcuts::Availability;
 use crate::window_view::ViewRequest;
@@ -195,14 +198,15 @@ pub async fn start_recording(
     session: State<'_, Arc<Session>>,
 ) -> Result<Snapshot, String> {
     require_caller(&window)?;
+    let request = session.start_request()?.ok_or(ACTIVE_SESSION)?;
     let session = session.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || command_record(&session))
+    tauri::async_runtime::spawn_blocking(move || command_record(&session, request))
         .await
         .map_err(|error| error.to_string())?
 }
 /// Reports failed button starts through the same persistent status used for global-control failures.
-fn command_record(session: &Session) -> Result<Snapshot, String> {
-    match session.record() {
+fn command_record(session: &Session, request: StartRequest) -> Result<Snapshot, String> {
+    match session.record_requested(request) {
         Ok(snapshot) => Ok(snapshot),
         Err(error) => {
             session.report(error.clone());
@@ -217,9 +221,9 @@ pub async fn stop(
     session: State<'_, Arc<Session>>,
 ) -> Result<Snapshot, String> {
     require_caller(&window)?;
-    session.signal_stop(false)?;
+    let request = session.stop_request(false)?;
     let session = session.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || session.stop())
+    tauri::async_runtime::spawn_blocking(move || session.complete_stop(request))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -245,8 +249,9 @@ pub async fn play(
     if !cfg!(debug_assertions) {
         return Err(DEVELOPMENT_ONLY.into());
     }
+    let request = session.start_request()?.ok_or(ACTIVE_SESSION)?;
     let session = session.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || session.play())
+    tauri::async_runtime::spawn_blocking(move || session.play_requested(request))
         .await
         .map_err(|error| error.to_string())?
 }

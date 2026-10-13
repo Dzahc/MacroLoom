@@ -269,3 +269,51 @@ workspace-local Cargo target directory: 72 frontend/tooling tests, 58 Rust tests
 function/closure complexity checks across index/worktree, with no exceptions.
 Formatting, type checking, lint, production build, and all other gate checks
 passed. Full output: `app/.quality-output/ML-14-focused-verify.log`.
+
+## Startup queue and cancellation regressions
+
+The owner identified two startup races: a second F9 followed by F8 during compact
+entry could execute after cleanup and replace the capture, and Stop or sleep
+during F8 reservation could be lost before recording/playback became active.
+
+Deterministic tests exercise the production native control arrival/execution
+boundary and substitute only desktop effects. Before the fix:
+
+- `cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline startup --lib`
+  failed: stale F9 left zero events instead of the two retained events. Output:
+  `app/.quality-output/ML-14-startup-red.log`.
+- `cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline cancellation_during_reservation --lib`
+  failed: recording started after Stop; playback injected two events instead of
+  zero. Output: `app/.quality-output/ML-14-reservation-red.log`.
+
+Record/Play requests now carry their arrival generation. Startup claims
+cancellation ownership before waiting for a presentation transition or acquiring
+native reservations. Stop and sleep signal immediately; their queued cleanup
+belongs to the original generation. Cancelled preactivation startup retains the
+previous temporary capture and dispatches no playback input. An F9 received
+during startup cannot become a replacement recording after cleanup.
+
+Regression coverage also checks two starts received before worker dispatch,
+idle Stop/sleep invalidating queued Record/Play, delayed cleanup preserving a new
+recording, and Stop/sleep while startup waits behind a preview transition.
+These tests do not claim new physical-keyboard or actual computer-sleep evidence.
+The previously recorded owner acceptance and pending manual lifecycle observations
+remain applicable.
+
+Review found and corrected a further ownership gap: redundant unguarded idle
+shortcut reconciliation could release a newer session's F8. Terminal cleanup now
+performs that reconciliation once under the transition guard, and both startup
+and playback completion capture cleanup generation before relinquishing ownership.
+
+Final `npm.cmd --prefix app run verify` — **PASS**, exit 0, using
+`CARGO_TARGET_DIR=.quality-output/ML-14-startup-target`: 72 frontend/tooling tests,
+65 Rust tests (two additional interactive tests ignored), 33 Python quality
+fixtures, and 1121 function/closure complexity checks across index/worktree,
+with no exceptions. All formatting, type checking, lint, production build, and
+other gate checks passed. Output: `app/.quality-output/ML-14-startup-verify.log`.
+The session suite includes seven new startup/queue regression tests.
+
+`cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
+also passed. Output: `app/.quality-output/ML-14-startup-native-clippy.log`.
+Follow-up Standards review: no remaining actionable findings. Follow-up Spec
+review: no remaining actionable findings.
