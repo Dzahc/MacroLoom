@@ -56,8 +56,8 @@ static RESERVED: LazyLock<Mutex<Availability>> =
     LazyLock::new(|| Mutex::new(Availability::default()));
 static SEQUENCES: LazyLock<Mutex<KeySequences>> =
     LazyLock::new(|| Mutex::new(KeySequences::default()));
-static OWN_KEY_SEQUENCES: LazyLock<Mutex<std::collections::HashSet<u16>>> =
-    LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+static OWN_KEY_SEQUENCES: LazyLock<Mutex<OwnKeySequences>> =
+    LazyLock::new(|| Mutex::new(OwnKeySequences::default()));
 const RESERVATION_MESSAGE: u32 = WM_APP + 1;
 const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 const HOOK_FAILED: &str =
@@ -183,12 +183,58 @@ unsafe extern "system" fn recording_monitor(
 pub fn initial_recording_inputs() -> Vec<EventKind> {
     let own_focus = own_window_focused();
     let (x, y) = cursor_position();
-    ordered_initial_inputs(
+    let Ok(mut keys) = OWN_KEY_SEQUENCES.lock() else {
+        return Vec::new();
+    };
+    keys.initial_snapshot(
         own_focus,
         POINT { x, y },
         !own_point(POINT { x, y }),
         key_held,
     )
+}
+#[derive(Default)]
+/// Tracks control-origin exclusions and recording-owned initial presses through their actual releases.
+struct OwnKeySequences {
+    ignored: std::collections::HashSet<u16>,
+    recorded: std::collections::HashSet<u16>,
+}
+impl OwnKeySequences {
+    /// Transfers snapshotted key gestures to recording ownership, leaving excluded activation gestures untouched.
+    fn initial_snapshot(
+        &mut self,
+        own_focus: bool,
+        position: POINT,
+        capture_buttons: bool,
+        held: impl Fn(u16) -> bool,
+    ) -> Vec<EventKind> {
+        let inputs = ordered_initial_inputs(own_focus, position, capture_buttons, held);
+        self.recorded.clear();
+        for input in &inputs {
+            if let EventKind::Key { vk, down: true, .. } = input {
+                self.ignored.remove(vk);
+                self.recorded.insert(*vk);
+            }
+        }
+        inputs
+    }
+    /// Returns whether a complete key gesture belongs to MacroLoom controls, retaining its origin across focus changes.
+    fn key(&mut self, key: u16, down: bool, own: bool) -> bool {
+        if self.recorded.contains(&key) {
+            if !down {
+                self.recorded.remove(&key);
+            }
+            return false;
+        }
+        if down && own {
+            self.ignored.insert(key);
+        }
+        let excluded = own || self.ignored.contains(&key);
+        if !down {
+            self.ignored.remove(&key);
+        }
+        excluded
+    }
 }
 /// Applies the boundary ordering/exclusion policy to a held-state reader; the reader never injects or mutates input.
 fn ordered_initial_inputs(
@@ -951,19 +997,15 @@ fn recording_keyboard_layout() -> String {
 }
 /// Excludes the complete key gesture originating in a MacroLoom control, even if focus changes before release.
 fn own_key_sequence(key: u16, down: bool) -> bool {
-    let Ok(mut ignored) = OWN_KEY_SEQUENCES.lock() else {
+    let Ok(mut keys) = OWN_KEY_SEQUENCES.lock() else {
         return true;
     };
-    let own = own_window_focused();
-    if down && own {
-        ignored.insert(key);
-    }
-    let excluded = own || ignored.contains(&key);
-    if !down {
-        ignored.remove(&key);
-    }
-    excluded
+    keys.key(key, down, own_window_focused())
 }
+
+#[cfg(test)]
+#[path = "windows_recording_regression_tests.rs"]
+mod recording_regression_tests;
 /// Copies valid native mouse data into capture; control-window interactions and our injected events are excluded.
 unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     if code >= 0 {

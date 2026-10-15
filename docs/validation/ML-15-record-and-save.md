@@ -30,6 +30,12 @@ injection and reserved controls are excluded.
   existing-file preservation, failure after staging and directory recovery.
 - Native snapshot policy tests use a controlled held-state reader and perform
   no desktop input injection.
+- Barrier-controlled regression coverage keeps recording B active when recording
+  A's delayed environment failure returns after A has stopped. Environment failures
+  revalidate the captured generation and recording phase under the state lock.
+- Initial key ownership regression coverage retains a snapshotted Ctrl release
+  before later typing, preserves repeats while MacroLoom is focused, keeps control
+  activation gestures excluded and replaces ownership at the next snapshot.
 - Frontend tests cover selection after commit, stale/duplicate outcome delivery,
   timed accessible outcomes and persistent save recovery controls.
 - Completion command: `npm.cmd --prefix app run verify`. Its final result is

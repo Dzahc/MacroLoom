@@ -9,6 +9,9 @@ const INITIAL_EVENT_COUNT: usize = 2;
 const FINAL_EVENT_COUNT: usize = 4;
 const EXPECTED_KEY_DOWN: &str = "Initial held key must be saved as a press";
 const EXPECTED_MOUSE_DOWN: &str = "Initial held button must be saved as a press";
+const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+/// One delayed platform observation, substituted only at the external environment boundary.
+type EnvironmentCheck = Box<dyn FnOnce() -> Result<(), String> + Send>;
 
 /// Desktop-effect fixture; input, window activation and disk-failure flags never replace session internals.
 struct Desktop {
@@ -18,6 +21,7 @@ struct Desktop {
     changed: AtomicBool,
     compact: AtomicBool,
     initial: Vec<EventKind>,
+    environment_check: Mutex<Option<EnvironmentCheck>>,
 }
 impl Desktop {
     /// Creates a writable real library and optionally held boundary inputs, with no physical input effects.
@@ -29,6 +33,7 @@ impl Desktop {
             changed: AtomicBool::new(false),
             compact: AtomicBool::new(false),
             initial,
+            environment_check: Mutex::new(None),
         })
     }
 }
@@ -50,6 +55,14 @@ impl Platform for Desktop {
         &self,
         _: &crate::macro_format::RecordingEnvironment,
     ) -> Result<(), String> {
+        let check = self
+            .environment_check
+            .lock()
+            .expect("Environment fixture lock")
+            .take();
+        if let Some(check) = check {
+            return check();
+        }
         if self.changed.load(Ordering::Acquire) {
             Err(crate::recording::ENVIRONMENT_CHANGED.into())
         } else {
@@ -98,6 +111,53 @@ impl Platform for Desktop {
     }
     /// Tests query the same durable snapshots that disconnected native clients can query.
     fn publish(&self, _: Snapshot) {}
+}
+#[test]
+/// A delayed failure for recording A must not stop/save recording B after A's ownership has ended.
+fn regression_stale_environment_check_cannot_interrupt_a_new_recording() {
+    let desktop = Desktop::new(vec![test_support::key(true)]);
+    let session = Session::new(desktop.clone());
+    session.record().expect("Start recording A");
+    let (entered, observed) = std::sync::mpsc::sync_channel(1);
+    let (release, resume) = std::sync::mpsc::sync_channel(1);
+    *desktop
+        .environment_check
+        .lock()
+        .expect("Install environment fixture") = Some(Box::new(
+        // Holds A's observation while the main test stops A and starts B through real session commands.
+        move || {
+            entered.send(()).expect("Observation receiver remains live");
+            resume
+                .recv_timeout(ENVIRONMENT_CHECK_TIMEOUT)
+                .expect("Delayed observation released");
+            Err(crate::recording::ENVIRONMENT_CHANGED.into())
+        },
+    ));
+    let observer = session.clone();
+    let check = std::thread::spawn(
+        // Runs the same worker refresh that checks environment outside the state lock.
+        move || observer.refresh(),
+    );
+    observed
+        .recv_timeout(ENVIRONMENT_CHECK_TIMEOUT)
+        .expect("A's environment check reached the barrier");
+    session.stop().expect("Stop and save A");
+    session.record().expect("Start recording B");
+    release.send(()).expect("Release A's delayed failure");
+    let result = check
+        .join()
+        .expect("Environment worker completes")
+        .expect("Refresh succeeds");
+    assert_eq!(
+        result.phase,
+        Phase::Recording,
+        "A's stale environment failure interrupted B"
+    );
+    assert_eq!(
+        session.snapshot().expect("B's live state").phase,
+        Phase::Recording
+    );
+    session.stop().expect("Stop B after regression assertion");
 }
 /// Builds an initially held supported button at a signed physical screen position.
 fn button(down: bool) -> EventKind {

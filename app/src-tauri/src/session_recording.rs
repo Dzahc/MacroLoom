@@ -46,20 +46,20 @@ impl Session {
     }
     /// Checks environmental compatibility on the status worker and completes auto-stop cleanup once capture is frozen.
     pub(super) fn check_recording(&self) -> Result<(), String> {
-        let environment = {
+        let observation = {
             let state = self.lock()?;
             if state.phase == Phase::Recording {
                 state
                     .recording
                     .as_ref()
-                    .map(|recording| recording.document.recording.clone())
+                    .map(|recording| (state.generation, recording.document.recording.clone()))
             } else {
                 None
             }
         };
-        if let Some(environment) = environment {
+        if let Some((generation, environment)) = observation {
             if let Err(reason) = self.platform.check_environment(&environment) {
-                self.interrupt_recording(&reason)?;
+                self.interrupt_recording_for(generation, &reason)?;
             }
         }
         let request = {
@@ -69,6 +69,15 @@ impl Session {
             }
         };
         self.cleanup_for(request)
+    }
+    /// Applies an asynchronous environment failure only to the recording generation that produced its observation.
+    fn interrupt_recording_for(&self, generation: u64, reason: &str) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.generation == generation && state.phase == Phase::Recording {
+            let at = state.start.map_or(Duration::ZERO, |start| start.elapsed());
+            freeze_automatic(&mut state, reason, at);
+        }
+        Ok(())
     }
     /// Freezes an interrupted prefix; detected native failures use the same persistence path as explicit Stop.
     pub fn interrupt_recording(&self, reason: &str) -> Result<(), String> {
