@@ -6,6 +6,7 @@ import {
   type SessionTransport,
   type SnapshotCommand,
 } from './session-contract.ts';
+import { OutcomeQueue } from './outcome-queue.ts';
 
 /** One native claim keeps cancellation intent until its potentially delayed acquisition settles. */
 type ConfirmationClaim = {
@@ -17,6 +18,8 @@ type ConfirmationClaim = {
 
 /** Owns revision reconciliation and disposable subscriptions to native lifecycle; commands never simulate success. */
 export class SessionController {
+  readonly queue = new OutcomeQueue();
+  private outcomeSequence = 0;
   private state: SessionSnapshot = INITIAL_SESSION;
   private listeners = new Set<() => void>();
   private generation = 0;
@@ -71,13 +74,26 @@ export class SessionController {
       if (generation === this.generation) this.generation += 1;
       if (unlisten) unlisten();
       this.releaseGeneration(generation);
+      this.queue.dispose();
     };
   }
   /** @param snapshot Native command/event state. @returns Nothing; late command responses cannot replace newer events. */
   receive(snapshot: SessionSnapshot): void {
     if (snapshot.revision <= this.state.revision) return;
     this.state = snapshot;
+    this.receiveOutcome(snapshot);
     this.notify();
+  }
+  /** @param snapshot Native receipt. @returns Nothing; queues one timed outcome per completed save attempt. */
+  private receiveOutcome(snapshot: SessionSnapshot): void {
+    const outcome = snapshot.recordingOutcome;
+    if (!outcome || outcome.sequence <= this.outcomeSequence) return;
+    this.outcomeSequence = outcome.sequence;
+    this.queue.enqueue({
+      id: outcome.sequence,
+      kind: outcome.success ? 'success' : 'failure',
+      message: outcome.message,
+    });
   }
   /** @param command Native command with empty input and a snapshot result. @returns Completion after applying current native state or reporting failure. */
   async request(command: SnapshotCommand): Promise<void> {

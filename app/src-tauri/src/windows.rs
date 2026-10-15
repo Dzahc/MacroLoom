@@ -6,6 +6,8 @@ use crate::shortcuts::{
 use crate::window_view::{ContentSize, Position, WindowAdapter};
 use crate::{EventKind, Held, MouseButton};
 use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
@@ -14,16 +16,19 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromRect, HDC, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
+use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows_sys::Win32::UI::HiDpi::{
-    AdjustWindowRectExForDpi, GetDpiForWindow, SetProcessDpiAwarenessContext,
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, SendInput, UnregisterHotKey, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE,
-    KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOD_NOREPEAT,
+    GetAsyncKeyState, GetKeyboardLayout, MapVirtualKeyExW, RegisterHotKey, SendInput,
+    UnregisterHotKey, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC_EX, MOD_NOREPEAT,
     MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
 };
@@ -37,9 +42,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
     SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP,
-    WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
-    WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_NCDESTROY, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
 };
 
 static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
@@ -51,6 +56,8 @@ static RESERVED: LazyLock<Mutex<Availability>> =
     LazyLock::new(|| Mutex::new(Availability::default()));
 static SEQUENCES: LazyLock<Mutex<KeySequences>> =
     LazyLock::new(|| Mutex::new(KeySequences::default()));
+static OWN_KEY_SEQUENCES: LazyLock<Mutex<std::collections::HashSet<u16>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
 const RESERVATION_MESSAGE: u32 = WM_APP + 1;
 const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 const HOOK_FAILED: &str =
@@ -78,6 +85,175 @@ const WINDOW_WORK_AREA_ERROR: &str = "Could not read display work area";
 const WINDOW_CONTENT_ERROR: &str = "Compact content does not fit the display work area";
 const WINDOW_RESTORE_ERROR: &str = "Could not restore full window placement";
 const COMPACT_ROLLBACK_FAILED: &str = "compact rollback failed";
+const KEYBOARD_LAYOUT_MASK: usize = 0xffff_ffff;
+const FIRST_CAPTURE_KEY: u16 = 8;
+const LAST_CAPTURE_KEY: u16 = 254;
+const GENERIC_MODIFIERS: [u16; 3] = [0x10, 0x11, 0x12];
+const SNAPSHOT_MODIFIERS: [u16; 8] = [0xa2, 0xa3, 0xa0, 0xa1, 0xa4, 0xa5, 0x5b, 0x5c];
+const LEFT_MOUSE_KEY: u16 = 1;
+const RIGHT_MOUSE_KEY: u16 = 2;
+const EXTENDED_SCAN_MASK: u32 = 0xff00;
+const LOW_SCAN_MASK: u32 = 0xff;
+const SNAPSHOT_CONTROL_KEYS: [u16; 4] = [RECORD_KEY, STOP_KEY, 0x0d, 0x20];
+const RESERVED_CAPTURE_KEYS: [u16; 2] = [RECORD_KEY, STOP_KEY];
+const ENVIRONMENT_UNAVAILABLE: &str =
+    "Could not read the recording keyboard layout or display configuration";
+
+/// Atomically moves a flushed staging file without replacement, even when another process wins the filename race.
+pub fn commit_new_recording(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both buffers are live nul-terminated paths throughout this synchronous call. No replacement flag is set.
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Reads the foreground application's layout and every physical monitor; failures prevent misleading recording metadata.
+pub fn recording_environment() -> Result<crate::macro_format::RecordingEnvironment, String> {
+    // SAFETY: getters accept OS-owned HWND and a null optional process output; no handles are retained.
+    let thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), null_mut()) };
+    let layout = unsafe { GetKeyboardLayout(thread) };
+    if layout.is_null() {
+        return Err(ENVIRONMENT_UNAVAILABLE.into());
+    }
+    let mut displays: Vec<crate::macro_format::Display> = Vec::new();
+    // SAFETY: callback borrows this Vec exclusively for synchronous enumeration and never retains its pointer.
+    if unsafe {
+        EnumDisplayMonitors(
+            null_mut(),
+            std::ptr::null(),
+            Some(recording_monitor),
+            &mut displays as *mut _ as LPARAM,
+        )
+    } == 0
+    {
+        return Err(ENVIRONMENT_UNAVAILABLE.into());
+    }
+    displays.sort_by_key(|display| (display.x, display.y, display.width, display.height));
+    if displays.is_empty() {
+        return Err(ENVIRONMENT_UNAVAILABLE.into());
+    }
+    Ok(crate::recording::environment(
+        format!("{:08X}", layout as usize & KEYBOARD_LAYOUT_MASK),
+        displays,
+    ))
+}
+
+/// Copies one enumerated physical monitor and its effective scale into the caller-owned synchronous output.
+unsafe extern "system" fn recording_monitor(
+    monitor: HMONITOR,
+    _: HDC,
+    bounds: *mut RECT,
+    output: LPARAM,
+) -> i32 {
+    let mut dpi_x = BASE_DPI;
+    let mut dpi_y = BASE_DPI;
+    // SAFETY: monitor and bounds are supplied by EnumDisplayMonitors; DPI outputs are initialized writable locals.
+    if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } < 0 {
+        return 0;
+    }
+    // SAFETY: enumeration caller passes a uniquely borrowed live Vec; bounds is valid only for this callback.
+    let displays = unsafe { &mut *(output as *mut Vec<crate::macro_format::Display>) };
+    let rect = unsafe { &*bounds };
+    displays.push(crate::macro_format::Display {
+        x: rect.left,
+        y: rect.top,
+        width: (rect.right - rect.left) as u32,
+        height: (rect.bottom - rect.top) as u32,
+        scale_factor: f64::from(dpi_x) / f64::from(BASE_DPI),
+        extra: Default::default(),
+    });
+    1
+}
+
+/// Snapshots held inputs without injecting anything: modifiers first, then keys, then supported buttons.
+pub fn initial_recording_inputs() -> Vec<EventKind> {
+    let own_focus = own_window_focused();
+    let (x, y) = cursor_position();
+    ordered_initial_inputs(
+        own_focus,
+        POINT { x, y },
+        !own_point(POINT { x, y }),
+        key_held,
+    )
+}
+/// Applies the boundary ordering/exclusion policy to a held-state reader; the reader never injects or mutates input.
+fn ordered_initial_inputs(
+    own_focus: bool,
+    position: POINT,
+    capture_buttons: bool,
+    held: impl Fn(u16) -> bool,
+) -> Vec<EventKind> {
+    let mut inputs = Vec::new();
+    for key in SNAPSHOT_MODIFIERS {
+        if held(key) {
+            append_initial_key(&mut inputs, key);
+        }
+    }
+    for key in FIRST_CAPTURE_KEY..=LAST_CAPTURE_KEY {
+        if initial_key_excluded(key, own_focus) || !held(key) {
+            continue;
+        }
+        append_initial_key(&mut inputs, key);
+    }
+    if capture_buttons {
+        for (key, button) in [
+            (LEFT_MOUSE_KEY, MouseButton::Left),
+            (RIGHT_MOUSE_KEY, MouseButton::Right),
+        ] {
+            if held(key) {
+                inputs.push(EventKind::Mouse {
+                    button,
+                    down: true,
+                    x: position.x,
+                    y: position.y,
+                });
+            }
+        }
+    }
+    inputs
+}
+/// Excludes duplicate generic modifiers and complete Record/Stop or focused keyboard activation controls.
+fn initial_key_excluded(key: u16, own_focus: bool) -> bool {
+    if SNAPSHOT_MODIFIERS.contains(&key) || GENERIC_MODIFIERS.contains(&key) {
+        return true;
+    }
+    if RESERVED_CAPTURE_KEYS.contains(&key) {
+        return true;
+    }
+    own_focus && SNAPSHOT_CONTROL_KEYS.contains(&key)
+}
+/// Reports the actual down state without changing the user's keyboard or mouse state.
+fn key_held(key: u16) -> bool {
+    // SAFETY: this value-only getter accepts a supported virtual key and retains no pointer.
+    unsafe { GetAsyncKeyState(i32::from(key)) < 0 }
+}
+/// Adds one held native key with scan-code metadata from the foreground application's keyboard layout.
+fn append_initial_key(inputs: &mut Vec<EventKind>, vk: u16) {
+    // SAFETY: getters use the current foreground thread's OS-owned layout; conversion has no pointer parameters.
+    let thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), null_mut()) };
+    let layout = unsafe { GetKeyboardLayout(thread) };
+    let scan = unsafe { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC_EX, layout) };
+    inputs.push(EventKind::Key {
+        vk,
+        scan: (scan & LOW_SCAN_MASK) as u16,
+        extended: scan & EXTENDED_SCAN_MASK != 0,
+        down: true,
+    });
+}
 
 #[cfg(feature = "native-checks")]
 #[path = "session_window_tests.rs"]
@@ -417,6 +593,9 @@ fn update_registration(current: bool, id: i32, key: u16, wanted: bool) -> Result
 }
 /// Updates native reservations and waits for acknowledgement only from a worker, never a hook/UI callback.
 pub fn configure_shortcuts(record: bool, stop: bool) -> Result<Availability, String> {
+    if !hooks_running() && !record && !stop {
+        return Ok(Availability::default());
+    }
     let jobs = HOOK_JOBS.get().ok_or(HOOK_FAILED)?;
     let (reply, receive) = mpsc::sync_channel(1);
     jobs.send(ReservationJob {
@@ -744,18 +923,46 @@ fn handle_keyboard(input: &KBDLLHOOKSTRUCT, message: WPARAM) -> bool {
     if control_key(input, down) {
         return true;
     }
-    if input.dwExtraInfo == EXTRA_INFO || own_window_focused() {
+    if RESERVED_CAPTURE_KEYS.contains(&(input.vkCode as u16)) {
+        return false;
+    }
+    if input.dwExtraInfo == EXTRA_INFO || own_key_sequence(input.vkCode as u16, down) {
         return false;
     }
     if let Some(session) = ENGINE.get() {
-        session.capture(EventKind::Key {
-            vk: input.vkCode as u16,
-            scan: input.scanCode as u16,
-            extended: input.flags & LLKHF_EXTENDED != 0,
-            down,
-        });
+        session.capture_with_layout(
+            EventKind::Key {
+                vk: input.vkCode as u16,
+                scan: input.scanCode as u16,
+                extended: input.flags & LLKHF_EXTENDED != 0,
+                down,
+            },
+            &recording_keyboard_layout(),
+        );
     }
     false
+}
+/// Reads only the foreground layout for an input-boundary compatibility check; monitor enumeration stays off hook callbacks.
+fn recording_keyboard_layout() -> String {
+    // SAFETY: OS-owned foreground HWND and layout are queried synchronously without retaining borrowed state.
+    let thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), null_mut()) };
+    let layout = unsafe { GetKeyboardLayout(thread) };
+    format!("{:08X}", layout as usize & KEYBOARD_LAYOUT_MASK)
+}
+/// Excludes the complete key gesture originating in a MacroLoom control, even if focus changes before release.
+fn own_key_sequence(key: u16, down: bool) -> bool {
+    let Ok(mut ignored) = OWN_KEY_SEQUENCES.lock() else {
+        return true;
+    };
+    let own = own_window_focused();
+    if down && own {
+        ignored.insert(key);
+    }
+    let excluded = own || ignored.contains(&key);
+    if !down {
+        ignored.remove(&key);
+    }
+    excluded
 }
 /// Copies valid native mouse data into capture; control-window interactions and our injected events are excluded.
 unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
@@ -817,6 +1024,13 @@ unsafe extern "system" fn power_message(
 ) -> LRESULT {
     if message == WM_POWERBROADCAST && wparam == PBT_APMSUSPEND as usize {
         queue_control(ControlJob::Suspend);
+    }
+    if message == WM_DISPLAYCHANGE {
+        if let Some(session) = ENGINE.get() {
+            if let Err(error) = session.interrupt_recording(crate::recording::ENVIRONMENT_CHANGED) {
+                session.report(error);
+            }
+        }
     }
     if message == WM_NCDESTROY {
         // SAFETY: this subclass identifier was installed on this same HWND; callback is removed before native destruction finishes.
@@ -1008,6 +1222,67 @@ impl Drop for TestReservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TEST_KEY: u16 = 0x41;
+    const CONTROL_MODIFIER: u16 = 0xa2;
+    const SNAPSHOT_X: i32 = -20;
+    const SNAPSHOT_Y: i32 = 100;
+    const EXPECTED_SNAPSHOT: [u16; 3] = [CONTROL_MODIFIER, TEST_KEY, LEFT_MOUSE_KEY];
+    const GUI_START_KEYS: [u16; 5] = [RECORD_KEY, STOP_KEY, 0x0d, 0x20, LEFT_MOUSE_KEY];
+    #[test]
+    /// Held-state snapshot orders modifiers before keys/buttons and never saves reserved controls or duplicate generic modifiers.
+    fn held_snapshot_orders_inputs_and_excludes_control_gestures() {
+        let inputs = ordered_initial_inputs(
+            false,
+            POINT {
+                x: SNAPSHOT_X,
+                y: SNAPSHOT_Y,
+            },
+            true,
+            // Simulates simultaneous held keys, including generic Ctrl and the reserved Record key.
+            |key| {
+                [
+                    CONTROL_MODIFIER,
+                    GENERIC_MODIFIERS[1],
+                    TEST_KEY,
+                    RECORD_KEY,
+                    STOP_KEY,
+                    LEFT_MOUSE_KEY,
+                ]
+                .contains(&key)
+            },
+        );
+        let actual: Vec<u16> = inputs
+            .iter()
+            .map(
+                // Reduces events to their input identity while checking the saved initial mouse position.
+                |input| match input {
+                    EventKind::Key { vk, down, .. } => {
+                        assert!(*down);
+                        *vk
+                    }
+                    EventKind::Mouse { x, y, .. } => {
+                        assert_eq!((*x, *y), (SNAPSHOT_X, SNAPSHOT_Y));
+                        LEFT_MOUSE_KEY
+                    }
+                    EventKind::Move { .. } => {
+                        panic!("Initial snapshot cannot contain free movement")
+                    }
+                },
+            )
+            .collect();
+        assert_eq!(actual, EXPECTED_SNAPSHOT);
+        assert!(ordered_initial_inputs(
+            true,
+            POINT {
+                x: SNAPSHOT_X,
+                y: SNAPSHOT_Y
+            },
+            false,
+            // A GUI activation gesture must remain absent from the boundary snapshot.
+            |key| GUI_START_KEYS.contains(&key)
+        )
+        .is_empty());
+    }
 
     #[test]
     /// Negative monitor origins map to the same bounded absolute coordinates as positive desktop pixels.

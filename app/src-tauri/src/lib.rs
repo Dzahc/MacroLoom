@@ -6,6 +6,7 @@ mod input;
 mod library_commands;
 pub mod macro_format;
 mod presentation;
+mod recording;
 pub mod repository;
 mod session;
 mod session_control;
@@ -49,12 +50,19 @@ pub fn hold_conflict_shortcut() -> Result<(), String> {
 }
 /// Registers services and lifecycle owners; input_enabled selects real hooks or an isolated presentation-only check.
 fn desktop_builder(input_enabled: bool) -> tauri::Builder<tauri::Wry> {
+    desktop_builder_with_library(input_enabled, library_commands::LibraryService::new())
+}
+/// Binds a trusted library owner before service startup, allowing native checks to isolate their own files.
+fn desktop_builder_with_library(
+    input_enabled: bool,
+    library: library_commands::LibraryService,
+) -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         // Always filters Tao raw device events, removing its keyboard registration that suppresses our focused-window hooks.
         .device_event_filter(tauri::DeviceEventFilter::Always)
         .setup(move |app| {
             app.manage(configure::ConfigureService::default());
-            app.manage(library_commands::LibraryService::new());
+            app.manage(library);
             let window = app
                 .get_webview_window(MAIN_WINDOW_LABEL)
                 .ok_or(MAIN_WINDOW_UNAVAILABLE)?;
@@ -68,7 +76,7 @@ fn desktop_builder(input_enabled: bool) -> tauri::Builder<tauri::Wry> {
                 let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
                 windows::start_hooks(session.clone(), hwnd)?;
                 windows::watch_suspend(hwnd)?;
-                session_native::start_status(session);
+                session_native::start_status(session, app.handle().clone());
             }
             Ok(())
         })
@@ -85,6 +93,8 @@ fn desktop_builder(input_enabled: bool) -> tauri::Builder<tauri::Wry> {
             session_native::stop,
             session_native::play,
             session_native::retry_shortcuts,
+            session_native::retry_recording,
+            session_native::discard_recording,
             session_native::session_confirmation,
             session_native::session_keep_open,
             session_native::session_discard_exit,

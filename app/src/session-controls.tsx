@@ -39,6 +39,33 @@ export function SessionControls({
           </button>
         </>
       )}
+      {snapshot.saveFailed && (
+        <>
+          <p role="alert">{snapshot.message}</p>
+          <button
+            type="button"
+            onClick={
+              /** Retries the same retained macro; success remains backend-authoritative. */
+              () => {
+                void controller.request(SESSION_COMMAND.retryRecording);
+              }
+            }
+          >
+            {SESSION_TEXT.retryRecording}
+          </button>
+          <button
+            type="button"
+            onClick={
+              /** Explicitly abandons only this failed recording; committed files stay intact. */
+              () => {
+                void controller.request(SESSION_COMMAND.discardRecording);
+              }
+            }
+          >
+            {SESSION_TEXT.discardRecording}
+          </button>
+        </>
+      )}
       {idle && (!snapshot.shortcuts.record || !snapshot.shortcuts.stop) && (
         <button
           type="button"
@@ -52,7 +79,23 @@ export function SessionControls({
           {SESSION_TEXT.retry}
         </button>
       )}
-      {snapshot.closeRequested && (
+      <CloseControls snapshot={snapshot} controller={controller} />
+    </div>
+  );
+}
+
+/** @param props Backend close state and command owner. @returns Explicit close recovery after cleanup or a failed save. */
+function CloseControls({
+  snapshot,
+  controller,
+}: {
+  snapshot: SessionSnapshot;
+  controller: SessionController;
+}) {
+  const idle = snapshot.phase === PHASE.idle;
+  return (
+    <>
+      {snapshot.closeRequested && (idle || snapshot.saveFailed) && (
         <>
           <p role="alert">{SESSION_TEXT.close}</p>
           <button
@@ -68,7 +111,7 @@ export function SessionControls({
           </button>
           <button
             type="button"
-            disabled={!idle}
+            disabled={!idle && !snapshot.saveFailed}
             onClick={
               /** Explicitly discards unsaved capture; backend permits exit only after cleanup. */
               () => {
@@ -86,6 +129,6 @@ export function SessionControls({
           </button>
         </>
       )}
-    </div>
+    </>
   );
 }

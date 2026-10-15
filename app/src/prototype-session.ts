@@ -5,7 +5,7 @@ import { PHASE } from './library-model.ts';
 /** @param session Authoritative native lifecycle. @returns Compatibility presentation for the optional ML-8 view; unavailable timing metrics remain explicitly absent. */
 export function prototypeSnapshot(session: SessionSnapshot): Snapshot {
   return {
-    phase: session.phase,
+    phase: session.phase === PHASE.saving ? PHASE.idle : session.phase,
     eventCount: session.eventCount,
     dragMoveCount: session.dragMoveCount,
     lastRelease: session.lastRelease ? [...session.lastRelease] : null,

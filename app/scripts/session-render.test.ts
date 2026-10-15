@@ -89,3 +89,26 @@ void test('persistent cleanup recovery is inside the compact banner', () => {
   assert.match(banner, new RegExp(FAILURE));
   assert.match(banner, new RegExp(SESSION_TEXT.cleanup));
 });
+
+/** A failed recording save leaves accessible Retry/Discard controls in the restored full view after its toast expires. */
+void test('recording save recovery remains actionable in the full view', () => {
+  const snapshot = {
+    ...INITIAL_SESSION,
+    phase: PHASE.saving,
+    saveFailed: true,
+    unsaved: true,
+    message: FAILURE,
+  } as const;
+  const controller = new SessionController({
+    /** @returns An inert native listener. */
+    listen: () => Promise.resolve(/** Owns no native subscription. */ () => {}),
+    /** @returns Current retained recording state without claiming persistence. */
+    invoke: () => Promise.resolve(snapshot),
+  });
+  const markup = renderToStaticMarkup(
+    createElement(controls.SessionControls, { snapshot, controller }),
+  );
+  assert.match(markup, /role="alert"/);
+  assert.match(markup, new RegExp(SESSION_TEXT.retryRecording));
+  assert.match(markup, new RegExp(SESSION_TEXT.discardRecording));
+});

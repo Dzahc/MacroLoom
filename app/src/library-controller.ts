@@ -5,12 +5,14 @@ import {
   requestAction,
   canRequest,
   ACTION,
+  SOURCE,
   type LibraryAction,
   type LibrarySnapshot,
   type SelectionChange,
   type MacroSummary,
 } from './library-model.ts';
 import type { BackendLibraryState, MacroDocument } from './macro-contract.ts';
+import type { RecordingOutcome } from './session-contract.ts';
 import { OutcomeQueue } from './outcome-queue.ts';
 import {
   CONFIGURE_TEXT,
@@ -54,6 +56,7 @@ export class LibraryController {
   private seenFailures = 0;
   private nextOutcome = 0;
   private lastConfigureAttempt = INITIAL_CONFIGURE_ATTEMPT;
+  private recordingSequence = 0;
   private generation = 0;
   private pendingDelete: MacroSummary | null = null;
   private latestBackend: BackendLibraryState | null = null;
@@ -128,6 +131,14 @@ export class LibraryController {
     if (reconcileSelection(this.state.macros, change.macroId) === null) return;
     this.state = { ...this.state, selectedId: change.macroId };
     this.notify();
+  }
+  /** @param outcome Backend recording receipt. @returns Nothing; selects a new recording only after its disk commit. */
+  recorded(outcome: RecordingOutcome | null): void {
+    if (!outcome || outcome.sequence <= this.recordingSequence) return;
+    this.recordingSequence = outcome.sequence;
+    if (!outcome.success || !outcome.library) return;
+    this.apply(outcome.library);
+    this.select({ macroId: outcome.id, source: SOURCE.row });
   }
 
   /**

@@ -448,6 +448,7 @@ fn failed_cleanup_blocks_sessions_and_retry_releases_only_outstanding_input() {
     let session = Session::new(desktop.clone());
     session.record().expect("Record");
     session.capture(key(true));
+    session.capture(key(false));
     session.stop().expect("Stop capture");
     desktop.key_up_failure.store(true, Ordering::Release);
     desktop.release_failure.store(true, Ordering::Release);

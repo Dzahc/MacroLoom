@@ -129,7 +129,7 @@ Independent/background playback and ghost-pointer input are excluded from v1 by 
 7. Moving the cursor between completed clicks is allowed. Movement with no recorded supported mouse button held is not stored or replayed; each subsequent click/scroll still includes its own position.
 8. Include basic click-and-drag by recording timed `mouse_move` positions while a recorded left/right button is held, followed by the release at its actual location. Preserve modifier transitions during a drag. This supports ordinary drag-and-drop, text selection, sliders, and window movement/resizing without adding a separate gesture editor. Full cursor-path replay and drawing precision are outside v1.
 9. Exclude MacroLoom's own control interactions and reserved Record/Stop shortcuts from saved events. Establish the recording end at the initiating Stop interaction so its input is not appended to the macro.
-10. Preserve event order when timestamps are equal. Do not synthesize missing key presses for inputs already held before recording began.
+10. Preserve event order when timestamps are equal. Snapshot already-held keys and supported mouse buttons as initial presses at `0 ms`, excluding Record/Stop control gestures. Order initial modifiers first, then other keys, then buttons, deterministically within each group; subsequent events retain observed order. Do not synthesize releases at Stop: playback releases its remaining session-owned holds at the recorded end without moving to the Stop control or changing physical input during recording.
 11. Recording and playback cannot overlap in v1. Both the GUI and backend enforce this rule.
 
 V1 records key actions rather than inferring text. Reproduction assumes the same keyboard layout; semantic text entry and IME-specific behavior are deferred.
@@ -149,7 +149,8 @@ Limit movement volume through modest sampling/coalescing, with an initial target
 7. After successful save, add the macro to the list, select it, show a brief success toast naming the saved macro, and return to idle.
 8. An empty recording produces “No input recorded” and no macro file.
 9. If saving fails, show a brief failure toast, retain the recording in memory, and keep the error with Retry and Discard visible after the toast disappears. Do not claim it was saved or silently lose it. Discard requires an explicit user action.
-10. Create the save directory when absent. If it is unwritable, explain the problem before recording starts; do not silently switch storage directories.
+10. Stop automatically before exceeding the event/file-size limits, or when the keyboard layout/display configuration changes, sleep interrupts capture, or a capture failure is detected. Automatically save any valid nonempty captured portion and retain a clear explanation of the interruption. Do not resume automatically. Failed saves retain the same frozen UUID, creation/update timestamps, events and duration for Retry/Discard; change a generated name or filename only when a collision requires it. Include other applications' generated input while excluding MacroLoom's own injected input and control sequences.
+11. Create the save directory when absent. If it is unwritable, explain the problem before recording starts; do not silently switch storage directories.
 
 Resolve the storage path from the executable's directory, never the process's current working directory. No custom-directory preference is included in v1.
 

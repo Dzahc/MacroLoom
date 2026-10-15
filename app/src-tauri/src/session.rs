@@ -1,16 +1,19 @@
-//! One backend-owned temporary session, cancellation, and recoverable input cleanup.
+//! One backend-owned recording/playback session, automatic persistence and recoverable input cleanup.
 use crate::input::{track_held, wait_until, Capture, EventKind, Held};
+use crate::recording::{Recording, RecordingOutcome};
 use crate::shortcuts::{Availability, RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+#[path = "session_recording.rs"]
+mod recording_session;
 
 pub const SESSION_EVENT: &str = "session-state";
 pub const ACTIVE_SESSION: &str = "A session is already active or stopping";
 pub const READY: &str = "Ready. F9 records; F8 stops recording or playback.";
 pub const UNSAVED: &str = "Recording retained in memory; not saved.";
-pub const EMPTY_CAPTURE: &str = "No input captured.";
+pub const EMPTY_CAPTURE: &str = crate::recording::EMPTY_RECORDING;
 pub const RECORDING: &str = "Recording. F8 stops.";
 pub const PLAYING: &str = "Playing temporary recording. F8 stops.";
 pub const STOPPING: &str = "Stopping; releasing input and restoring the window.";
@@ -48,6 +51,7 @@ pub enum Phase {
     Recording,
     Playing,
     Stopping,
+    Saving,
 }
 
 #[derive(Clone, Serialize)]
@@ -67,10 +71,34 @@ pub struct Snapshot {
     pub cleanup_failed: bool,
     pub close_requested: bool,
     pub unsaved: bool,
+    pub save_failed: bool,
+    pub recording_outcome: Option<RecordingOutcome>,
 }
 
 /// Native system boundaries; deterministic tests substitute desktop effects, never session internals.
 pub trait Platform: Send + Sync {
+    /// Performs storage preflight and captures recording metadata; None selects the explicit temporary prototype.
+    fn recording(&self) -> Result<Option<Recording>, String> {
+        Ok(None)
+    }
+    /// Snapshots initially held keys/buttons without injecting input; called at the recording boundary.
+    fn initial_inputs(&self) -> Vec<EventKind> {
+        Vec::new()
+    }
+    /// Validates that a live recording still uses its original keyboard/display environment.
+    fn check_environment(
+        &self,
+        _: &crate::macro_format::RecordingEnvironment,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Commits frozen recording bytes on a worker; failure must preserve all prior files.
+    fn save_recording(
+        &self,
+        _: &mut Recording,
+    ) -> Result<crate::repository::recording_save::RecordingCommit, String> {
+        Err(crate::recording::SAVE_FAILED.into())
+    }
     /// Claims application operation ownership; the returned guard releases exclusion when dropped.
     fn reserve(&self) -> Result<Box<dyn Send>, String>;
     /// Returns whether library initialization, editor, deletion, or external interlocks prevent a start.
@@ -89,7 +117,7 @@ pub trait Platform: Send + Sync {
     fn publish(&self, snapshot: Snapshot);
 }
 
-/// All capture and session ownership; no native/window/disk work occurs while changing phase.
+/// Short-lived capture/session ownership; persistence and window transitions always run outside this lock.
 struct State {
     phase: Phase,
     generation: u64,
@@ -109,6 +137,11 @@ struct State {
     close_requested: bool,
     confirmation: Option<Box<dyn Send>>,
     confirmation_owner: Option<String>,
+    recording: Option<Recording>,
+    persistent: bool,
+    save_failed: bool,
+    recording_outcome: Option<RecordingOutcome>,
+    outcome_sequence: u64,
 }
 impl Default for State {
     /// Initializes an idle owner with no input, cancellation, or reservations.
@@ -132,6 +165,11 @@ impl Default for State {
             close_requested: false,
             confirmation: None,
             confirmation_owner: None,
+            recording: None,
+            persistent: false,
+            save_failed: false,
+            recording_outcome: None,
+            outcome_sequence: 0,
         }
     }
 }
@@ -173,7 +211,11 @@ impl Session {
             can_record: state.can_record && state.phase == Phase::Idle && !state.starting,
             cleanup_failed: state.cleanup_failed,
             close_requested: state.close_requested,
-            unsaved: !state.capture.events.is_empty(),
+            unsaved: state.phase == Phase::Saving
+                || state.recording.is_some()
+                || (!state.persistent && !state.capture.events.is_empty()),
+            save_failed: state.save_failed,
+            recording_outcome: state.recording_outcome.clone(),
         })
     }
     /// Increments the revision before publishing, allowing frontend events and IPC results to reconcile safely.
@@ -191,6 +233,7 @@ impl Session {
     }
     /// Refreshes idle availability and progress; a busy transition is left to its owner.
     pub fn refresh(&self) -> Result<Snapshot, String> {
+        self.check_recording()?;
         if let Ok(_transition) = self.transition.try_lock() {
             if self.lock()?.phase == Phase::Idle {
                 self.idle_shortcuts()?;
@@ -308,14 +351,15 @@ impl Session {
     /// Validates native ownership before capture activation, leaving previous data untouched when startup was cancelled.
     fn start_recording(&self) -> Result<(), String> {
         self.prepare(true)?;
-        let Some(previous) = self.begin_record()? else {
+        let recording = self.platform.recording()?;
+        let Some(previous) = self.begin_record(recording)? else {
             return Ok(());
         };
         self.publish()?;
         self.enter_view(previous)
     }
     /// Claims recording data and returns the previous capture for rollback if native entry fails.
-    fn begin_record(&self) -> Result<Option<Capture>, String> {
+    fn begin_record(&self, recording: Option<Recording>) -> Result<Option<Capture>, String> {
         let mut state = self.lock()?;
         if state.cancel.load(Ordering::Acquire) {
             return Ok(None);
@@ -323,6 +367,18 @@ impl Session {
         let previous = std::mem::take(&mut state.capture);
         state.phase = Phase::Recording;
         state.start = Some(Instant::now());
+        state.persistent = recording.is_some();
+        state.recording = recording;
+        state.save_failed = false;
+        for kind in self.platform.initial_inputs() {
+            let count = state.capture.events.len();
+            if let Some(recording) = &mut state.recording {
+                if !recording.accept(Duration::ZERO, &kind, count) {
+                    break;
+                }
+            }
+            state.capture.append(Duration::ZERO, kind);
+        }
         state.message = RECORDING.into();
         state.can_record = false;
         state.cleanup_failed = false;
@@ -360,6 +416,7 @@ impl Session {
     fn rollback_start(&self, previous: Capture, error: &str) -> Result<(), String> {
         let mut state = self.lock()?;
         state.capture = previous;
+        state.recording = None;
         state.phase = Phase::Stopping;
         state.start = None;
         state.worker = false;
@@ -379,14 +436,7 @@ impl Session {
     }
     /// Appends one observed event only while recording; short callbacks never do persistence or window transitions.
     pub fn capture(&self, kind: EventKind) {
-        if let Ok(mut state) = self.lock() {
-            if state.phase != Phase::Recording {
-                return;
-            }
-            if let Some(start) = state.start {
-                state.capture.append(start.elapsed(), kind);
-            }
-        }
+        self.capture_recording(kind);
     }
     /// Signals cancellation and freezes recording at the initiating Stop boundary, before any frontend callback or cleanup wait.
     pub fn signal_stop(&self, interrupted: bool) -> Result<(), String> {
@@ -417,7 +467,7 @@ impl Session {
                 }
                 .into();
             }
-            Phase::Stopping => return Ok(request),
+            Phase::Stopping | Phase::Saving => return Ok(request),
             Phase::Playing => {
                 state.cancel.store(true, Ordering::Release);
                 state.terminal = REPLAY_CANCELLED.into();
@@ -425,6 +475,11 @@ impl Session {
             Phase::Recording => {
                 let duration = state.start.map_or(Duration::ZERO, |start| start.elapsed());
                 state.capture.finish(duration, self.platform.cursor());
+                if interrupted {
+                    if let Some(recording) = &mut state.recording {
+                        recording.reason = crate::recording::CAPTURE_INTERRUPTED.into();
+                    }
+                }
                 state.terminal =
                     recording_message(interrupted, state.capture.events.is_empty()).into();
             }
@@ -511,13 +566,21 @@ impl Session {
         let availability = self.platform.shortcuts(false, false)?;
         let mut state = self.lock()?;
         state.shortcuts = availability;
-        state.phase = Phase::Idle;
         state.start = None;
-        state.reservation = None;
         state.cleanup_failed = false;
         state.message = state.terminal.clone();
+        let save = state.recording.is_some() && !state.capture.events.is_empty();
+        if !save {
+            state.recording = None;
+            state.reservation = None;
+        }
+        state.phase = if save { Phase::Saving } else { Phase::Idle };
         drop(state);
-        self.idle_shortcuts()
+        if save {
+            self.persist_recording()
+        } else {
+            self.idle_shortcuts()
+        }
     }
     #[cfg(test)]
     /// Receives and starts temporary replay synchronously for deterministic session checks.
@@ -690,13 +753,15 @@ impl Session {
     /// Allows explicit discard/exit only after native cleanup is complete.
     pub fn discard_exit(&self) -> Result<(), String> {
         let mut state = self.lock()?;
-        if state.phase != Phase::Idle || state.starting {
+        if (state.phase != Phase::Idle && !state.save_failed) || state.starting {
             return Err(ACTIVE_SESSION.into());
         }
         if !state.close_requested {
             return Err(NO_CLOSE_REQUEST.into());
         }
         state.capture = Capture::default();
+        state.recording = None;
+        state.reservation = None;
         Ok(())
     }
 }
@@ -735,6 +800,9 @@ fn validate_confirmation_owner(owner: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "session_recording_tests.rs"]
+mod recording_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;

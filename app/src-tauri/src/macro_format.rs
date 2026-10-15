@@ -115,7 +115,7 @@ pub enum RepeatMode {
     Indefinite,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 /// Recording metadata describes the original environment, independently of the current desktop.
 pub struct RecordingEnvironment {
@@ -127,7 +127,7 @@ pub struct RecordingEnvironment {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 /// One display uses signed physical origin coordinates and positive dimensions/scale.
 pub struct Display {

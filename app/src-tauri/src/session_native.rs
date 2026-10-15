@@ -52,7 +52,7 @@ impl NativePlatform {
             .state::<LibraryService>()
             .repository()?
             .snapshot()?;
-        if library.loading || !library.writable || library.deleting.is_some() {
+        if library.loading || library.deleting.is_some() {
             return Err(LIBRARY_UNAVAILABLE.into());
         }
         Ok(())
@@ -77,6 +77,55 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    /// Checks actual storage before capture and creates a stable recording identity; the explicit prototype stays temporary.
+    fn recording(&self) -> Result<Option<crate::recording::Recording>, String> {
+        if AppMode::current().input_prototype {
+            return Ok(None);
+        }
+        self.app
+            .state::<LibraryService>()
+            .repository()?
+            .recording_preflight()?;
+        crate::recording::Recording::new(windows::recording_environment()?).map(Some)
+    }
+    /// Captures held input at the same backend boundary used by button and shortcut starts.
+    fn initial_inputs(&self) -> Vec<EventKind> {
+        windows::initial_recording_inputs()
+    }
+    /// Detects a change to the target layout or physical display metadata on the background status worker.
+    fn check_environment(
+        &self,
+        environment: &crate::macro_format::RecordingEnvironment,
+    ) -> Result<(), String> {
+        if !windows::hooks_running() {
+            return Err(crate::recording::CAPTURE_INTERRUPTED.into());
+        }
+        let actual = windows::recording_environment()?;
+        if actual != *environment {
+            return Err(crate::recording::ENVIRONMENT_CHANGED.into());
+        }
+        Ok(())
+    }
+    /// Commits on the session worker and publishes library metadata only after atomic installation.
+    fn save_recording(
+        &self,
+        recording: &mut crate::recording::Recording,
+    ) -> Result<crate::repository::recording_save::RecordingCommit, String> {
+        let commit = self
+            .app
+            .state::<LibraryService>()
+            .repository()?
+            .save_recording(recording)?;
+        if let Some(library) = &commit.library {
+            if let Err(error) = self
+                .app
+                .emit(crate::library_commands::LIBRARY_EVENT, library)
+            {
+                eprintln!("{DELIVERY_FAILED}: {error}");
+            }
+        }
+        Ok(commit)
+    }
     /// Claims the existing backend operation interlock throughout a session and its cleanup.
     fn reserve(&self) -> Result<Box<dyn Send>, String> {
         self.require_library()?;
@@ -159,6 +208,7 @@ fn presentation_status(snapshot: &Snapshot) -> PreviewStatus {
         Phase::Recording => PresentationPhase::Recording,
         Phase::Playing => PresentationPhase::Playing,
         Phase::Stopping => PresentationPhase::Stopping,
+        Phase::Saving => PresentationPhase::Saving,
     };
     PreviewStatus {
         phase,
@@ -168,15 +218,48 @@ fn presentation_status(snapshot: &Snapshot) -> PreviewStatus {
     }
 }
 /// Publishes bounded progress and reconciles idle reservations away from UI/input event loops.
-pub fn start_status(session: Arc<Session>) {
-    std::thread::spawn(move || {
-        while windows::hooks_running() {
-            if let Err(error) = session.refresh() {
-                session.report(error);
-            }
-            std::thread::sleep(STATUS_INTERVAL);
+pub fn start_status(session: Arc<Session>, app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let running = windows::hooks_running();
+        if let Err(error) = session.refresh() {
+            session.report(error);
         }
+        if session.snapshot().is_ok_and(|snapshot| {
+            snapshot.close_requested && snapshot.phase == Phase::Idle && !snapshot.unsaved
+        }) {
+            windows::shutdown_hooks();
+            app.exit(SUCCESS_EXIT);
+        }
+        if !running {
+            break;
+        }
+        std::thread::sleep(STATUS_INTERVAL);
     });
+}
+
+#[tauri::command]
+/// Retries only the frozen failed save on a worker; concurrent operations remain excluded.
+pub async fn retry_recording(
+    window: WebviewWindow,
+    session: State<'_, Arc<Session>>,
+) -> Result<Snapshot, String> {
+    require_caller(&window)?;
+    let session = session.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || session.retry_recording())
+        .await
+        .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+/// Explicitly discards a failed save and releases the operation interlock without changing prior files.
+pub async fn discard_recording(
+    window: WebviewWindow,
+    session: State<'_, Arc<Session>>,
+) -> Result<Snapshot, String> {
+    require_caller(&window)?;
+    let session = session.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || session.discard_recording())
+        .await
+        .map_err(|error| error.to_string())?
 }
 /// Enforces session command callers, including the explicit development control window.
 fn require_caller(window: &WebviewWindow) -> Result<(), String> {
@@ -285,10 +368,12 @@ pub fn session_discard_exit(
     session: State<'_, Arc<Session>>,
 ) -> Result<(), String> {
     require_caller(&window)?;
-    window
-        .app_handle()
-        .state::<ConfigureService>()
-        .require_operation()?;
+    if !session.snapshot()?.save_failed {
+        window
+            .app_handle()
+            .state::<ConfigureService>()
+            .require_operation()?;
+    }
     session.discard_exit()?;
     windows::shutdown_hooks();
     window.app_handle().exit(SUCCESS_EXIT);

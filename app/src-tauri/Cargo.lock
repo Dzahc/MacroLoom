@@ -1736,6 +1736,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "uuid",
  "windows-sys 0.61.2",
 ]
 

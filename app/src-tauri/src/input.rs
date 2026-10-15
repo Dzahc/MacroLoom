@@ -67,6 +67,26 @@ pub struct Capture {
     last_move: Option<Duration>,
 }
 impl Capture {
+    /// Determines whether an event belongs to the recorded stream before bounded storage accounting.
+    pub fn will_record(&self, at: Duration, kind: &EventKind) -> bool {
+        match kind {
+            EventKind::Move { .. } => {
+                self.buttons.iter().any(|held| *held)
+                    && self
+                        .last_move
+                        .is_none_or(|previous| at.saturating_sub(previous) >= MOVE_SAMPLE)
+            }
+            EventKind::Mouse {
+                button,
+                down: false,
+                ..
+            } => self.buttons[button.index()],
+            EventKind::Key {
+                vk, down: false, ..
+            } => self.keys.contains_key(vk),
+            _ => true,
+        }
+    }
     /// Appends observed input at `at`, coalescing free/closely spaced drag motion and preserving held transitions.
     pub fn append(&mut self, at: Duration, kind: EventKind) {
         if !self.observe(at, &kind) {
@@ -115,35 +135,9 @@ impl Capture {
         self.drag_moves += 1;
         true
     }
-    /// Freezes duration and appends releases for recorded holds; never releases the user's physical input.
-    pub fn finish(&mut self, duration: Duration, position: (i32, i32)) {
+    /// Freezes duration without inventing releases or changing physical input; playback owns end-of-run cleanup.
+    pub fn finish(&mut self, duration: Duration, _position: (i32, i32)) {
         self.duration = duration;
-        for (vk, (scan, extended)) in self.keys.drain() {
-            self.events.push(Event {
-                at: duration,
-                kind: EventKind::Key {
-                    vk,
-                    scan,
-                    extended,
-                    down: false,
-                },
-            });
-        }
-        for button in MouseButton::ALL {
-            if self.buttons[button.index()] {
-                self.events.push(Event {
-                    at: duration,
-                    kind: EventKind::Mouse {
-                        button,
-                        down: false,
-                        x: position.0,
-                        y: position.1,
-                    },
-                });
-                self.last_release = Some(position);
-            }
-        }
-        self.buttons = [false; 2];
     }
 }
 /// Updates successfully injected holds; a repeated press retains one entry and releases remove only matching ownership.
