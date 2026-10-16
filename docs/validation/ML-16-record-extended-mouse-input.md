@@ -26,6 +26,12 @@ Native adapter fixtures use controlled Windows messages and held-state readers;
 they do not inject desktop input. They do not establish ordinary-application or
 live mixed-DPI evidence.
 
+The subsequent [live desktop capture session](ML-16-desktop-capture-session.md)
+records actual application effects and five inspected saved recordings, including
+an owner-operated curved/paused selection and a physical 175%/100% crossing.
+It distinguishes those observations from the remaining right-button, toolbar,
+and held-input-at-Stop cases.
+
 Completion gate: `npm.cmd --prefix app run verify` **PASS**, October 15, 2026.
 All gate checks passed: refreshed origin, pinned environments, formatting,
 TypeScript, ESLint, production frontend build, 75 frontend/tooling tests,
@@ -45,17 +51,19 @@ unsafe reads are documented, and behavior tests reuse source constants.
 
 ## Spec
 
-Implementation review found no code defects or scope creep. One acceptance item
-remains incomplete: ordinary-application capture evidence, including the live
-mixed-DPI baseline. The checklist below is pending, so the automated results do
-not establish those cases. Saved-library replay remains ML-17.
+Implementation review found no code defects or scope creep. The subsequent live
+capture session supplies ordinary-application and mixed-DPI evidence, but the
+interactive acceptance item remains incomplete for the specific cases listed
+below. Saved-library replay remains ML-17.
 
 Review totals: Standards **0 findings**; Spec **1 pending validation item**,
 **0 implementation defects**. Issue #16 remains open for interactive evidence.
 
 ## Interactive Windows capture checklist
 
-Status: **pending interactive evidence**. No target-application pass is claimed.
+Status: **partially executed**; see the linked live session for passed gestures and
+inspected saved-event evidence. Right-button/toolbar cases and a recording that
+ends with a held button remain pending; issue #16 and P2 remain open.
 Use scratch files/windows and stop with F8 unless a step specifically tests the
 toolbar. Inspect each resulting JSON file; do not use the current saved-library
 Play control as evidence of replay. Keep original captures for ML-17 replay checks.

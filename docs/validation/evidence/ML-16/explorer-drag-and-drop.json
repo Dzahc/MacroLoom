@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "5a057226-681d-4959-a698-45164c036d65",
+  "name": "Macro 2026-10-16 04-22-33",
+  "createdAt": "2026-10-16T04:22:33.746Z",
+  "updatedAt": "2026-10-16T04:22:33.746Z",
+  "recording": {
+    "platform": "windows",
+    "coordinateSpace": "screen_physical_pixels",
+    "keyboardLayout": "04090409",
+    "displays": [
+      { "x": 0, "y": 0, "width": 3840, "height": 2160, "scaleFactor": 1.75 },
+      { "x": 3840, "y": 0, "width": 1920, "height": 1080, "scaleFactor": 1.0 }
+    ]
+  },
+  "durationMs": 29730,
+  "playback": {
+    "speed": 1.0,
+    "repeatMode": "once",
+    "totalRuns": 1,
+    "intervalMs": 0
+  },
+  "events": [
+    {
+      "atMs": 16558,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 1129,
+      "y": 832
+    },
+    { "atMs": 16560, "type": "mouse_move", "x": 1138, "y": 781 },
+    { "atMs": 16578, "type": "mouse_up", "button": "left", "x": 1138, "y": 781 }
+  ]
+}
