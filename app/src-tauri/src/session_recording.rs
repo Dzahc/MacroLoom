@@ -32,12 +32,14 @@ impl Session {
             return;
         };
         let at = start.elapsed();
-        if !state.capture.will_record(at, &kind) {
+        if !state.capture.will_record(&kind) {
             return;
         }
-        let count = state.capture.events.len();
-        if let Some(recording) = &mut state.recording {
-            if !recording.accept(at, &kind, count) {
+        let State {
+            capture, recording, ..
+        } = &mut *state;
+        if let Some(recording) = recording {
+            if !recording.accept_capture(capture, at, &kind) {
                 freeze_automatic(&mut state, recording::LIMIT_REACHED, at);
                 return;
             }

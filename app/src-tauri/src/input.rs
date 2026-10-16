@@ -14,7 +14,7 @@ pub enum MouseButton {
 impl MouseButton {
     pub const ALL: [Self; 2] = [Self::Left, Self::Right];
     /// Returns the capture-state slot for this button.
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         match self {
             Self::Left => 0,
             Self::Right => 1,
@@ -47,6 +47,11 @@ pub enum EventKind {
         x: i32,
         y: i32,
     },
+    Wheel {
+        delta: i32,
+        x: i32,
+        y: i32,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Input successfully pressed by this playback session, pending a successful release.
@@ -65,17 +70,13 @@ pub struct Capture {
     keys: HashMap<u16, (u16, bool)>,
     buttons: [bool; 2],
     last_move: Option<Duration>,
+    pending_move: bool,
 }
 impl Capture {
     /// Determines whether an event belongs to the recorded stream before bounded storage accounting.
-    pub fn will_record(&self, at: Duration, kind: &EventKind) -> bool {
+    pub fn will_record(&self, kind: &EventKind) -> bool {
         match kind {
-            EventKind::Move { .. } => {
-                self.buttons.iter().any(|held| *held)
-                    && self
-                        .last_move
-                        .is_none_or(|previous| at.saturating_sub(previous) >= MOVE_SAMPLE)
-            }
+            EventKind::Move { .. } => self.buttons.iter().any(|held| *held),
             EventKind::Mouse {
                 button,
                 down: false,
@@ -87,15 +88,35 @@ impl Capture {
             _ => true,
         }
     }
-    /// Appends observed input at `at`, coalescing free/closely spaced drag motion and preserving held transitions.
+    /// Returns a consecutive provisional tail eligible for replacement at `at`; pauses preserve the old endpoint.
+    pub fn replacement(&self, at: Duration, kind: &EventKind) -> Option<&Event> {
+        let tail = self.events.last()?;
+        if !self.pending_move || at.saturating_sub(tail.at) >= MOVE_SAMPLE {
+            return None;
+        }
+        if let EventKind::Move { .. } = kind {
+            Some(tail)
+        } else {
+            None
+        }
+    }
+    /// Retains input at its observed time, keeping a bounded provisional final movement between sampled points.
     pub fn append(&mut self, at: Duration, kind: EventKind) {
-        if !self.observe(at, &kind) {
+        if !self.will_record(&kind) {
             return;
         }
+        if let EventKind::Move { .. } = kind {
+            self.movement(at, kind);
+            return;
+        }
+        // The provisional tail is already in order and budgeted; a transition makes it immutable.
+        self.pending_move = false;
+        self.last_move = None;
+        self.observe(&kind);
         self.events.push(Event { at, kind });
     }
-    /// Updates capture state; returns false for free motion or motion inside the sample interval.
-    fn observe(&mut self, at: Duration, kind: &EventKind) -> bool {
+    /// Updates observed key/button ownership after acceptance; release locations remain the actual observed pixels.
+    fn observe(&mut self, kind: &EventKind) {
         match kind {
             EventKind::Key {
                 vk,
@@ -111,33 +132,34 @@ impl Capture {
             }
             EventKind::Mouse { button, down, x, y } => {
                 self.buttons[button.index()] = *down;
-                self.last_move = None;
                 if !down {
                     self.last_release = Some((*x, *y));
                 }
             }
-            EventKind::Move { .. } => return self.movement(at),
+            EventKind::Move { .. } | EventKind::Wheel { .. } => {}
         }
-        true
     }
-    /// Retains held-button movement at bounded density without creating free-cursor paths.
-    fn movement(&mut self, at: Duration) -> bool {
-        if !self.buttons.iter().any(|held| *held) {
-            return false;
-        }
-        if self
+    /// Replaces only a consecutive provisional movement, preserving the first point and latest original timestamp.
+    fn movement(&mut self, at: Duration, kind: EventKind) {
+        let sampled = self
             .last_move
-            .is_some_and(|previous| at.saturating_sub(previous) < MOVE_SAMPLE)
-        {
-            return false;
+            .is_none_or(|previous| at.saturating_sub(previous) >= MOVE_SAMPLE);
+        if self.replacement(at, &kind).is_some() {
+            self.events.pop();
+        } else {
+            self.drag_moves += 1;
         }
-        self.last_move = Some(at);
-        self.drag_moves += 1;
-        true
+        self.events.push(Event { at, kind });
+        self.pending_move = !sampled;
+        if sampled {
+            self.last_move = Some(at);
+        }
     }
     /// Freezes duration without inventing releases or changing physical input; playback owns end-of-run cleanup.
     pub fn finish(&mut self, duration: Duration, _position: (i32, i32)) {
         self.duration = duration;
+        self.pending_move = false;
+        self.last_move = None;
     }
 }
 /// Updates successfully injected holds; a repeated press retains one entry and releases remove only matching ownership.
@@ -150,7 +172,7 @@ pub fn track_held(held: &mut Vec<Held>, kind: &EventKind) {
             down,
         } => update_held(held, Held::Key(*vk, *scan, *extended), *down),
         EventKind::Mouse { button, down, .. } => update_held(held, Held::Button(*button), *down),
-        EventKind::Move { .. } => {}
+        EventKind::Move { .. } | EventKind::Wheel { .. } => {}
     }
 }
 /// Adds/removes a single held input after the corresponding injection succeeds.

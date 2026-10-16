@@ -350,3 +350,50 @@ fn event_limit_automatically_saves_a_valid_prefix() {
         .expect("Valid prefix");
     assert_eq!(document.events.len(), crate::macro_format::MAX_EVENTS);
 }
+
+#[test]
+/// Session Stop commits wheel data and the final observed drag point, leaving held-button cleanup to future playback.
+fn stopping_a_mouse_recording_commits_its_wheel_and_final_held_position() {
+    const FINAL_X: i32 = test_support::TEST_X + 30;
+    const FINAL_Y: i32 = test_support::TEST_Y - 20;
+    const WHEEL_DELTA: i32 = -45;
+    const EXPECTED_EVENTS: usize = 4;
+    const ENDPOINT_INDEX: usize = 2;
+    let desktop = Desktop::new(vec![button(true)]);
+    let session = Session::new(desktop.clone());
+    session.record().expect("Record mouse actions");
+    session.capture(EventKind::Move {
+        x: test_support::TEST_X,
+        y: FINAL_Y,
+    });
+    session.capture(EventKind::Move {
+        x: FINAL_X,
+        y: FINAL_Y,
+    });
+    session.capture(EventKind::Wheel {
+        delta: WHEEL_DELTA,
+        x: FINAL_X,
+        y: FINAL_Y,
+    });
+    let stopped = session.stop().expect("Save held drag");
+    let outcome = stopped.recording_outcome.expect("Save receipt");
+    assert!(outcome.success);
+    let document = desktop
+        .folder
+        .repository
+        .read(&outcome.id)
+        .expect("Committed mouse recording");
+    assert_eq!(document.events.len(), EXPECTED_EVENTS);
+    let crate::macro_format::EventData::MouseMove { x, y } = document.events[ENDPOINT_INDEX].data
+    else {
+        panic!("Expected final observed drag endpoint");
+    };
+    assert_eq!((x, y), (FINAL_X, FINAL_Y));
+    let crate::macro_format::EventData::MouseWheel { delta, x, y, .. } =
+        document.events.last().expect("Wheel event").data
+    else {
+        panic!("Expected saved positioned wheel");
+    };
+    assert_eq!(delta, WHEEL_DELTA);
+    assert_eq!((x, y), (FINAL_X, FINAL_Y));
+}

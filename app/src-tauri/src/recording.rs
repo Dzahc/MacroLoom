@@ -72,13 +72,37 @@ impl Recording {
     }
     /// Accounts for one observed serialized event before accepting it; rejection leaves the valid prefix intact.
     pub fn accept(&mut self, at: Duration, kind: &EventKind, count: usize) -> bool {
+        self.accept_from(at, kind, count, self.bytes)
+    }
+    /// Budgets an append or provisional-tail replacement without consuming space when the event is rejected.
+    pub fn accept_capture(&mut self, capture: &Capture, at: Duration, kind: &EventKind) -> bool {
+        let replaced = capture.replacement(at, kind);
+        let removed = match replaced {
+            Some(event) => event_size(event.at, &event.kind),
+            None => Some(0),
+        };
+        let Some(baseline) = removed.and_then(|size| self.bytes.checked_sub(size)) else {
+            return false;
+        };
+        // A replacement exists only when events.last() exists, so subtraction cannot underflow.
+        let count = capture.events.len() - usize::from(replaced.is_some());
+        self.accept_from(at, kind, count, baseline)
+    }
+    /// Commits the new serialized budget only after both count and byte limits pass against the proposed baseline.
+    fn accept_from(
+        &mut self,
+        at: Duration,
+        kind: &EventKind,
+        count: usize,
+        baseline: usize,
+    ) -> bool {
         if count >= macro_format::MAX_EVENTS {
             return false;
         }
-        let Ok(bytes) = serde_json::to_vec(&saved_event(at, kind)) else {
+        let Some(bytes) = event_size(at, kind) else {
             return false;
         };
-        let size = self.bytes + bytes.len() + EVENT_SEPARATOR_BYTES;
+        let size = baseline + bytes;
         if size as u64 > macro_format::MAX_FILE_BYTES {
             return false;
         }
@@ -90,6 +114,13 @@ impl Recording {
         self.document.duration_ms = milliseconds(capture.duration);
         self.document.events = capture.events.iter().map(convert_event).collect();
     }
+}
+
+/// Measures one serialized event and its separator; serialization failure rejects input before capture mutation.
+fn event_size(at: Duration, kind: &EventKind) -> Option<usize> {
+    serde_json::to_vec(&saved_event(at, kind))
+        .ok()
+        .map(|bytes| bytes.len() + EVENT_SEPARATOR_BYTES)
 }
 
 #[derive(Clone, Serialize)]
@@ -133,6 +164,12 @@ pub fn saved_event(at: Duration, kind: &EventKind) -> RecordedEvent {
         } => key_data(vk, scan, extended, down),
         EventKind::Mouse { button, down, x, y } => mouse_data(button, down, x, y),
         EventKind::Move { x, y } => EventData::MouseMove { x, y },
+        EventKind::Wheel { delta, x, y } => EventData::MouseWheel {
+            axis: macro_format::WheelAxis::Vertical,
+            delta,
+            x,
+            y,
+        },
     };
     RecordedEvent {
         at_ms: milliseconds(at),
@@ -167,6 +204,9 @@ fn mouse_data(button: MouseButton, down: bool, x: i32, y: i32) -> EventData {
         EventData::MouseUp { button, x, y }
     }
 }
+#[cfg(test)]
+#[path = "recording_mouse_tests.rs"]
+mod mouse_tests;
 #[cfg(test)]
 #[path = "recording_test_support.rs"]
 pub(crate) mod test_support;
