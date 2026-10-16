@@ -36,6 +36,10 @@ injection and reserved controls are excluded.
 - Initial key ownership regression coverage retains a snapshotted Ctrl release
   before later typing, preserves repeats while MacroLoom is focused, keeps control
   activation gestures excluded and replaces ownership at the next snapshot.
+- Startup focus-change regressions exclude control-origin Enter/Space presses,
+  repeats and releases, while retaining valid initial modifiers and externally
+  held Enter/Space. A new external press becomes recordable after the activation
+  gesture's real release.
 - Frontend tests cover selection after commit, stale/duplicate outcome delivery,
   timed accessible outcomes and persistent save recovery controls.
 - Completion command: `npm.cmd --prefix app run verify`. Its final result is

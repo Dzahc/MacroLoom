@@ -208,7 +208,15 @@ impl OwnKeySequences {
         capture_buttons: bool,
         held: impl Fn(u16) -> bool,
     ) -> Vec<EventKind> {
-        let inputs = ordered_initial_inputs(own_focus, position, capture_buttons, held);
+        let inputs = ordered_initial_inputs(
+            own_focus,
+            position,
+            capture_buttons,
+            // Startup may outlive focus: a held activation gesture retains its control origin.
+            |key| {
+                held(key) && !(SNAPSHOT_CONTROL_KEYS.contains(&key) && self.ignored.contains(&key))
+            },
+        );
         self.recorded.clear();
         for input in &inputs {
             if let EventKind::Key { vk, down: true, .. } = input {

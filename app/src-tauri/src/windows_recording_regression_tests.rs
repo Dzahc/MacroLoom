@@ -13,7 +13,93 @@ const EXPECTED_EVENTS: usize = 4;
 const RELEASE_INDEX: usize = 1;
 const EXPECTED_RELEASE: &str = "Ctrl release must precede subsequent typing";
 const ENTER_KEY: u16 = SNAPSHOT_CONTROL_KEYS[2];
+const SPACE_KEY: u16 = SNAPSHOT_CONTROL_KEYS[3];
+const ACTIVATION_KEYS: [u16; 2] = [ENTER_KEY, SPACE_KEY];
 const LATER_CONTROL_KEY: u16 = test_support::TEST_KEY;
+
+#[test]
+/// Activation gestures retain their MacroLoom origin when asynchronous startup snapshots after focus leaves the app.
+fn regression_record_activation_stays_excluded_after_startup_focus_change() {
+    for activation in ACTIVATION_KEYS {
+        let mut keys = OwnKeySequences::default();
+        assert!(keys.key(activation, true, true));
+        assert!(keys.key(CONTROL_KEY, true, true));
+        let initial = keys.initial_snapshot(
+            false,
+            POINT {
+                x: test_support::TEST_X,
+                y: test_support::TEST_Y,
+            },
+            false,
+            // Enter/Space remains held from the Record control while Ctrl is valid initial recording data.
+            |key| [CONTROL_KEY, activation].contains(&key),
+        );
+        let captured: Vec<u16> = initial
+            .iter()
+            .filter_map(
+                // Captures the real snapshot identities before subsequent repeats/releases can affect the filter.
+                |input| match input {
+                    EventKind::Key { vk, .. } => Some(*vk),
+                    _ => None,
+                },
+            )
+            .collect();
+        assert_eq!(
+            captured,
+            vec![CONTROL_KEY],
+            "Record activation entered the initial snapshot after focus changed"
+        );
+        assert!(
+            keys.key(activation, true, false),
+            "Record activation repeat escaped exclusion"
+        );
+        assert!(
+            keys.key(activation, false, false),
+            "Record activation release escaped exclusion"
+        );
+        assert!(
+            !keys.key(CONTROL_KEY, false, false),
+            "Valid initial modifier lost its release"
+        );
+        assert!(
+            !keys.key(activation, true, false),
+            "A new external activation-key press must be recordable"
+        );
+        assert!(!keys.key(activation, false, false));
+    }
+}
+
+#[test]
+/// Enter/Space held in the target application remains ordinary initial data when it did not originate in a control.
+fn external_held_activation_keys_remain_recordable() {
+    for activation in ACTIVATION_KEYS {
+        let mut keys = OwnKeySequences::default();
+        assert!(!keys.key(activation, true, false));
+        let initial = keys.initial_snapshot(
+            false,
+            POINT {
+                x: test_support::TEST_X,
+                y: test_support::TEST_Y,
+            },
+            false,
+            // A real target-app Enter/Space hold has no MacroLoom control history.
+            |key| key == activation,
+        );
+        let captured: Vec<u16> = initial
+            .iter()
+            .filter_map(
+                // Reads native key identities from the same boundary used by startup.
+                |input| match input {
+                    EventKind::Key { vk, .. } => Some(*vk),
+                    _ => None,
+                },
+            )
+            .collect();
+        assert_eq!(captured, vec![activation]);
+        assert!(!keys.key(activation, true, false));
+        assert!(!keys.key(activation, false, false));
+    }
+}
 
 #[test]
 /// A later recording boundary replaces initial key ownership instead of exempting gestures from an older snapshot.
