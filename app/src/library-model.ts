@@ -152,7 +152,7 @@ export function canRequest(
     );
   if (!canStartOperation(snapshot)) return false;
   if (action === ACTION.record)
-    return snapshot.writable !== false && snapshot.recordingAvailable !== false;
+    return snapshot.recordingAvailable ?? snapshot.writable !== false;
   if (action === ACTION.play && snapshot.playbackAvailable === false)
     return false;
   if (action === ACTION.delete) {

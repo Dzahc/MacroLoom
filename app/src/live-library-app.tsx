@@ -114,6 +114,11 @@ export function LiveLibraryApp({
     [windowController, desiredCompact],
   );
   useEffect(
+    /** Reconciles the durable commit receipt before selecting its entry; failures preserve existing selection. */
+    () => controller.recorded(nativeSession.snapshot.recordingOutcome),
+    [controller, nativeSession.snapshot.recordingOutcome],
+  );
+  useEffect(
     /** Connects native progress and returns owner cleanup. */ () => {
       mounted.current = true;
       const disconnect = controller.connect();
@@ -229,6 +234,10 @@ export function LiveLibraryApp({
           notifications={
             <>
               <OutcomeToasts queue={controller.queue} compact={compact} />
+              <OutcomeToasts
+                queue={nativeSession.controller.queue}
+                compact={compact}
+              />
               <OutcomeToasts queue={windowController.failures} />
             </>
           }

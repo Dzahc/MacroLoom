@@ -1,4 +1,5 @@
 import { PHASE } from './library-model.ts';
+import type { BackendLibraryState } from './macro-contract.ts';
 
 export const SESSION_EVENT = 'session-state';
 export const SESSION_COMMAND = {
@@ -10,6 +11,8 @@ export const SESSION_COMMAND = {
   confirmation: 'session_confirmation',
   keepOpen: 'session_keep_open',
   discardExit: 'session_discard_exit',
+  retryRecording: 'retry_recording',
+  discardRecording: 'discard_recording',
 } as const;
 export const SESSION_TEXT = {
   retry: 'Retry shortcuts',
@@ -27,6 +30,8 @@ export const SESSION_TEXT = {
   f8Conflict:
     'F8 Stop is unavailable. Close the application using it, then Retry shortcuts.',
   playbackDeferred: 'Saved-macro playback arrives in ML-17.',
+  retryRecording: 'Retry save',
+  discardRecording: 'Discard recording',
 } as const;
 
 /** Native command/event contract; capture data and injected held-input ownership never enter React state. */
@@ -36,6 +41,7 @@ export type SessionSnapshot = Readonly<{
     | typeof PHASE.idle
     | typeof PHASE.recording
     | typeof PHASE.playing
+    | typeof PHASE.saving
     | typeof PHASE.stopping;
   elapsedMs: number;
   eventCount: number;
@@ -48,6 +54,17 @@ export type SessionSnapshot = Readonly<{
   cleanupFailed: boolean;
   closeRequested: boolean;
   unsaved: boolean;
+  saveFailed: boolean;
+  recordingOutcome: RecordingOutcome | null;
+}>;
+/** Durable backend receipt; a library entry and automatic selection require committed persistence. */
+export type RecordingOutcome = Readonly<{
+  sequence: number;
+  id: string;
+  name: string;
+  success: boolean;
+  message: string;
+  library: BackendLibraryState | null;
 }>;
 export const INITIAL_SESSION: SessionSnapshot = {
   revision: -1,
@@ -63,6 +80,8 @@ export const INITIAL_SESSION: SessionSnapshot = {
   cleanupFailed: false,
   closeRequested: false,
   unsaved: false,
+  saveFailed: false,
+  recordingOutcome: null,
 };
 /** Commands whose input is empty and whose result is a revisioned session snapshot. */
 export type SnapshotCommand = Exclude<

@@ -4,6 +4,7 @@ use super::*;
 use crate::presentation::PREVIEW_WINDOW;
 use crate::session::{Phase, Snapshot};
 use crate::shortcuts::{RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -21,7 +22,38 @@ const STOP_BUTTON: &str = "document.querySelector('[data-action=stop]')";
 const RETRY_BUTTON: &str = "Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Retry shortcuts')";
 const OPEN_PREVIEW: &str = "window.__TAURI_INTERNALS__.invoke('open_presentation_preview')";
 const PREVIEW_READY: &str = "document.querySelector('.native-development [role=status]')?.textContent === 'Presentation applied to the main window.'";
-const CHECK_PASSED: &str = "PASS: visible F9/F8 conflicts, button fallback, retained capture, retry recovery, and main/development-focused hook controls";
+const CHECK_PASSED: &str = "PASS: visible F9/F8 conflicts, button fallback, committed recording preservation, retry recovery, and main/development-focused hook controls";
+const TEST_LIBRARY_PREFIX: &str = "macroloom-native-session-check";
+
+/// Owns only a unique temporary native-check library, never the executable's ordinary macros folder.
+struct CheckLibrary(PathBuf);
+impl CheckLibrary {
+    /// Chooses an isolated path; the ordinary library worker performs discovery and directory creation.
+    fn new() -> Self {
+        Self(std::env::temp_dir().join(format!("{TEST_LIBRARY_PREFIX}-{}", uuid::Uuid::new_v4())))
+    }
+    /// Creates the trusted service using this fixture's directory, without overriding global storage preferences.
+    fn service(&self) -> crate::library_commands::LibraryService {
+        crate::library_commands::LibraryService(Ok(Arc::new(crate::repository::Repository::new(
+            self.0.clone(),
+        ))))
+    }
+}
+impl Drop for CheckLibrary {
+    /// Removes only the verified uniquely named temporary fixture root after its owned windows have closed.
+    fn drop(&mut self) {
+        assert_eq!(self.0.parent(), Some(std::env::temp_dir().as_path()));
+        assert!(self
+            .0
+            .file_name()
+            .expect("Check library name")
+            .to_string_lossy()
+            .starts_with(TEST_LIBRARY_PREFIX));
+        if self.0.is_dir() {
+            std::fs::remove_dir_all(&self.0).expect("Remove native-check library");
+        }
+    }
+}
 
 /// Owns a real competing thread-local reservation; dropping it releases the key and joins the helper.
 struct Conflict {
@@ -203,7 +235,7 @@ fn record_conflict(webview: &Webview, session: &Session, conflict: Conflict) -> 
         "Retry must acquire F9",
     )
 }
-/// Verifies Stop conflict rejects UI startup, preserves a nonempty prior capture, and recovers after the competing key is released.
+/// Verifies Stop conflict rejects UI startup, preserves a committed recording, and recovers after the competing key is released.
 fn stop_conflict(webview: &Webview, session: &Session) -> Result<(), String> {
     let retained = retained_capture(session)?;
     let conflict = Conflict::hold(STOP_KEY)?;
@@ -218,7 +250,7 @@ fn stop_conflict(webview: &Webview, session: &Session) -> Result<(), String> {
     )?;
     button_session(webview, session)
 }
-/// Creates one nonempty in-memory capture through the real backend, without sending text to any application.
+/// Commits one nonempty capture through the real backend into the isolated library, without sending text to another app.
 fn retained_capture(session: &Session) -> Result<Snapshot, String> {
     session.record()?;
     session.capture(EventKind::Key {
@@ -235,14 +267,24 @@ fn retained_capture(session: &Session) -> Result<Snapshot, String> {
     });
     session.stop()
 }
-/// Checks that rejected startup preserves both retained capture and Idle ownership.
+/// Checks that rejected startup preserves the previous save receipt, its persistence state and Idle ownership.
 fn capture_unchanged(session: &Session, retained: &Snapshot) -> Result<(), String> {
     let blocked = session.snapshot()?;
+    let retained_id = retained
+        .recording_outcome
+        .as_ref()
+        .map(|outcome| &outcome.id);
+    let blocked_id = blocked
+        .recording_outcome
+        .as_ref()
+        .map(|outcome| &outcome.id);
     require(
         blocked.phase == Phase::Idle
             && blocked.event_count == retained.event_count
-            && blocked.unsaved,
-        "Stop conflict must reject startup and retain the old capture",
+            && blocked.unsaved == retained.unsaved
+            && retained_id.is_some()
+            && retained_id == blocked_id,
+        "Stop conflict must reject startup and preserve the committed recording",
     )
 }
 /// Starts and stops an empty recording through real React toolbar buttons, ending with no unsaved test data.
@@ -286,6 +328,7 @@ fn focused_development(
 /// Starts an isolated app with real hooks and a bounded watchdog; failures never close or modify another application's windows.
 pub(super) fn run() {
     enable_physical_dpi();
+    let library = CheckLibrary::new();
     let conflict = Conflict::hold(RECORD_KEY).expect("F9 must be free for the competing fixture");
     let conflict = Arc::new(Mutex::new(Some(conflict)));
     let finished = Arc::new(AtomicBool::new(false));
@@ -299,7 +342,7 @@ pub(super) fn run() {
             std::process::exit(FAILURE_EXIT);
         }
     });
-    let app = crate::desktop_builder(true)
+    let app = crate::desktop_builder_with_library(true, library.service())
         .on_page_load(move |webview, payload| {
             if payload.event() != PageLoadEvent::Finished
                 || webview.label() != crate::MAIN_WINDOW_LABEL
