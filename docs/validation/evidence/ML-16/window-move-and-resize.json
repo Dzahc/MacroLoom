@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "id": "71defe16-d701-4688-b6c8-8f7c204732ab",
+  "name": "Macro 2026-10-16 04-26-16",
+  "createdAt": "2026-10-16T04:26:16.026Z",
+  "updatedAt": "2026-10-16T04:26:16.026Z",
+  "recording": {
+    "platform": "windows",
+    "coordinateSpace": "screen_physical_pixels",
+    "keyboardLayout": "04090409",
+    "displays": [
+      { "x": 0, "y": 0, "width": 3840, "height": 2160, "scaleFactor": 1.75 },
+      { "x": 3840, "y": 0, "width": 1920, "height": 1080, "scaleFactor": 1.0 }
+    ]
+  },
+  "durationMs": 203614,
+  "playback": {
+    "speed": 1.0,
+    "repeatMode": "once",
+    "totalRuns": 1,
+    "intervalMs": 0
+  },
+  "events": [
+    {
+      "atMs": 11078,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 2453,
+      "y": 280
+    },
+    { "atMs": 11079, "type": "mouse_move", "x": 2558, "y": 368 },
+    {
+      "atMs": 11096,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 2558,
+      "y": 368
+    },
+    {
+      "atMs": 18428,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 2992,
+      "y": 1644
+    },
+    { "atMs": 18430, "type": "mouse_move", "x": 2838, "y": 1569 },
+    {
+      "atMs": 18448,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 2838,
+      "y": 1569
+    },
+    {
+      "atMs": 34844,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 2994,
+      "y": 1044
+    },
+    { "atMs": 34846, "type": "mouse_move", "x": 2838, "y": 1044 },
+    {
+      "atMs": 34863,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 2838,
+      "y": 1044
+    },
+    {
+      "atMs": 101259,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 2523,
+      "y": 368
+    },
+    { "atMs": 101262, "type": "mouse_move", "x": 2820, "y": 368 },
+    {
+      "atMs": 101283,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 2820,
+      "y": 368
+    },
+    {
+      "atMs": 109059,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 2820,
+      "y": 368
+    },
+    { "atMs": 109060, "type": "mouse_move", "x": 3117, "y": 368 },
+    {
+      "atMs": 109077,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 3117,
+      "y": 368
+    },
+    {
+      "atMs": 113777,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 3117,
+      "y": 368
+    },
+    { "atMs": 113780, "type": "mouse_move", "x": 3414, "y": 368 },
+    {
+      "atMs": 113798,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 3414,
+      "y": 368
+    },
+    {
+      "atMs": 119042,
+      "type": "mouse_down",
+      "button": "left",
+      "x": 3414,
+      "y": 368
+    },
+    { "atMs": 119043, "type": "mouse_move", "x": 3711, "y": 368 },
+    {
+      "atMs": 119060,
+      "type": "mouse_up",
+      "button": "left",
+      "x": 3711,
+      "y": 368
+    }
+  ]
+}

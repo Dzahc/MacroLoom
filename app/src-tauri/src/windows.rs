@@ -30,7 +30,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     UnregisterHotKey, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC_EX, MOD_NOREPEAT,
     MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+    MOUSEINPUT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -43,8 +44,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
     SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP,
     WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_NCDESTROY, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    WM_MOUSEWHEEL, WM_NCDESTROY, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
 };
 
 static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
@@ -58,6 +59,8 @@ static SEQUENCES: LazyLock<Mutex<KeySequences>> =
     LazyLock::new(|| Mutex::new(KeySequences::default()));
 static OWN_KEY_SEQUENCES: LazyLock<Mutex<OwnKeySequences>> =
     LazyLock::new(|| Mutex::new(OwnKeySequences::default()));
+static OWN_MOUSE_SEQUENCES: LazyLock<Mutex<OwnMouseSequences>> =
+    LazyLock::new(|| Mutex::new(OwnMouseSequences::default()));
 const RESERVATION_MESSAGE: u32 = WM_APP + 1;
 const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 const HOOK_FAILED: &str =
@@ -92,8 +95,13 @@ const GENERIC_MODIFIERS: [u16; 3] = [0x10, 0x11, 0x12];
 const SNAPSHOT_MODIFIERS: [u16; 8] = [0xa2, 0xa3, 0xa0, 0xa1, 0xa4, 0xa5, 0x5b, 0x5c];
 const LEFT_MOUSE_KEY: u16 = 1;
 const RIGHT_MOUSE_KEY: u16 = 2;
+const SNAPSHOT_BUTTONS: [(u16, MouseButton); 2] = [
+    (LEFT_MOUSE_KEY, MouseButton::Left),
+    (RIGHT_MOUSE_KEY, MouseButton::Right),
+];
 const EXTENDED_SCAN_MASK: u32 = 0xff00;
 const LOW_SCAN_MASK: u32 = 0xff;
+const WHEEL_DATA_SHIFT: u32 = 16;
 const SNAPSHOT_CONTROL_KEYS: [u16; 4] = [RECORD_KEY, STOP_KEY, 0x0d, 0x20];
 const RESERVED_CAPTURE_KEYS: [u16; 2] = [RECORD_KEY, STOP_KEY];
 const ENVIRONMENT_UNAVAILABLE: &str =
@@ -186,12 +194,66 @@ pub fn initial_recording_inputs() -> Vec<EventKind> {
     let Ok(mut keys) = OWN_KEY_SEQUENCES.lock() else {
         return Vec::new();
     };
-    keys.initial_snapshot(
-        own_focus,
-        POINT { x, y },
-        !own_point(POINT { x, y }),
-        key_held,
-    )
+    let mut inputs = keys.initial_snapshot(own_focus, POINT { x, y }, false, key_held);
+    drop(keys);
+    if let Ok(mut mouse) = OWN_MOUSE_SEQUENCES.lock() {
+        inputs.extend(mouse.initial_snapshot(POINT { x, y }, own_point(POINT { x, y }), key_held));
+    }
+    inputs
+}
+
+#[derive(Default)]
+/// Tracks each held button's control/external origin independently until its observed release.
+struct OwnMouseSequences {
+    origins: [Option<bool>; 2],
+}
+impl OwnMouseSequences {
+    /// Converts a native event and excludes control-origin buttons; external drags retain movement and wheel over controls.
+    fn capture(&mut self, message: u32, input: &MSLLHOOKSTRUCT, own: bool) -> Option<EventKind> {
+        let kind = mouse_kind(message, input)?;
+        let excluded = match &kind {
+            EventKind::Mouse { button, down, .. } => self.button(*button, *down, own),
+            EventKind::Move { .. } | EventKind::Wheel { .. } => {
+                own && !self.origins.contains(&Some(false))
+            }
+            EventKind::Key { .. } => true,
+        };
+        (!excluded).then_some(kind)
+    }
+
+    /// Returns the gesture's exclusion status, preserving the press origin across window crossings and other button changes.
+    fn button(&mut self, button: MouseButton, down: bool, own: bool) -> bool {
+        let origin = self.origins[button.index()].unwrap_or(own);
+        self.origins[button.index()] = if down { Some(origin) } else { None };
+        origin
+    }
+
+    /// Reconciles physical holds at recording start and returns only external buttons, in deterministic order at the current position.
+    fn initial_snapshot(
+        &mut self,
+        position: POINT,
+        own: bool,
+        held: impl Fn(u16) -> bool,
+    ) -> Vec<EventKind> {
+        let mut inputs = Vec::new();
+        for (key, button) in SNAPSHOT_BUTTONS {
+            let origin = if held(key) {
+                Some(self.origins[button.index()].unwrap_or(own))
+            } else {
+                None
+            };
+            self.origins[button.index()] = origin;
+            if origin == Some(false) {
+                inputs.push(EventKind::Mouse {
+                    button,
+                    down: true,
+                    x: position.x,
+                    y: position.y,
+                });
+            }
+        }
+        inputs
+    }
 }
 #[derive(Default)]
 /// Tracks control-origin exclusions and recording-owned initial presses through their actual releases.
@@ -264,10 +326,7 @@ fn ordered_initial_inputs(
         append_initial_key(&mut inputs, key);
     }
     if capture_buttons {
-        for (key, button) in [
-            (LEFT_MOUSE_KEY, MouseButton::Left),
-            (RIGHT_MOUSE_KEY, MouseButton::Right),
-        ] {
+        for (key, button) in SNAPSHOT_BUTTONS {
             if held(key) {
                 inputs.push(EventKind::Mouse {
                     button,
@@ -1012,26 +1071,37 @@ fn own_key_sequence(key: u16, down: bool) -> bool {
 }
 
 #[cfg(test)]
+#[path = "windows_mouse_tests.rs"]
+mod mouse_recording_tests;
+#[cfg(test)]
 #[path = "windows_recording_regression_tests.rs"]
 mod recording_regression_tests;
-/// Copies valid native mouse data into capture; control-window interactions and our injected events are excluded.
+/// Copies valid native mouse data before chaining; tagged injections and complete control-origin gestures are excluded.
 unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     if code >= 0 {
         // SAFETY: Windows supplies a live MSLLHOOKSTRUCT for nonnegative codes, copied before this callback returns.
         let input = unsafe { &*(data as *const MSLLHOOKSTRUCT) };
-        if input.dwExtraInfo != EXTRA_INFO && !own_point(input.pt) {
-            if let (Some(session), Some(kind)) =
-                (ENGINE.get(), mouse_kind(message as u32, input.pt))
-            {
-                session.capture(kind);
-            }
-        }
+        handle_mouse(message as u32, input);
     }
     // SAFETY: original arguments are forwarded while Windows' callback storage remains valid.
     unsafe { CallNextHookEx(null_mut(), code, message, data) }
 }
+/// Classifies one native mouse callback without retaining the origin mutex while acquiring session ownership.
+fn handle_mouse(message: u32, input: &MSLLHOOKSTRUCT) {
+    if input.dwExtraInfo == EXTRA_INFO {
+        return;
+    }
+    let kind = match OWN_MOUSE_SEQUENCES.lock() {
+        Ok(mut mouse) => mouse.capture(message, input, own_point(input.pt)),
+        Err(_) => None,
+    };
+    if let (Some(session), Some(kind)) = (ENGINE.get(), kind) {
+        session.capture(kind);
+    }
+}
 /// Converts supported positioned mouse transitions without inventing gestures or free movement playback.
-fn mouse_kind(message: u32, point: POINT) -> Option<EventKind> {
+fn mouse_kind(message: u32, input: &MSLLHOOKSTRUCT) -> Option<EventKind> {
+    let point = input.pt;
     let transition = match message {
         WM_LBUTTONDOWN => Some((MouseButton::Left, true)),
         WM_LBUTTONUP => Some((MouseButton::Left, false)),
@@ -1049,6 +1119,13 @@ fn mouse_kind(message: u32, point: POINT) -> Option<EventKind> {
     }
     if message == WM_MOUSEMOVE {
         return Some(EventKind::Move {
+            x: point.x,
+            y: point.y,
+        });
+    }
+    if message == WM_MOUSEWHEEL {
+        return Some(EventKind::Wheel {
+            delta: i32::from((input.mouseData >> WHEEL_DATA_SHIFT) as i16),
             x: point.x,
             y: point.y,
         });
@@ -1156,6 +1233,23 @@ fn mouse_button(button: MouseButton, down: bool) -> INPUT {
     }
 }
 
+/// Builds a tagged vertical wheel event without normalizing its signed amount or changing button ownership.
+fn mouse_wheel(delta: i32) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: delta as u32,
+                dwFlags: MOUSEEVENTF_WHEEL,
+                time: 0,
+                dwExtraInfo: EXTRA_INFO,
+            },
+        },
+    }
+}
+
 /// Builds a tagged keyboard transition, preferring scan codes and preserving extended-key metadata.
 fn keyboard(vk: u16, scan: u16, extended: bool, down: bool) -> INPUT {
     let mut flags = if scan != 0 { KEYEVENTF_SCANCODE } else { 0 };
@@ -1211,6 +1305,10 @@ pub fn send_event(kind: &EventKind) -> Result<(), String> {
             send(&[mouse_button(*button, *down)])
         }
         EventKind::Move { x, y } => send(&[mouse_move(*x, *y)]),
+        EventKind::Wheel { delta, x, y } => {
+            send(&[mouse_move(*x, *y)])?;
+            send(&[mouse_wheel(*delta)])
+        }
     }
 }
 
@@ -1218,7 +1316,9 @@ pub fn send_event(kind: &EventKind) -> Result<(), String> {
 pub fn send_session_event(hwnd: isize, kind: &EventKind) -> Result<(), String> {
     let target = match kind {
         EventKind::Key { .. } => None,
-        EventKind::Mouse { x, y, .. } | EventKind::Move { x, y } => Some(POINT { x: *x, y: *y }),
+        EventKind::Mouse { x, y, .. }
+        | EventKind::Move { x, y }
+        | EventKind::Wheel { x, y, .. } => Some(POINT { x: *x, y: *y }),
     };
     if let Some(point) = target {
         if point_in_window(hwnd, point)? {
@@ -1314,8 +1414,8 @@ mod tests {
                         assert_eq!((*x, *y), (SNAPSHOT_X, SNAPSHOT_Y));
                         LEFT_MOUSE_KEY
                     }
-                    EventKind::Move { .. } => {
-                        panic!("Initial snapshot cannot contain free movement")
+                    EventKind::Move { .. } | EventKind::Wheel { .. } => {
+                        panic!("Initial snapshot cannot contain movement or wheel input")
                     }
                 },
             )
