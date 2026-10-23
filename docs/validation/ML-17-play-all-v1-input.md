@@ -56,6 +56,43 @@ establish the numerical Stop-response budget.
 
 ## Automated results
 
-Implementation verification and review results will be recorded here after the
-maintained gate completes. Ordinary-target replay observations remain pending
-until explicitly exercised and reported.
+October 23, 2026, implementation commit `34db661`:
+
+`npm.cmd --prefix app run verify` — **PASS**, exit 0, against refreshed
+`origin/develop` at `37c945e`. Formatting, strict TypeScript, ESLint, the production
+frontend build, rustfmt, Clippy, all maintained tests and complexity checks passed.
+The test totals were 78 frontend/tooling tests, 89 Rust library tests plus 21
+repository integration tests, and 33 Python fixtures. Two existing interactive
+Windows tests remain ignored. Complexity checked 932 function/closure snapshots
+across index/worktree, with zero failures and no exceptions.
+Full local output: `app/.quality-output/ML-17-verify-final.log`.
+
+`cargo check --manifest-path app/src-tauri/Cargo.toml --locked --offline --all-targets --features native-checks,input-prototype`
+— **PASS**, exit 0. This establishes optional-feature build coverage without
+injecting input or changing the owner's desktop.
+Full local output: `app/.quality-output/ML-17-native-check.log`.
+
+Ordinary-target replay observations remain pending until explicitly exercised and
+reported. No Google Play Games testing or interaction occurred.
+
+## Standards
+
+Independent review against starting commit `37c945e`: no documented-standard
+violations or actionable baseline smells found. Reviewed ownership, cancellation,
+cleanup, validated-file loading, environment checks, typed command contracts,
+keyboard activation and behavior-focused tests. Native input and timing remain
+in Rust, and the existing runtime compact-window guard is preserved.
+
+Standards findings: **0**.
+
+## Spec
+
+Independent review found no actionable code defects or scope additions. The
+implementation follows selected-ID snapshot ownership, silent once-at-1× replay,
+held-input rejection, release-based keyboard activation, one post-preparation
+clock, original event ordering/waits, runtime collision checks, semantic environment
+checks, sleep cancellation and recoverable owned-input cleanup.
+
+Spec findings: **0 code defects**, **0 scope additions**, **1 documented validation
+limitation**: ordinary-application/mixed-DPI replay and real display-power/sleep
+observations remain pending. Deterministic tests do not establish that evidence.
