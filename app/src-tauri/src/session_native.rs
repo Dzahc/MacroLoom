@@ -77,6 +77,26 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    /// Loads only a trusted selected ID; repository validation and fingerprint checks precede input startup.
+    fn playback(&self, id: &str) -> Result<crate::macro_format::MacroDocument, String> {
+        AppMode::current().require_library()?;
+        self.app.state::<LibraryService>().repository()?.read(id)
+    }
+    /// Rejects all physically held keys/buttons, including control-origin gestures, without modifying input.
+    fn playback_ready(&self) -> Result<(), String> {
+        windows::playback_inputs_released()
+    }
+    /// Compares semantic keyboard/display metadata; dark screens with unchanged geometry remain compatible.
+    fn check_playback_environment(
+        &self,
+        expected: &crate::macro_format::RecordingEnvironment,
+    ) -> Result<(), String> {
+        let actual = windows::recording_environment()?;
+        if !windows::hooks_running() || !crate::playback::compatible(expected, &actual) {
+            return Err(crate::playback::ENVIRONMENT_CHANGED.into());
+        }
+        Ok(())
+    }
     /// Checks actual storage before capture and creates a stable recording identity; the explicit prototype stays temporary.
     fn recording(&self) -> Result<Option<crate::recording::Recording>, String> {
         if AppMode::current().input_prototype {
@@ -212,7 +232,12 @@ fn presentation_status(snapshot: &Snapshot) -> PreviewStatus {
     };
     PreviewStatus {
         phase,
-        macro_name: (snapshot.phase == Phase::Playing).then(|| TEMPORARY_NAME.into()),
+        macro_name: (snapshot.phase == Phase::Playing).then(|| {
+            snapshot
+                .macro_name
+                .clone()
+                .unwrap_or_else(|| TEMPORARY_NAME.into())
+        }),
         elapsed_ms: snapshot.elapsed_ms,
         ..PreviewStatus::default()
     }
@@ -323,7 +348,7 @@ pub async fn retry_shortcuts(
         .map_err(|error| error.to_string())?
 }
 #[tauri::command]
-/// Replays only the retained temporary recording from explicit debug development controls; saved-library Play is deferred.
+/// Replays only the retained temporary recording from explicit debug development controls.
 pub async fn play(
     window: WebviewWindow,
     session: State<'_, Arc<Session>>,
@@ -337,6 +362,30 @@ pub async fn play(
     tauri::async_runtime::spawn_blocking(move || session.play_requested(request))
         .await
         .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+/// Starts the selected saved macro on a worker; only the main library can invoke this command.
+/// The backend claims arrival-bound ownership before loading the file and revalidates every precondition.
+pub async fn play_macro(
+    macro_id: String,
+    window: WebviewWindow,
+    session: State<'_, Arc<Session>>,
+) -> Result<Snapshot, String> {
+    if window.label() != MAIN {
+        return Err(WRONG_CALLER.into());
+    }
+    AppMode::current().require_library()?;
+    let request = session.start_request()?.ok_or(ACTIVE_SESSION)?;
+    let session = session.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = session.play_macro_requested(request, &macro_id);
+        if let Err(error) = &result {
+            session.report(error.clone());
+        }
+        result
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 #[tauri::command]
 /// Reserves/releases a frontend confirmation through the backend interlock before displaying it.

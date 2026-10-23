@@ -18,6 +18,7 @@ export function SessionControls({
   const idle = snapshot.phase === PHASE.idle;
   return (
     <div className="session-controls">
+      {idle && <p>{SESSION_TEXT.playbackGuidance}</p>}
       {idle &&
         snapshot.unsaved &&
         snapshot.message !== SESSION_TEXT.retained && (

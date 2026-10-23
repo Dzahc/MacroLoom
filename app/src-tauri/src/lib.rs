@@ -5,6 +5,7 @@ mod configure_model;
 mod input;
 mod library_commands;
 pub mod macro_format;
+mod playback;
 mod presentation;
 mod recording;
 pub mod repository;
@@ -92,6 +93,7 @@ fn desktop_builder_with_library(
             session_native::start_recording,
             session_native::stop,
             session_native::play,
+            session_native::play_macro,
             session_native::retry_shortcuts,
             session_native::retry_recording,
             session_native::discard_recording,

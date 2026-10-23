@@ -92,7 +92,7 @@ export type LibrarySnapshot = Readonly<{
   writable?: boolean;
   /** Native session availability includes the required global Stop reservation check. */
   recordingAvailable?: boolean;
-  /** Saved-library playback remains unavailable until its implementation story is integrated. */
+  /** Native session availability includes required Stop and backend operation exclusion. */
   playbackAvailable?: boolean;
   /** Stable ID being removed; selection and scrolling remain available while actions are blocked. */
   deleting?: string | null;

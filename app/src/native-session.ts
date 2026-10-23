@@ -23,6 +23,9 @@ export function useNativeSession() {
           ),
         /** @param command Native control with empty input. @returns Authoritative state. */
         invoke: (command) => invoke<SessionSnapshot>(command),
+        /** @param macroId Selected library identity. @returns Backend-owned playback startup or rejection. */
+        play: (macroId) =>
+          invoke<SessionSnapshot>(SESSION_COMMAND.playMacro, { macroId }),
         /** @param request Owner-bound native confirmation claim/release. @returns Authoritative lifecycle status. */
         confirmation: (request) =>
           invoke<SessionSnapshot>(SESSION_COMMAND.confirmation, request),

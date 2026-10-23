@@ -7,6 +7,7 @@ export const SESSION_COMMAND = {
   record: 'start_recording',
   stop: 'stop',
   replay: 'play',
+  playMacro: 'play_macro',
   retry: 'retry_shortcuts',
   confirmation: 'session_confirmation',
   keepOpen: 'session_keep_open',
@@ -29,7 +30,8 @@ export const SESSION_TEXT = {
     'F9 Record is unavailable; use the Record button or Retry shortcuts.',
   f8Conflict:
     'F8 Stop is unavailable. Close the application using it, then Retry shortcuts.',
-  playbackDeferred: 'Saved-macro playback arrives in ML-17.',
+  playbackGuidance:
+    'Playback shares the Windows cursor and keyboard focus. Record a click into the target before typing; keep its window in the recorded position. Manual input can interfere.',
   retryRecording: 'Retry save',
   discardRecording: 'Discard recording',
 } as const;
@@ -51,6 +53,8 @@ export type SessionSnapshot = Readonly<{
   message: string;
   shortcuts: Readonly<{ record: boolean; stop: boolean }>;
   canRecord: boolean;
+  canPlay: boolean;
+  macroName: string | null;
   cleanupFailed: boolean;
   closeRequested: boolean;
   unsaved: boolean;
@@ -77,6 +81,8 @@ export const INITIAL_SESSION: SessionSnapshot = {
   message: SESSION_TEXT.starting,
   shortcuts: { record: false, stop: false },
   canRecord: false,
+  canPlay: false,
+  macroName: null,
   cleanupFailed: false,
   closeRequested: false,
   unsaved: false,
@@ -86,7 +92,9 @@ export const INITIAL_SESSION: SessionSnapshot = {
 /** Commands whose input is empty and whose result is a revisioned session snapshot. */
 export type SnapshotCommand = Exclude<
   (typeof SESSION_COMMAND)[keyof typeof SESSION_COMMAND],
-  typeof SESSION_COMMAND.confirmation | typeof SESSION_COMMAND.discardExit
+  | typeof SESSION_COMMAND.confirmation
+  | typeof SESSION_COMMAND.discardExit
+  | typeof SESSION_COMMAND.playMacro
 >;
 /** Validated native confirmation claim/release; each mounted owner uses a distinct identity. */
 export type ConfirmationRequest = Readonly<{ owner: string; blocked: boolean }>;
@@ -95,5 +103,6 @@ export type ConfirmationRequest = Readonly<{ owner: string; blocked: boolean }>;
 export type SessionTransport = {
   listen: (receive: (snapshot: SessionSnapshot) => void) => Promise<() => void>;
   invoke: (command: SnapshotCommand) => Promise<SessionSnapshot>;
+  play?: (macroId: string) => Promise<SessionSnapshot>;
   confirmation?: (request: ConfirmationRequest) => Promise<SessionSnapshot>;
 };

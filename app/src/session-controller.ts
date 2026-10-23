@@ -105,6 +105,17 @@ export class SessionController {
       if (generation === this.generation) this.fail(reason);
     }
   }
+  /** @param macroId Clicked saved-macro identity. @returns Completion after reconciling startup state or reporting rejection; no file data crosses into playback from React. */
+  async play(macroId: string): Promise<void> {
+    const generation = this.generation;
+    if (!this.transport.play) return;
+    try {
+      const snapshot = await this.transport.play(macroId);
+      if (generation === this.generation) this.receive(snapshot);
+    } catch (reason) {
+      if (generation === this.generation) this.fail(reason);
+    }
+  }
   /** @returns The current native confirmation owner, also supplied for atomic handoff to a confirmed deletion. */
   get confirmationOwner(): string {
     return this.owner;

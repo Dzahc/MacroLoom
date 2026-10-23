@@ -22,13 +22,13 @@ impl MouseButton {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// One observed input at a monotonic offset; equal offsets retain vector order.
 pub struct Event {
     pub at: Duration,
     pub kind: EventKind,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// Native input data uses signed physical pixels and Windows scan-code metadata.
 pub enum EventKind {
     Key {
