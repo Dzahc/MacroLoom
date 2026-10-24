@@ -17,8 +17,17 @@ const PREPARATION_ELAPSED_MS: u64 = 0;
 const FIRST_INJECTION: usize = 1;
 const REJECTED_BUTTON: usize = 2;
 const THROUGH_MOVEMENT: usize = 4;
-const MOVE_OFFSET: i32 = 50;
+const MOVE_OFFSET: i32 = -50;
 const FILE_CHANGE: &[u8] = b"external file modification";
+const OUTSIDE_DISPLAY_X: i32 = 0;
+const GAP_X: i32 = 50;
+const SECOND_DISPLAY_X: i32 = 100;
+const SECOND_DISPLAY_Y: i32 = -1080;
+const LAST_SECOND_X: i32 = 2019;
+const LAST_SECOND_Y: i32 = -1;
+const LAST_FIRST_X: i32 = -1;
+const LAST_FIRST_Y: i32 = 1079;
+const DISPLAY_SCALES: [f64; 4] = [1.0, 1.25, 1.5, 1.75];
 type Callback = Box<dyn FnOnce() + Send>;
 
 /// Desktop-effects substitute with an isolated real library; it never sends input to the owner's desktop.
@@ -40,8 +49,16 @@ struct Desktop {
 impl Desktop {
     /// Persists a known stream with nondefault properties; playback must snapshot it and execute only once at 1x.
     fn new(events: Vec<Event>, duration: Duration) -> Arc<Self> {
+        Self::with_environment(events, duration, test_support::environment())
+    }
+    /// Saves fixture events against explicit original monitor surfaces, without observing the user's current desktop.
+    fn with_environment(
+        events: Vec<Event>,
+        duration: Duration,
+        environment: RecordingEnvironment,
+    ) -> Arc<Self> {
         let folder = Folder::new();
-        let mut recording = Recording::new(test_support::environment()).expect("Fixture recording");
+        let mut recording = Recording::new(environment).expect("Fixture recording");
         let mut capture = Capture::default();
         capture.events = events;
         capture.duration = duration;
@@ -254,6 +271,157 @@ fn saved_playback_rejects_interfering_startup_state() {
     );
     assert!(desktop.events.lock().expect("Events").is_empty());
     assert_eq!(session.snapshot().expect("Snapshot").phase, Phase::Idle);
+}
+
+#[test]
+/// An unreachable later mouse target refuses the whole run before an earlier key can dispatch, preserving the valid file.
+fn invalid_saved_target_prevents_even_the_keyboard_prefix() {
+    let source = vec![
+        Event {
+            at: Duration::ZERO,
+            kind: test_support::key(true),
+        },
+        Event {
+            at: END,
+            kind: EventKind::Mouse {
+                button: MouseButton::Left,
+                down: true,
+                x: OUTSIDE_DISPLAY_X,
+                y: test_support::TEST_Y,
+            },
+        },
+    ];
+    let desktop = Desktop::new(source, END);
+    let original = desktop
+        .folder
+        .repository
+        .read(&desktop.id)
+        .expect("Valid saved macro");
+    let session = Session::new(desktop.clone());
+    assert!(desktop.play(&session).is_err());
+    assert!(desktop.events.lock().expect("Events").is_empty());
+    assert!(!desktop.compact.load(Ordering::Acquire));
+    assert_eq!(session.snapshot().expect("Snapshot").phase, Phase::Idle);
+    let retained = desktop
+        .folder
+        .repository
+        .read(&desktop.id)
+        .expect("Preserved macro");
+    assert_eq!(
+        serde_json::to_value(original).expect("Original document"),
+        serde_json::to_value(retained).expect("Retained document")
+    );
+}
+
+/// Creates two offset monitor surfaces with a real gap inside their shared virtual-desktop rectangle.
+fn offset_displays(scale: f64) -> RecordingEnvironment {
+    let mut environment = test_support::environment();
+    environment.displays.push(crate::macro_format::Display {
+        x: SECOND_DISPLAY_X,
+        y: SECOND_DISPLAY_Y,
+        width: test_support::TEST_WIDTH,
+        height: test_support::TEST_HEIGHT,
+        scale_factor: scale,
+        extra: Default::default(),
+    });
+    environment
+}
+
+/// Builds a valid held-button prefix followed by one positioned action, retaining a keyboard event before the target.
+fn positioned_source(kind: EventKind) -> Vec<Event> {
+    [
+        test_support::key(true),
+        EventKind::Mouse {
+            button: MouseButton::Left,
+            down: true,
+            x: test_support::TEST_X,
+            y: test_support::TEST_Y,
+        },
+        kind,
+    ]
+    .into_iter()
+    .map(|kind| Event {
+        at: Duration::ZERO,
+        kind,
+    })
+    .collect()
+}
+
+/// Provides all positioned v1 variants so no release, drag point or wheel can bypass whole-run targeting validation.
+fn positioned_kinds(x: i32, y: i32) -> [EventKind; 4] {
+    [
+        EventKind::Mouse {
+            button: MouseButton::Left,
+            down: true,
+            x,
+            y,
+        },
+        EventKind::Mouse {
+            button: MouseButton::Left,
+            down: false,
+            x,
+            y,
+        },
+        EventKind::Move { x, y },
+        EventKind::Wheel { delta: WHEEL, x, y },
+    ]
+}
+
+#[test]
+/// Every positioned event rejects gaps, exclusive monitor edges and extreme signed coordinates before any keyboard or button dispatch.
+fn all_mouse_targets_reject_unreachable_recorded_pixels() {
+    for (x, y) in [
+        (GAP_X, test_support::TEST_Y),
+        (OUTSIDE_DISPLAY_X, test_support::TEST_Y),
+        (SECOND_DISPLAY_X, 0),
+        (i32::MIN, test_support::TEST_Y),
+        (test_support::TEST_X, i32::MAX),
+    ] {
+        for kind in positioned_kinds(x, y) {
+            let desktop = Desktop::with_environment(
+                positioned_source(kind),
+                END,
+                offset_displays(test_support::TEST_SCALE),
+            );
+            let session = Session::new(desktop.clone());
+            let error = desktop
+                .play(&session)
+                .err()
+                .expect("Unreachable target blocks startup");
+            assert!(error.contains(crate::playback::INVALID_TARGET));
+            assert!(desktop.events.lock().expect("Events").is_empty());
+            assert!(desktop.releases.lock().expect("Releases").is_empty());
+        }
+    }
+}
+
+#[test]
+/// Inclusive origins and last physical pixels replay verbatim on negative/offset monitors at supported scale factors.
+fn valid_monitor_pixels_replay_without_dpi_remapping() {
+    for scale in DISPLAY_SCALES {
+        for (x, y) in [
+            (test_support::TEST_DISPLAY_X, 0),
+            (LAST_FIRST_X, LAST_FIRST_Y),
+            (SECOND_DISPLAY_X, SECOND_DISPLAY_Y),
+            (LAST_SECOND_X, LAST_SECOND_Y),
+        ] {
+            let source = positioned_source(EventKind::Wheel { delta: WHEEL, x, y });
+            let desktop =
+                Desktop::with_environment(source.clone(), Duration::ZERO, offset_displays(scale));
+            let session = Session::new(desktop.clone());
+            desktop
+                .play(&session)
+                .expect("Valid physical targets start");
+            assert_eq!(completed(&session).message, crate::playback::COMPLETE);
+            assert_eq!(
+                *desktop.events.lock().expect("Events"),
+                source
+                    .iter()
+                    .map(|event| event.kind.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
 }
 
 #[test]

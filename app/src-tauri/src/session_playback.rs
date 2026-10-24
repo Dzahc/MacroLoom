@@ -67,6 +67,7 @@ impl Session {
     fn validate_playback(&self, document: Option<&MacroDocument>) -> Result<(), String> {
         self.platform.playback_ready()?;
         if let Some(document) = document {
+            playback::validate_targets(document)?;
             self.platform
                 .check_playback_environment(&document.recording)?;
         }
