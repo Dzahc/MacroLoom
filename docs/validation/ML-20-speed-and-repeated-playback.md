@@ -29,15 +29,16 @@ Session checks run on Windows with controlled desktop effects and the real
 repository. They send no input to Notepad or another target application and do
 not establish physical-shortcut behavior or a numerical Stop-response budget.
 
-`npm.cmd --prefix app run verify` — **PASS**, exit 0, against refreshed
+Final `npm.cmd --prefix app run verify` — **PASS**, exit 0, through `01d13f4`, against refreshed
 `origin/develop` at `7bd8822`. Formatting, type checking, ESLint, production
-frontend build, rustfmt, Clippy, all 80 frontend/tooling tests, 121 Rust tests
-(five interactive tests ignored), 33 Python quality fixtures, and 308
+frontend build, rustfmt, Clippy, all 80 frontend/tooling tests, 122 Rust tests
+(five interactive tests ignored), 33 Python quality fixtures, and 634
 function/closure complexity checks passed without exceptions. Local output:
-`app/.quality-output/ML-20-verify.log`.
+`app/.quality-output/ML-20-verify-final.log`. The initial gate also passed;
+its output is retained as `app/.quality-output/ML-20-verify.log`.
 
 `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
-also passed, exit 0. Independent Standards and Spec reviews follow this gate.
+also passed again after review corrections, exit 0.
 
 ## Review corrections
 
@@ -45,10 +46,14 @@ The first Standards review found three literal session defaults; they now reuse
 the existing presentation defaults. The first Spec review found unbounded
 progress publication during rapid repeats. A regression reproduced 255 progress
 snapshots in 7 ms across 128 zero-duration runs. Progress delivery now coalesces
-to the existing 100 ms status cadence while authoritative state, input scheduling,
-cancellation and terminal publications remain immediate. The regression passes;
+its own progress-only emissions to at most one per 100 ms, alongside the existing
+100 ms status polling, while authoritative state, input scheduling, cancellation
+and terminal publications remain immediate. The regression passes;
 the session interval checks observe public snapshots independently of event rate.
-Final gate and follow-up review results are recorded after these corrections.
+The full gate above was rerun after these corrections. Independent follow-up
+reviews against `7bd8822` through `01d13f4` report **zero remaining Standards
+findings** and **zero remaining Spec findings**. Each review's one initial finding
+was corrected. No complexity exceptions were requested or added.
 
 ## Notepad acceptance — pending
 
