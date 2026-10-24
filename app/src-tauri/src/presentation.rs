@@ -1,4 +1,5 @@
 use crate::app_mode::AppMode;
+use crate::playback::PlaybackStage;
 use crate::window_view::{ViewRequest, ViewResult, WindowView};
 use crate::windows::DesktopWindow;
 use serde::{Deserialize, Serialize};
@@ -54,9 +55,11 @@ pub struct PreviewStatus {
     pub phase: PresentationPhase,
     pub macro_name: Option<String>,
     pub elapsed_ms: u64,
-    pub run: u32,
-    pub total_runs: Option<u32>,
+    pub run: u64,
+    pub total_runs: Option<u64>,
     pub remaining_ms: u64,
+    #[serde(default)]
+    pub playback_stage: PlaybackStage,
 }
 
 impl Default for PreviewStatus {
@@ -69,6 +72,7 @@ impl Default for PreviewStatus {
             run: 1,
             total_runs: Some(1),
             remaining_ms: 0,
+            playback_stage: PlaybackStage::Running,
         }
     }
 }
@@ -76,13 +80,11 @@ impl Default for PreviewStatus {
 impl PreviewStatus {
     /// Rejects invalid external timestamps, run counts, and oversized names before publishing status.
     pub fn validate(&self) -> Result<(), String> {
-        if self.elapsed_ms > MAX_ELAPSED_MS || self.remaining_ms > MAX_ELAPSED_MS || self.run == 0 {
+        if self.elapsed_ms > MAX_ELAPSED_MS
+            || self.remaining_ms > MAX_ELAPSED_MS
+            || !self.valid_run_counts()
+        {
             return Err(INVALID_STATUS.into());
-        }
-        if let Some(total) = self.total_runs {
-            if total == 0 || self.run > total {
-                return Err(INVALID_STATUS.into());
-            }
         }
         if let Some(name) = &self.macro_name {
             if name.chars().count() > MAX_NAME_LENGTH || name.trim().is_empty() {
@@ -90,6 +92,14 @@ impl PreviewStatus {
             }
         }
         Ok(())
+    }
+    /// Keeps run counters exact across Rust/JavaScript transport, including large validated saved finite totals.
+    fn valid_run_counts(&self) -> bool {
+        self.run > 0
+            && self.run <= MAX_ELAPSED_MS
+            && self
+                .total_runs
+                .is_none_or(|total| self.run <= total && total <= MAX_ELAPSED_MS)
     }
 }
 

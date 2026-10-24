@@ -227,20 +227,29 @@ fn presentation_status(snapshot: &Snapshot) -> PreviewStatus {
         Phase::Idle => PresentationPhase::Idle,
         Phase::Recording => PresentationPhase::Recording,
         Phase::Playing => PresentationPhase::Playing,
+        Phase::Interval => PresentationPhase::Interval,
         Phase::Stopping => PresentationPhase::Stopping,
         Phase::Saving => PresentationPhase::Saving,
     };
     PreviewStatus {
         phase,
-        macro_name: (snapshot.phase == Phase::Playing).then(|| {
-            snapshot
-                .macro_name
-                .clone()
-                .unwrap_or_else(|| TEMPORARY_NAME.into())
-        }),
+        macro_name: playback_name(snapshot),
         elapsed_ms: snapshot.elapsed_ms,
-        ..PreviewStatus::default()
+        run: snapshot.run,
+        total_runs: snapshot.total_runs,
+        remaining_ms: snapshot.remaining_ms,
+        playback_stage: snapshot.playback_stage,
     }
+}
+/// Uses a temporary label only after preparation; a saved macro still being read must not be mislabeled as temporary.
+fn playback_name(snapshot: &Snapshot) -> Option<String> {
+    if !matches!(snapshot.phase, Phase::Playing | Phase::Interval) {
+        return None;
+    }
+    snapshot.macro_name.clone().or_else(|| {
+        (snapshot.playback_stage != crate::playback::PlaybackStage::Starting)
+            .then(|| TEMPORARY_NAME.into())
+    })
 }
 /// Publishes bounded progress and reconciles idle reservations away from UI/input event loops.
 pub fn start_status(session: Arc<Session>, app: AppHandle) {

@@ -101,5 +101,6 @@ export function previewStatus(
     run: status.run,
     totalRuns: status.totalRuns,
     remainingMs: status.remainingMs,
+    playbackStage: status.playbackStage,
   };
 }

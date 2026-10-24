@@ -12,6 +12,141 @@ const WHEEL: i32 = -30;
 const FAILURE: &str = "Injected partial action failure";
 const EXTRA_FIELD: &str = "futureMetadata";
 const SCALE_CHANGE: f64 = 1.0;
+const EXPECTED_MICROSECONDS: [u64; 5] = [4000, 2000, 1000, 500, 250];
+const SAMPLE_MILLISECOND: u64 = 1;
+const REPEAT_COUNT: u64 = 3;
+const INTERVAL: Duration = Duration::from_secs(2);
+const DOUBLE_SPEED: f64 = 2.0;
+const EXPECTED_STARTS_MS: [u64; 3] = [0, 2640, 5280];
+const EXPECTED_END_MS: u64 = 5920;
+const CANCEL_INTERVAL_MS: u64 = 2640;
+const ZERO_RUN_LIMIT: usize = 10;
+
+#[test]
+/// Saved presets scale ties, holds and trailing duration exactly, retaining quarter-millisecond deadlines.
+fn saved_speed_scales_every_deadline_without_millisecond_rounding() {
+    for (speed, micros) in crate::macro_format::SPEEDS
+        .into_iter()
+        .zip(EXPECTED_MICROSECONDS)
+    {
+        let mut document = document();
+        document.playback.speed = speed;
+        document
+            .events
+            .iter_mut()
+            .for_each(|event| event.at_ms = SAMPLE_MILLISECOND);
+        document.duration_ms = SAMPLE_MILLISECOND;
+        let capture = capture(&document);
+        let expected = Duration::from_micros(micros);
+        assert_eq!(capture.duration, expected);
+        assert!(capture.events.iter().all(|event| event.at == expected));
+    }
+}
+
+#[test]
+/// Actual cleanup completion anchors each full unscaled interval; finite playback omits the final interval.
+fn repeated_deadlines_preserve_scaled_timing_and_full_intervals_after_cleanup() {
+    let mut document = document();
+    document.playback.speed = DOUBLE_SPEED;
+    let capture = capture(&document);
+    let clock = TestClock::default();
+    let mut starts = Vec::new();
+    let mut intervals = Vec::new();
+    repeat(
+        &capture,
+        RepeatPlan {
+            total: Some(REPEAT_COUNT),
+            interval: INTERVAL,
+        },
+        &clock,
+        &AtomicBool::new(false),
+        |step| {
+            match step {
+                Step::Run(number) => starts.push((number, clock.now())),
+                Step::Event(_) | Step::Finish => clock.elapsed.set(clock.now() + OVERHEAD),
+                Step::Interval(deadline) => intervals.push(deadline),
+            }
+            Ok(())
+        },
+    )
+    .expect("Repeated schedule");
+    let expected = EXPECTED_STARTS_MS.map(Duration::from_millis);
+    assert_eq!(
+        starts,
+        [
+            (FIRST_RUN, expected[0]),
+            (FIRST_RUN + FIRST_RUN, expected[1]),
+            (REPEAT_COUNT, expected[2])
+        ]
+    );
+    assert_eq!(intervals, [expected[1], expected[2]]);
+    assert_eq!(clock.now(), Duration::from_millis(EXPECTED_END_MS));
+}
+
+#[test]
+/// Indefinite repetition can be stopped inside an interval without starting or dispatching another run.
+fn indefinite_interval_cancellation_prevents_the_next_run() {
+    let mut document = document();
+    document.playback.speed = DOUBLE_SPEED;
+    let clock = TestClock {
+        cancel_at: Some(Duration::from_millis(CANCEL_INTERVAL_MS)),
+        ..TestClock::default()
+    };
+    let mut runs = Vec::new();
+    repeat(
+        &capture(&document),
+        RepeatPlan {
+            total: None,
+            interval: INTERVAL,
+        },
+        &clock,
+        &AtomicBool::new(false),
+        |step| {
+            match step {
+                Step::Run(number) => runs.push(number),
+                Step::Finish => clock.elapsed.set(clock.now() + OVERHEAD),
+                _ => {}
+            }
+            Ok(())
+        },
+    )
+    .expect("Cancelled interval");
+    assert_eq!(runs, [FIRST_RUN]);
+}
+
+#[test]
+/// Zero-duration indefinite runs remain cancellable without an artificial wait or a finite-count substitution.
+fn zero_duration_indefinite_runs_stop_without_adding_delays() {
+    let mut capture = Capture::default();
+    capture.events.push(crate::input::Event {
+        at: Duration::ZERO,
+        kind: test_support::key(true),
+    });
+    let clock = TestClock::default();
+    let cancel = AtomicBool::new(false);
+    let mut count = 0;
+    repeat(
+        &capture,
+        RepeatPlan {
+            total: None,
+            interval: Duration::ZERO,
+        },
+        &clock,
+        &cancel,
+        |step| {
+            if let Step::Event(_) = step {
+                count += 1;
+                if count == ZERO_RUN_LIMIT {
+                    cancel.store(true, Ordering::Release);
+                }
+            }
+            Ok(())
+        },
+    )
+    .expect("Cancellable zero-duration playback");
+    assert_eq!(count, ZERO_RUN_LIMIT);
+    assert_eq!(clock.now(), Duration::ZERO);
+}
 
 #[derive(Default)]
 /// Run-relative deterministic time; production scheduling remains unchanged while desktop waits are substituted.
@@ -21,6 +156,10 @@ struct TestClock {
     cancel_at: Option<Duration>,
 }
 impl Clock for TestClock {
+    /// Returns controlled monotonic time, including dispatch and cleanup overhead.
+    fn now(&self) -> Duration {
+        self.elapsed.get()
+    }
     /// Advances to an absolute deadline without accumulating dispatch overhead; can cancel during a chosen wait.
     fn wait(&self, at: Duration, cancel: &AtomicBool) -> Result<bool, String> {
         self.waits.borrow_mut().push(at);

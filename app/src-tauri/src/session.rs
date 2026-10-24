@@ -1,6 +1,7 @@
 //! One backend-owned recording/playback session, automatic persistence and recoverable input cleanup.
 use crate::input::{track_held, Capture, EventKind, Held};
 use crate::macro_format::{MacroDocument, RecordingEnvironment};
+use crate::playback::{PlaybackStage, RepeatPlan, FIRST_RUN};
 use crate::recording::{Recording, RecordingOutcome};
 use crate::shortcuts::{Availability, RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
 use serde::Serialize;
@@ -46,6 +47,14 @@ pub(crate) struct StopRequest {
     generation: u64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+/// Startup intent separates recording's capture clock from playback's earlier session clock.
+enum StartKind {
+    Recording,
+    TemporaryPlayback,
+    SavedPlayback,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// Idle grants new ownership; Stopping retains it until every release/restoration succeeds.
@@ -53,6 +62,7 @@ pub enum Phase {
     Idle,
     Recording,
     Playing,
+    Interval,
     Stopping,
     Saving,
 }
@@ -73,6 +83,10 @@ pub struct Snapshot {
     pub can_record: bool,
     pub can_play: bool,
     pub macro_name: Option<String>,
+    pub playback_stage: PlaybackStage,
+    pub run: u64,
+    pub total_runs: Option<u64>,
+    pub remaining_ms: u64,
     pub cleanup_failed: bool,
     pub close_requested: bool,
     pub unsaved: bool,
@@ -141,6 +155,9 @@ struct State {
     starting: bool,
     revision: u64,
     start: Option<Instant>,
+    playback_stage: PlaybackStage,
+    run: u64,
+    interval_end: Option<Instant>,
     capture: Capture,
     held: Vec<Held>,
     cancel: Arc<AtomicBool>,
@@ -170,6 +187,9 @@ impl Default for State {
             starting: false,
             revision: 0,
             start: None,
+            playback_stage: PlaybackStage::Running,
+            run: FIRST_RUN,
+            interval_end: None,
             capture: Capture::default(),
             held: Vec::new(),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -222,7 +242,12 @@ impl Session {
                 .start
                 .map_or(0, |start| start.elapsed().as_millis() as u64),
             event_count: state.capture.events.len(),
-            duration_ms: state.capture.duration.as_millis() as u64,
+            duration_ms: state
+                .playback
+                .as_ref()
+                .map_or(state.capture.duration.as_millis() as u64, |document| {
+                    document.duration_ms
+                }),
             drag_move_count: state.capture.drag_moves,
             last_release: state.capture.last_release,
             message: state.message.clone(),
@@ -233,6 +258,14 @@ impl Session {
                 .playback
                 .as_ref()
                 .map(|document| document.name.clone()),
+            playback_stage: state.playback_stage,
+            run: state.run,
+            total_runs: state.playback.as_ref().map_or(Some(FIRST_RUN), |document| {
+                RepeatPlan::saved(&document.playback).total
+            }),
+            remaining_ms: state.interval_end.map_or(0, |end| {
+                remaining_milliseconds(end.saturating_duration_since(Instant::now()))
+            }),
             cleanup_failed: state.cleanup_failed,
             close_requested: state.close_requested,
             unsaved: state.phase == Phase::Saving
@@ -322,7 +355,7 @@ impl Session {
         }))
     }
     /// Claims cancellation ownership before any wait or native reservation, ignoring requests superseded by another start or idle Stop.
-    fn claim_start(&self, request: StartRequest, playback: bool) -> Result<bool, String> {
+    fn claim_start(&self, request: StartRequest, kind: StartKind) -> Result<bool, String> {
         let mut state = self.lock()?;
         if request.generation != state.generation {
             return Ok(false);
@@ -330,7 +363,7 @@ impl Session {
         if !start_available(&state) {
             return Err(ACTIVE_SESSION.into());
         }
-        if playback && state.capture.events.is_empty() {
+        if kind == StartKind::TemporaryPlayback && state.capture.events.is_empty() {
             return Err(NO_CAPTURE.into());
         }
         state.generation = state
@@ -340,15 +373,22 @@ impl Session {
         state.starting = true;
         state.can_record = false;
         state.cancel = Arc::new(AtomicBool::new(false));
+        state.run = FIRST_RUN;
+        state.interval_end = None;
+        if kind != StartKind::Recording {
+            state.phase = Phase::Playing;
+            state.playback_stage = PlaybackStage::Starting;
+            state.start = Some(Instant::now());
+        }
         Ok(true)
     }
     /// Serializes native startup after claiming its identity; cancellation remains effective while waiting for other transitions.
     fn start_transition(
         &self,
         request: StartRequest,
-        playback: bool,
+        kind: StartKind,
     ) -> Result<Option<MutexGuard<'_, ()>>, String> {
-        if !self.claim_start(request, playback)? {
+        if !self.claim_start(request, kind)? {
             return Ok(None);
         }
         self.transition
@@ -364,7 +404,7 @@ impl Session {
     }
     /// Executes an arrival-bound Record request; obsolete queue entries return current state without replacing capture.
     pub(crate) fn record_requested(&self, request: StartRequest) -> Result<Snapshot, String> {
-        let Some(transition) = self.start_transition(request, false)? else {
+        let Some(transition) = self.start_transition(request, StartKind::Recording)? else {
             return self.snapshot();
         };
         let result = self.start_recording();
@@ -494,7 +534,7 @@ impl Session {
                 .into();
             }
             Phase::Stopping | Phase::Saving => return Ok(request),
-            Phase::Playing => {
+            Phase::Playing | Phase::Interval => {
                 state.cancel.store(true, Ordering::Release);
                 state.terminal = REPLAY_CANCELLED.into();
             }
@@ -593,6 +633,9 @@ impl Session {
         let mut state = self.lock()?;
         state.shortcuts = availability;
         state.start = None;
+        state.run = FIRST_RUN;
+        state.playback_stage = PlaybackStage::Running;
+        state.interval_end = None;
         state.cleanup_failed = false;
         state.message = state.terminal.clone();
         if state.playback.take().is_some() {
@@ -705,6 +748,11 @@ fn start_available(state: &State) -> bool {
         && !state.starting
         && state.confirmation.is_none()
         && !state.close_requested
+}
+/// Rounds positive backend countdowns upward so submillisecond waits never appear expired in transport.
+fn remaining_milliseconds(duration: Duration) -> u64 {
+    const NANOS_PER_MILLISECOND: u128 = 1_000_000;
+    duration.as_nanos().div_ceil(NANOS_PER_MILLISECOND) as u64
 }
 /// Selects truthful terminal capture feedback without claiming persistence.
 fn recording_message(interrupted: bool, empty: bool) -> &'static str {

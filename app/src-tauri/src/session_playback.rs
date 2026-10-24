@@ -4,7 +4,6 @@ use crate::playback::{self, MonotonicClock};
 
 type Replay = (Capture, Arc<AtomicBool>, Instant);
 const PLAYING_PREFIX: &str = "Playing";
-const ONCE_STATUS: &str = "Run 1/1. F8 stops.";
 const FAILURE_PREFIX: &str = "Playback failed";
 
 impl Session {
@@ -34,10 +33,15 @@ impl Session {
         request: StartRequest,
         id: Option<&str>,
     ) -> Result<Snapshot, String> {
-        let Some(transition) = self.start_transition(request, id.is_none())? else {
+        let kind = if id.is_some() {
+            StartKind::SavedPlayback
+        } else {
+            StartKind::TemporaryPlayback
+        };
+        let Some(transition) = self.start_transition(request, kind)? else {
             return self.snapshot();
         };
-        let result = self.start_replay(id);
+        let result = self.publish().and_then(|()| self.start_replay(id));
         if result.is_err() {
             // A preparation error has not installed saved events; preserve any previous temporary capture.
             self.lock()?.playback = None;
@@ -80,12 +84,11 @@ impl Session {
             return Ok(false);
         }
         state.message = match &document {
-            Some(document) => format!("{PLAYING_PREFIX} {}. {ONCE_STATUS}", document.name),
+            Some(document) => format!("{PLAYING_PREFIX} {}.", document.name),
             None => PLAYING.into(),
         };
         state.playback = document.map(Arc::new);
         state.phase = Phase::Playing;
-        state.start = None;
         state.worker = true;
         state.terminal = if state.playback.is_some() {
             playback::COMPLETE
@@ -96,7 +99,7 @@ impl Session {
         state.can_record = false;
         Ok(true)
     }
-    /// Rechecks preparation, then shares a single epoch between deadlines and visible elapsed status.
+    /// Rechecks preparation and retains the accepted session epoch; each run gets its own later deadline anchor.
     fn arm_replay(&self) -> Result<Option<Replay>, String> {
         let document = self.lock()?.playback.clone();
         let validation = self.validate_playback(document.as_deref());
@@ -115,14 +118,15 @@ impl Session {
             state.capture = capture.clone();
             state.persistent = true;
         }
-        let start = Instant::now();
-        state.start = Some(start);
+        let start = state.start.ok_or(STATE_ERROR)?;
         Ok(Some((capture, state.cancel.clone(), start)))
     }
-    /// Runs one absolute-deadline schedule; completion, cancellation and failure all converge on owned cleanup.
+    /// Runs the saved immutable plan; completion, cancellation and failure all converge on owned cleanup.
     fn replay(&self, capture: Capture, cancel: Arc<AtomicBool>, start: Instant) {
-        let result = playback::run(&capture, &MonotonicClock(start), &cancel, |kind| {
-            self.dispatch(kind, &cancel)
+        let result = self.replay_plan().and_then(|plan| {
+            playback::repeat(&capture, plan, &MonotonicClock(start), &cancel, |step| {
+                self.replay_step(step, &cancel, start)
+            })
         });
         if let Err(error) = result {
             self.replay_error(error);
@@ -131,6 +135,69 @@ impl Session {
             self.report(error);
         }
         let _ = self.publish();
+    }
+    /// Copies repeat settings from the already owned saved snapshot; temporary captures remain one-times, once.
+    fn replay_plan(&self) -> Result<RepeatPlan, String> {
+        Ok(self
+            .lock()?
+            .playback
+            .as_ref()
+            .map_or_else(RepeatPlan::default, |document| {
+                RepeatPlan::saved(&document.playback)
+            }))
+    }
+    /// Applies scheduling progress without releasing Stop, compact placement or operation ownership between runs.
+    fn replay_step(
+        &self,
+        step: playback::Step<'_>,
+        cancel: &AtomicBool,
+        start: Instant,
+    ) -> Result<(), String> {
+        if let playback::Step::Event(kind) = step {
+            return self.dispatch(kind, cancel);
+        }
+        self.check_playback()?;
+        if cancel.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.replay_progress(step, start)?;
+        self.publish()?;
+        self.release_run_input()
+    }
+    /// Releases a completed run's remaining holds; failure stops all repetitions while retaining ownership for terminal cleanup.
+    fn release_run_input(&self) -> Result<(), String> {
+        if self.lock()?.playback_stage == PlaybackStage::Finishing {
+            self.release_outstanding()?;
+            if !self.lock()?.held.is_empty() {
+                return Err(CLEANUP_FAILED.into());
+            }
+        }
+        Ok(())
+    }
+    /// Updates only progress under the state lock; a concurrent terminal Stop always wins over a late progress update.
+    fn replay_progress(&self, step: playback::Step<'_>, start: Instant) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.cancel.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        match step {
+            playback::Step::Run(number) => {
+                state.phase = Phase::Playing;
+                state.playback_stage = PlaybackStage::Running;
+                state.run = number;
+                state.interval_end = None;
+            }
+            playback::Step::Finish => {
+                state.playback_stage = PlaybackStage::Finishing;
+            }
+            playback::Step::Interval(deadline) => {
+                state.phase = Phase::Interval;
+                state.playback_stage = PlaybackStage::Running;
+                state.interval_end = Some(start.checked_add(deadline).ok_or(STATE_ERROR)?);
+            }
+            playback::Step::Event(_) => {}
+        }
+        Ok(())
     }
     /// Relinquishes the in-flight dispatch owner before cleanup; stale workers cannot clean a later generation.
     fn finish_replay(&self) -> Result<(), String> {
@@ -170,7 +237,7 @@ impl Session {
             state
                 .playback
                 .as_ref()
-                .filter(|_| state.phase == Phase::Playing)
+                .filter(|_| matches!(state.phase, Phase::Playing | Phase::Interval))
                 .map(|document| (state.generation, document.recording.clone()))
         };
         if let Some((generation, environment)) = observation {
@@ -183,7 +250,9 @@ impl Session {
     /// Applies environment failure only to its observed owner and lets the worker perform held-input cleanup.
     fn interrupt_playback_for(&self, generation: u64, reason: &str) -> Result<(), String> {
         let mut state = self.lock()?;
-        if generation != state.generation || state.phase != Phase::Playing {
+        if generation != state.generation
+            || !matches!(state.phase, Phase::Playing | Phase::Interval)
+        {
             return Ok(());
         }
         state.cancel.store(true, Ordering::Release);
