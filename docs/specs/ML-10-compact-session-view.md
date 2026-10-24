@@ -25,6 +25,8 @@ defaults in the PRD for this story.
   independently of compact movement.
 - Automated transitions and progress updates preserve external target focus.
   Deliberate clicks or native title-bar dragging may activate MacroLoom normally.
+  [ML-18](ML-18-safe-playback-targeting.md) supersedes the title-bar allowance:
+  manual compact dragging preserves target focus during recording and playback.
 - Hide ordinary toasts and preserve their remaining visible lifetime while
   compact. Resume them in full view. Window-transition failure toasts bypass this
   suppression and appear below the toolbar with Stop accessible.

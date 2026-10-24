@@ -5,10 +5,12 @@ use crate::shortcuts::{
 };
 use crate::window_view::{ContentSize, Position, WindowAdapter};
 use crate::{EventKind, Held, MouseButton};
+use std::cell::Cell;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::null_mut;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::sync::{Arc, OnceLock};
@@ -16,8 +18,8 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromRect, HDC, HMONITOR, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromRect, HDC, HMONITOR,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
@@ -33,19 +35,23 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
     MOUSEINPUT,
 };
-use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+use windows_sys::Win32::UI::Shell::{
+    DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
     GetSystemMetrics, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId,
-    PeekMessageW, PostThreadMessageW, SetWindowLongW, SetWindowPlacement, SetWindowPos,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE,
-    HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
-    MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
-    SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP,
-    WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCDESTROY, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    KillTimer, PeekMessageW, PostThreadMessageW, SetTimer, SetWindowLongW, SetWindowPlacement,
+    SetWindowPos, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE,
+    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED,
+    MA_NOACTIVATE, MSG, MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    USER_TIMER_MINIMUM, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP, WM_CANCELMODE,
+    WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCLBUTTONDBLCLK,
+    WM_NCLBUTTONDOWN, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WS_EX_NOACTIVATE, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
 };
 
 static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
@@ -70,7 +76,9 @@ const POWER_SUBCLASS: usize = 14;
 const POWER_HOOK_FAILED: &str = "Could not observe computer sleep notifications.";
 const COMPACT_COLLISION: &str =
     "Playback target overlaps MacroLoom; move the compact window and retry.";
-const NORMALIZED_MAX: i64 = 65535;
+const NORMALIZED_RANGE: i64 = 65536;
+const NORMALIZED_PIXEL_CENTER: i64 = NORMALIZED_RANGE / 2;
+const INVALID_PHYSICAL_PIXEL: &str = "Playback target is outside the current virtual desktop; restore the recorded layout and retry.";
 const CONFLICT_HELPER_FAILED: &str = "The requested key is already reserved. Close MacroLoom/the conflicting application and try again.";
 const CONFLICT_HELPER_DISABLED: &str = "Shortcut conflict helper is development-only.";
 const CONFLICT_RECORD: &str = "record";
@@ -107,6 +115,247 @@ const SNAPSHOT_CONTROL_KEYS: [u16; 4] = [RECORD_KEY, STOP_KEY, 0x0d, 0x20];
 const RESERVED_CAPTURE_KEYS: [u16; 2] = [RECORD_KEY, STOP_KEY];
 const ENVIRONMENT_UNAVAILABLE: &str =
     "Could not read the recording keyboard layout or display configuration";
+const COMPACT_DRAG_SUBCLASS: usize = 18;
+const COMPACT_DRAG_TIMER: usize = 0x4D4C_0018;
+const COMPACT_DRAG_ERROR: &str = "Could not move the compact window without activation";
+const COMPACT_DRAG_TIMER_ERROR: &str = "Could not release the compact dragging timer";
+const MOUSE_WORD_SHIFT: u32 = 16;
+
+#[derive(Clone, Copy)]
+/// Physical cursor/frame origins copied at a title-bar press; they never refer to native borrowed storage.
+struct DragAnchor {
+    cursor: POINT,
+    window: POINT,
+}
+
+#[derive(Default)]
+/// Event-thread-only compact interaction, owned by its native subclass until WM_NCDESTROY.
+/// Cells permit synchronous reentrant window messages without an outstanding mutable borrow.
+struct CompactDrag {
+    enabled: Cell<bool>,
+    anchor: Cell<Option<DragAnchor>>,
+}
+
+/// Clones the subclass's owned state on the owning thread so reentrant destruction cannot invalidate a callback's copy.
+fn compact_drag_state(hwnd: HWND) -> Option<Rc<CompactDrag>> {
+    let mut data = 0;
+    // SAFETY: called only on this HWND's event thread; successful lookup returns the Rc installed by compact_drag_mode.
+    if unsafe {
+        GetWindowSubclass(
+            hwnd,
+            Some(compact_message),
+            COMPACT_DRAG_SUBCLASS,
+            &mut data,
+        )
+    } == 0
+    {
+        return None;
+    }
+    // SAFETY: the subclass owns one strong reference until WM_NCDESTROY; no native call occurs between increment and reconstruction.
+    unsafe {
+        Rc::increment_strong_count(data as *const CompactDrag);
+        Some(Rc::from_raw(data as *const CompactDrag))
+    }
+}
+
+/// Installs/toggles nonactivating title-bar handling on the window thread; full mode ends dragging and preserves ordinary activation.
+fn compact_drag_mode(hwnd: HWND, enabled: bool) -> Result<(), String> {
+    let state = match compact_drag_state(hwnd) {
+        Some(state) => state,
+        None if !enabled => return Ok(()),
+        None => {
+            let state = Rc::new(CompactDrag::default());
+            let owned = Rc::into_raw(state.clone());
+            // SAFETY: live same-thread HWND; the static callback owns this strong reference through native destruction.
+            if unsafe {
+                SetWindowSubclass(
+                    hwnd,
+                    Some(compact_message),
+                    COMPACT_DRAG_SUBCLASS,
+                    owned as usize,
+                )
+            } == 0
+            {
+                // SAFETY: installation failed, so no native callback owns the otherwise leaked strong reference.
+                drop(unsafe { Rc::from_raw(owned) });
+                return Err(COMPACT_DRAG_ERROR.into());
+            }
+            state
+        }
+    };
+    state.enabled.set(enabled);
+    if !enabled {
+        finish_compact_drag(hwnd, &state);
+    }
+    Ok(())
+}
+
+/// Filters only compact title-bar dragging, forwarding all controls and full-window messages through Tauri's existing chain.
+unsafe extern "system" fn compact_message(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _: usize,
+    data: usize,
+) -> LRESULT {
+    // SAFETY: this installed subclass owns the pointer; clone before any operation capable of reentrant native destruction.
+    let state = unsafe {
+        Rc::increment_strong_count(data as *const CompactDrag);
+        Rc::from_raw(data as *const CompactDrag)
+    };
+    if message == WM_NCDESTROY {
+        finish_compact_drag(hwnd, &state);
+        // SAFETY: removes only this same-thread subclass, leaving this callback's cloned Rc alive until return.
+        if unsafe { RemoveWindowSubclass(hwnd, Some(compact_message), COMPACT_DRAG_SUBCLASS) } != 0
+        {
+            // SAFETY: successful removal relinquishes the subclass's one owned strong reference exactly once.
+            drop(unsafe { Rc::from_raw(data as *const CompactDrag) });
+        } else {
+            eprintln!("{COMPACT_DRAG_ERROR}");
+        }
+    } else if state.enabled.get() {
+        if let Some(result) = compact_drag_message(hwnd, &state, message, wparam, lparam) {
+            return result;
+        }
+    }
+    // SAFETY: original by-value arguments are forwarded through the remaining live native subclass chain.
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+/// Handles short drag messages independently of recording/playback state; dragging never cancels or reschedules input.
+fn compact_drag_message(
+    hwnd: HWND,
+    state: &CompactDrag,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<LRESULT> {
+    match message {
+        WM_MOUSEACTIVATE if lparam as u16 as u32 == HTCAPTION => Some(MA_NOACTIVATE as isize),
+        WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if wparam == HTCAPTION as usize => {
+            report_compact_drag(
+                hwnd,
+                state,
+                begin_compact_drag(hwnd, state, screen_message_point(lparam)),
+            );
+            Some(0)
+        }
+        WM_MOUSEMOVE if state.anchor.get().is_some() => {
+            report_compact_drag(hwnd, state, move_compact_from_client(hwnd, state, lparam));
+            Some(0)
+        }
+        WM_TIMER if wparam == COMPACT_DRAG_TIMER => {
+            report_compact_drag(hwnd, state, poll_compact_drag(hwnd, state));
+            Some(0)
+        }
+        WM_LBUTTONUP | WM_CANCELMODE => {
+            finish_compact_drag(hwnd, state);
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Sign-extends native message words; unlike playback coordinates this is the Win32 mouse-message representation.
+fn screen_message_point(value: LPARAM) -> POINT {
+    POINT {
+        x: i32::from(value as i16),
+        y: i32::from((value >> MOUSE_WORD_SHIFT) as i16),
+    }
+}
+
+/// Starts a bounded native timer instead of a foreground-activating modal move loop or foreground-only mouse capture.
+fn begin_compact_drag(hwnd: HWND, state: &CompactDrag, cursor: POINT) -> Result<(), String> {
+    let mut bounds = RECT::default();
+    // SAFETY: live owned frame, initialized local output and a window-thread timer with no borrowed callback data.
+    if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
+        return Err(WINDOW_BOUNDS_ERROR.into());
+    }
+    // SAFETY: the timer is scoped to this live window/thread and handled by the static subclass, which cleans it up.
+    if unsafe { SetTimer(hwnd, COMPACT_DRAG_TIMER, USER_TIMER_MINIMUM, None) } == 0 {
+        return Err(COMPACT_DRAG_ERROR.into());
+    }
+    state.anchor.set(Some(DragAnchor {
+        cursor,
+        window: POINT {
+            x: bounds.left,
+            y: bounds.top,
+        },
+    }));
+    Ok(())
+}
+
+/// Converts a delivered client mouse point before moving; the timer covers motion/release outside the inactive window.
+fn move_compact_from_client(hwnd: HWND, state: &CompactDrag, value: LPARAM) -> Result<(), String> {
+    let mut point = screen_message_point(value);
+    // SAFETY: synchronous conversion writes an initialized local POINT for this live frame.
+    if unsafe { ClientToScreen(hwnd, &mut point) } == 0 {
+        return Err(COMPACT_DRAG_ERROR.into());
+    }
+    move_compact_drag(hwnd, state, point)
+}
+
+/// Polls only during an owned title-bar gesture, allowing background movement without consuming external keyboard input.
+fn poll_compact_drag(hwnd: HWND, state: &CompactDrag) -> Result<(), String> {
+    if !key_held(LEFT_MOUSE_KEY) {
+        finish_compact_drag(hwnd, state);
+        return Ok(());
+    }
+    let mut point = POINT::default();
+    // SAFETY: initialized local storage is writable for the synchronous physical cursor query.
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        return Err(COMPACT_DRAG_ERROR.into());
+    }
+    move_compact_drag(hwnd, state, point)
+}
+
+/// Moves the shared-cursor drag without activation, resizing, z-order changes, focus restoration or playback control.
+fn move_compact_drag(hwnd: HWND, state: &CompactDrag, point: POINT) -> Result<(), String> {
+    let Some(anchor) = state.anchor.get() else {
+        return Ok(());
+    };
+    let x =
+        i32::try_from(i64::from(anchor.window.x) + i64::from(point.x) - i64::from(anchor.cursor.x))
+            .map_err(|_| COMPACT_DRAG_ERROR)?;
+    let y =
+        i32::try_from(i64::from(anchor.window.y) + i64::from(point.y) - i64::from(anchor.cursor.y))
+            .map_err(|_| COMPACT_DRAG_ERROR)?;
+    // SAFETY: live same-thread window and checked signed physical coordinates; flags expressly forbid activation and resizing.
+    if unsafe {
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        )
+    } == 0
+    {
+        return Err(WINDOW_MOVE_ERROR.into());
+    }
+    Ok(())
+}
+
+/// Stops timer work on release, cancellation, restoration or destruction; repeated termination is harmless.
+fn finish_compact_drag(hwnd: HWND, state: &CompactDrag) {
+    if state.anchor.take().is_some() {
+        // SAFETY: this identifier belongs only to the live frame's drag handler; no timer callback holds borrowed state.
+        if unsafe { KillTimer(hwnd, COMPACT_DRAG_TIMER) } == 0 {
+            eprintln!("{COMPACT_DRAG_TIMER_ERROR}");
+        }
+    }
+}
+
+/// Terminates only a failed window gesture; playback and recording continue under their existing lifecycle owners.
+fn report_compact_drag(hwnd: HWND, state: &CompactDrag, result: Result<(), String>) {
+    if let Err(error) = result {
+        finish_compact_drag(hwnd, state);
+        eprintln!("{COMPACT_DRAG_ERROR}: {error}");
+    }
+}
 
 /// Atomically moves a flushed staging file without replacement, even when another process wins the filename race.
 pub fn commit_new_recording(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -397,11 +646,12 @@ pub fn enable_physical_dpi() {
 }
 
 #[derive(Clone, Copy)]
-/// Full native placement, physical visible bounds, and original frame style retained through compact movement.
+/// Full native placement, physical visible bounds, and original frame/activation styles retained through compact movement.
 pub struct FullWindowPlacement {
     bounds: RECT,
     placement: WINDOWPLACEMENT,
     style: i32,
+    extended_style: i32,
 }
 
 /// Windows adapter for the owned live Tauri main window; all mutations run on its native event thread.
@@ -440,14 +690,14 @@ impl DesktopWindow {
         }
     }
 
-    /// Changes frame bits with explicit Win32 error handling; no pointers or activation requests are used.
-    fn style(&self, style: i32) -> Result<(), String> {
-        // SAFETY: HWND remains owned by the live main window; GWL_STYLE accepts a value, not a borrowed pointer.
+    /// Changes the requested native frame/activation style with explicit error handling; the documented index accepts values, not pointers.
+    fn style(&self, index: i32, style: i32) -> Result<(), String> {
+        // SAFETY: HWND remains owned by the live main window; the documented style indices accept values, not borrowed pointers.
         unsafe {
             SetLastError(0);
         }
         // SAFETY: the same live HWND and documented style index are valid throughout this event-thread operation.
-        let previous = unsafe { SetWindowLongW(self.hwnd as HWND, GWL_STYLE, style) };
+        let previous = unsafe { SetWindowLongW(self.hwnd as HWND, index, style) };
         // SAFETY: thread-local last-error inspection has no pointer or lifetime requirements.
         if previous == 0 && unsafe { GetLastError() } != 0 {
             return Err(WINDOW_STYLE_ERROR.into());
@@ -526,6 +776,7 @@ impl DesktopWindow {
 
     /// Applies an owned placement, constraints, frame, and stacking mode without activation; callers roll back partial failure.
     fn apply_placement(&self, saved: &FullWindowPlacement, compact: bool) -> Result<(), String> {
+        compact_drag_mode(self.hwnd as HWND, compact)?;
         let mut placement = saved.placement;
         placement.showCmd = SW_SHOWNOACTIVATE as u32;
         // SAFETY: live HWND; captured initialized placement is local and its show command forbids activation.
@@ -533,7 +784,8 @@ impl DesktopWindow {
             return Err(WINDOW_RESTORE_ERROR.into());
         }
         (self.constraints)(compact)?;
-        self.style(saved.style)?;
+        self.style(GWL_STYLE, saved.style)?;
+        self.style(GWL_EXSTYLE, saved.extended_style)?;
         self.place(saved.bounds, compact)
     }
 }
@@ -553,10 +805,13 @@ impl WindowAdapter for DesktopWindow {
         }
         // SAFETY: documented value getter on the owned main window.
         let style = unsafe { GetWindowLongW(self.hwnd as HWND, GWL_STYLE) };
+        // SAFETY: extended style is another by-value getter on the same live window.
+        let extended_style = unsafe { GetWindowLongW(self.hwnd as HWND, GWL_EXSTYLE) };
         Ok(FullWindowPlacement {
             bounds,
             placement,
             style,
+            extended_style,
         })
     }
 
@@ -583,7 +838,10 @@ impl WindowAdapter for DesktopWindow {
         // SAFETY: live main HWND and by-value documented style index; no pointer is retained.
         let style = unsafe { GetWindowLongW(self.hwnd as HWND, GWL_STYLE) } as u32
             & !(WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MAXIMIZE);
-        self.style(style as i32)?;
+        self.style(GWL_STYLE, style as i32)?;
+        // SAFETY: getter reads this owned window's activation policy before preserving its other extended style bits.
+        let extended = unsafe { GetWindowLongW(self.hwnd as HWND, GWL_EXSTYLE) } as u32;
+        self.style(GWL_EXSTYLE, (extended | WS_EX_NOACTIVATE) as i32)?;
         let current = self.bounds()?;
         self.place(
             RECT {
@@ -594,7 +852,8 @@ impl WindowAdapter for DesktopWindow {
             },
             true,
         )?;
-        self.place(self.content_bounds(position, size, style as i32)?, true)
+        self.place(self.content_bounds(position, size, style as i32)?, true)?;
+        compact_drag_mode(self.hwnd as HWND, true)
     }
 
     /// Restores full placement without activation; partial failure rolls back the prior compact frame and retains restoration data.
@@ -1191,15 +1450,15 @@ pub fn cursor_position() -> (i32, i32) {
 }
 
 /// Builds a physical virtual-desktop movement event tagged to exclude our own injected input from capture.
-fn mouse_move(x: i32, y: i32) -> INPUT {
+fn mouse_move(x: i32, y: i32) -> Result<INPUT, String> {
     // SAFETY: GetSystemMetrics takes only documented metric identifiers.
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) }.max(1);
-    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) }.max(1);
-    let dx = normalize_pixel(x, left, width);
-    let dy = normalize_pixel(y, top, height);
-    INPUT {
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    let dx = normalize_pixel(x, left, width)?;
+    let dy = normalize_pixel(y, top, height)?;
+    Ok(INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
             mi: MOUSEINPUT {
@@ -1211,13 +1470,17 @@ fn mouse_move(x: i32, y: i32) -> INPUT {
                 dwExtraInfo: EXTRA_INFO,
             },
         },
-    }
+    })
 }
 
-/// Maps one signed desktop pixel into the bounded Windows absolute-input coordinate range.
-fn normalize_pixel(pixel: i32, origin: i32, span: i32) -> i32 {
-    ((pixel as i64 - origin as i64) * NORMALIZED_MAX / (span - 1).max(1) as i64)
-        .clamp(0, NORMALIZED_MAX) as i32
+/// Targets the center of a signed pixel's absolute-input interval, avoiding one-pixel rounding errors at the interval edge.
+/// Invalid metrics or coordinates fail rather than clamping a requested destination to another physical pixel.
+fn normalize_pixel(pixel: i32, origin: i32, span: i32) -> Result<i32, String> {
+    let offset = i64::from(pixel) - i64::from(origin);
+    if span <= 0 || offset < 0 || offset >= i64::from(span) {
+        return Err(INVALID_PHYSICAL_PIXEL.into());
+    }
+    Ok(((offset * NORMALIZED_RANGE + NORMALIZED_PIXEL_CENTER) / i64::from(span)) as i32)
 }
 
 /// Builds one tagged supported mouse-button transition without moving the cursor.
@@ -1311,12 +1574,12 @@ pub fn send_event(kind: &EventKind) -> Result<(), String> {
             down,
         } => send(&[keyboard(*vk, *scan, *extended, *down)]),
         EventKind::Mouse { button, down, x, y } => {
-            send(&[mouse_move(*x, *y)])?;
+            send(&[mouse_move(*x, *y)?])?;
             send(&[mouse_button(*button, *down)])
         }
-        EventKind::Move { x, y } => send(&[mouse_move(*x, *y)]),
+        EventKind::Move { x, y } => send(&[mouse_move(*x, *y)?]),
         EventKind::Wheel { delta, x, y } => {
-            send(&[mouse_move(*x, *y)])?;
+            send(&[mouse_move(*x, *y)?])?;
             send(&[mouse_wheel(*delta)])
         }
     }
@@ -1447,9 +1710,30 @@ mod tests {
     #[test]
     /// Negative monitor origins map to the same bounded absolute coordinates as positive desktop pixels.
     fn maps_negative_virtual_desktop_coordinates_to_absolute_input() {
-        assert_eq!(normalize_pixel(-1920, -1920, 3840), 0);
-        assert_eq!(normalize_pixel(1919, -1920, 3840), 65535);
-        assert!(normalize_pixel(-1, -1920, 3840) < normalize_pixel(0, -1920, 3840));
+        const VIRTUAL_ORIGIN: i32 = -1920;
+        const VIRTUAL_SPAN: i32 = 3840;
+        const FINAL_PIXEL: i32 = 1919;
+        const FIRST_PIXEL_BIN_CENTER: i32 = 8;
+        const FINAL_PIXEL_BIN_CENTER: i32 = 65527;
+        const NEGATIVE_SEAM_PIXEL: i32 = -1;
+        const PRIMARY_ORIGIN: i32 = 0;
+        assert_eq!(
+            normalize_pixel(VIRTUAL_ORIGIN, VIRTUAL_ORIGIN, VIRTUAL_SPAN)
+                .expect("Leftmost physical pixel"),
+            FIRST_PIXEL_BIN_CENTER
+        );
+        assert_eq!(
+            normalize_pixel(FINAL_PIXEL, VIRTUAL_ORIGIN, VIRTUAL_SPAN)
+                .expect("Rightmost physical pixel"),
+            FINAL_PIXEL_BIN_CENTER
+        );
+        assert!(
+            normalize_pixel(NEGATIVE_SEAM_PIXEL, VIRTUAL_ORIGIN, VIRTUAL_SPAN)
+                .expect("Negative seam pixel")
+                < normalize_pixel(PRIMARY_ORIGIN, VIRTUAL_ORIGIN, VIRTUAL_SPAN)
+                    .expect("Primary seam pixel")
+        );
+        assert!(normalize_pixel(i32::MIN, VIRTUAL_ORIGIN, VIRTUAL_SPAN).is_err());
     }
     #[test]
     #[ignore = "Requires an interactive Windows desktop with F8 initially unreserved"]
@@ -1511,11 +1795,13 @@ mod native_view_tests {
     use crate::window_view::{ViewRequest, WindowView, MIN_CONTENT_WIDTH};
     use std::sync::atomic::{AtomicBool, Ordering};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, GetClientRect, IsZoomed, SetForegroundWindow, ShowWindow,
-        SW_MAXIMIZE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        CreateWindowExW, DestroyWindow, GetClientRect, IsZoomed, SendMessageW, SetForegroundWindow,
+        ShowWindow, HTCAPTION, MA_ACTIVATE, MA_NOACTIVATE, SW_MAXIMIZE, WM_CANCELMODE,
+        WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
-    const CLASS: &str = "STATIC";
+    const CLASS: &str = "MacroLoom native targeting fixture";
+    const PIXEL_TARGET_CLASS: &str = "BUTTON";
     const MAIN_TITLE: &str = "MacroLoom compact native integration";
     const TARGET_TITLE: &str = "MacroLoom integration target";
     const FULL_WIDTH: i32 = 600;
@@ -1526,6 +1812,358 @@ mod native_view_tests {
     // Keep the off-screen test origin within Win32's signed 16-bit window-position limit.
     const OFF_SCREEN: i32 = 30_000;
     const CONSTRAINT_FAILURE: &str = "Injected constraint failure after placement changed";
+    const DRAG_DELTA_X: i32 = 64;
+    const DRAG_DELTA_Y: i32 = 32;
+    const CAPTION_OFFSET: i32 = 20;
+    const CLIENT_DRAG_Y: i32 = 40;
+    const PIXEL_SAMPLES: i32 = 64;
+    const CURSOR_SETTLE: Duration = Duration::from_millis(10);
+    const MAX_NATIVE_MESSAGES: usize = 100;
+    const NATIVE_SETTLE: Duration = Duration::from_millis(50);
+    const FRAME_MIDPOINT_DIVISOR: i32 = 2;
+    const CURSOR_RESTORE_FAILED: &str =
+        "Could not restore the native check's original cursor position";
+
+    #[test]
+    #[ignore = "Requires an interactive Windows desktop; injects one bounded title-bar drag on a disposable native window"]
+    /// A real mouse gesture drives the compact timer/message path without activating the frame or leaving its button held.
+    fn native_mouse_gesture_drags_compact_without_activation() {
+        enable_physical_dpi();
+        playback_inputs_released().expect("Release physical input before this isolated check");
+        let _cursor = RestoreCursor(cursor_position());
+        let windows = TestWindows::new();
+        let mut view = WindowView::new(DesktopWindow::unconstrained(windows.main as isize));
+        assert!(view
+            .update(ViewRequest {
+                compact: true,
+                width: MIN_CONTENT_WIDTH,
+                height: CONTENT_HEIGHT
+            })
+            .error
+            .is_none());
+        settle_native_messages();
+        // SAFETY: observes the existing foreground without queuing a fixture activation that could complete during injected input.
+        let target = unsafe { GetForegroundWindow() };
+        assert!(!target.is_null());
+        assert_ne!(target, windows.main);
+        let before = rectangle(windows.main);
+        let x = (before.0 + before.2) / FRAME_MIDPOINT_DIVISOR;
+        let y = before.1 + CAPTION_OFFSET;
+        // SAFETY: these by-value native hit tests verify the fixture owns the title-bar destination before any button injection.
+        unsafe {
+            assert_eq!(
+                SendMessageW(
+                    windows.main,
+                    windows_sys::Win32::UI::WindowsAndMessaging::WM_NCHITTEST,
+                    0,
+                    packed_point(POINT { x, y })
+                ),
+                HTCAPTION as isize
+            );
+            assert_eq!(
+                windows_sys::Win32::UI::WindowsAndMessaging::WindowFromPoint(POINT { x, y }),
+                windows.main
+            );
+        }
+        send_event(&EventKind::Mouse {
+            button: MouseButton::Left,
+            down: true,
+            x,
+            y,
+        })
+        .expect("Owned title-bar press");
+        let gesture = ReleaseTestButton;
+        settle_native_messages();
+        send_event(&EventKind::Move {
+            x: x + DRAG_DELTA_X,
+            y: y + DRAG_DELTA_Y,
+        })
+        .expect("Owned title-bar movement");
+        settle_native_messages();
+        drop(gesture);
+        settle_native_messages();
+        let moved = rectangle(windows.main);
+        assert_eq!(
+            (moved.0, moved.1),
+            (before.0 + DRAG_DELTA_X, before.1 + DRAG_DELTA_Y)
+        );
+        // SAFETY: foreground observation never requests focus restoration or activation.
+        assert_eq!(
+            unsafe { GetForegroundWindow() },
+            target,
+            "main={:?}, fixture target={:?}",
+            windows.main,
+            windows.target
+        );
+        playback_inputs_released().expect("The simulated manual drag releases its button");
+    }
+
+    /// Owns only the left press injected by the isolated native drag check, including panic cleanup.
+    struct ReleaseTestButton;
+    impl Drop for ReleaseTestButton {
+        /// Releases the fixture's injected button at its current position before any test-owned windows are destroyed.
+        fn drop(&mut self) {
+            if let Err(error) = release(Held::Button(MouseButton::Left)) {
+                eprintln!("{error}");
+            }
+        }
+    }
+
+    /// Gives the disposable event thread enough bounded pump cycles to process input and the short drag timer.
+    fn settle_native_messages() {
+        let end = std::time::Instant::now() + NATIVE_SETTLE;
+        while std::time::Instant::now() < end {
+            pump_native_messages();
+            std::thread::sleep(CURSOR_SETTLE);
+        }
+        pump_native_messages();
+    }
+
+    #[test]
+    #[ignore = "Requires an interactive Windows desktop; moves the shared cursor only over disposable native target windows"]
+    /// Actual virtual-desktop injection lands at each requested physical pixel, beyond merely monotonic normalized coordinates.
+    fn native_positioned_movement_lands_on_exact_physical_pixels() {
+        enable_physical_dpi();
+        playback_inputs_released().expect("Release physical input before this isolated check");
+        let cursor = RestoreCursor(cursor_position());
+        let environment = recording_environment().expect("Physical display metadata");
+        eprintln!("Physical targeting environment: {environment:?}");
+        for display in &environment.displays {
+            check_physical_landing(display);
+        }
+        drop(cursor);
+    }
+
+    /// Moves only disposable frames onto one unchanged monitor and checks physical samples below the compact toolbar.
+    fn check_physical_landing(display: &crate::macro_format::Display) {
+        let windows = TestWindows::with_target_class(PIXEL_TARGET_CLASS);
+        for hwnd in [windows.main, windows.target] {
+            // SAFETY: only test-owned windows move; destination pixels are on an enumerated current monitor and activation is forbidden.
+            assert_ne!(
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        null_mut(),
+                        display.x + ORIGIN,
+                        display.y + ORIGIN,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                    )
+                },
+                0
+            );
+        }
+        let mut view = WindowView::new(DesktopWindow::unconstrained(windows.main as isize));
+        assert!(view
+            .update(ViewRequest {
+                compact: true,
+                width: MIN_CONTENT_WIDTH,
+                height: CONTENT_HEIGHT
+            })
+            .error
+            .is_none());
+        windows.focus_target();
+        // SAFETY: raises only this test-owned target without activation, ensuring every sampled mouse point belongs to the fixture.
+        assert_ne!(
+            unsafe {
+                SetWindowPos(
+                    windows.target,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE
+                        | SWP_NOSIZE
+                        | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOMOVE,
+                )
+            },
+            0
+        );
+        let frame = rectangle(windows.main);
+        let target = rectangle(windows.target);
+        let y = frame.3 + CAPTION_OFFSET;
+        assert!(y < target.3 - CAPTION_OFFSET);
+        for offset in 0..PIXEL_SAMPLES {
+            let x = target.0 + CAPTION_OFFSET + offset;
+            let y = y + offset;
+            assert!(y < target.3 - CAPTION_OFFSET);
+            // SAFETY: value-only hit testing confirms the test owns the destination before any shared-cursor movement.
+            assert_eq!(
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::WindowFromPoint(POINT { x, y })
+                },
+                windows.target
+            );
+            send_session_event(windows.main as isize, &EventKind::Move { x, y })
+                .expect("Isolated positioned movement");
+            pump_native_messages();
+            std::thread::sleep(CURSOR_SETTLE);
+            pump_native_messages();
+            assert_eq!(
+                cursor_position(),
+                (x, y),
+                "Physical cursor landing differs from the requested target"
+            );
+        }
+    }
+
+    /// Services the disposable target's input queue so Windows can process injected motion before physical-position assertions.
+    fn pump_native_messages() {
+        let mut message = MSG::default();
+        for _ in 0..MAX_NATIVE_MESSAGES {
+            // SAFETY: initialized local MSG and this test thread's queue; no other thread's window messages are dispatched.
+            if unsafe {
+                PeekMessageW(
+                    &mut message,
+                    null_mut(),
+                    0,
+                    0,
+                    windows_sys::Win32::UI::WindowsAndMessaging::PM_REMOVE,
+                )
+            } == 0
+            {
+                break;
+            }
+            // SAFETY: PeekMessageW initialized this by-value message; its target belongs to the current event thread.
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+
+    /// Retains the pre-check shared-cursor position so both successful assertions and panics restore it.
+    struct RestoreCursor((i32, i32));
+    impl Drop for RestoreCursor {
+        /// Restores only the physical pointer, without injecting buttons, keys or a target-window activation.
+        fn drop(&mut self) {
+            let (x, y) = self.0;
+            // SAFETY: signed coordinates were read from the OS immediately before the bounded test.
+            if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) } == 0 {
+                eprintln!("{CURSOR_RESTORE_FAILED}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Requires an interactive Windows desktop; opens disposable native test windows"]
+    /// A real compact frame accepts title-bar input without activating itself or restoring another window's focus.
+    fn native_compact_titlebar_drag_preserves_focus() {
+        enable_physical_dpi();
+        let windows = TestWindows::new();
+        let mut view = WindowView::new(DesktopWindow::unconstrained(windows.main as isize));
+        assert!(view
+            .update(ViewRequest {
+                compact: true,
+                width: MIN_CONTENT_WIDTH,
+                height: CONTENT_HEIGHT,
+            })
+            .error
+            .is_none());
+        let target = windows.focus_target();
+        let activation = ((WM_NCLBUTTONDOWN as isize) << MOUSE_WORD_SHIFT) | HTCAPTION as isize;
+        // SAFETY: the test owns the live native window; WM_MOUSEACTIVATE takes only by-value native parameters.
+        assert_eq!(
+            unsafe {
+                SendMessageW(
+                    windows.main,
+                    WM_MOUSEACTIVATE,
+                    windows.main as usize,
+                    activation,
+                )
+            },
+            MA_NOACTIVATE as isize
+        );
+        // SAFETY: getter returns an OS-owned handle only; the target remains alive for this test.
+        assert_eq!(unsafe { GetForegroundWindow() }, target);
+        let before = rectangle(windows.main);
+        let anchor = POINT {
+            x: before.0 + CAPTION_OFFSET,
+            y: before.1 + CAPTION_OFFSET,
+        };
+        assert_eq!(
+            send_session_event(
+                windows.main as isize,
+                &EventKind::Move {
+                    x: anchor.x,
+                    y: anchor.y
+                }
+            )
+            .err()
+            .as_deref(),
+            Some(COMPACT_COLLISION)
+        );
+        let mut client = POINT {
+            x: 0,
+            y: CLIENT_DRAG_Y,
+        };
+        // SAFETY: the live test window converts initialized local client coordinates synchronously.
+        assert_ne!(
+            unsafe { windows_sys::Win32::Graphics::Gdi::ClientToScreen(windows.main, &mut client) },
+            0
+        );
+        let movement = packed_point(POINT {
+            x: anchor.x + DRAG_DELTA_X - client.x,
+            y: anchor.y + DRAG_DELTA_Y - client.y + CLIENT_DRAG_Y,
+        });
+        // SAFETY: controlled messages target only our test-owned frame; no shared cursor movement or input injection occurs.
+        unsafe {
+            SendMessageW(
+                windows.main,
+                WM_NCLBUTTONDOWN,
+                HTCAPTION as usize,
+                packed_point(anchor),
+            );
+            SendMessageW(windows.main, WM_MOUSEMOVE, 0, movement);
+            SendMessageW(windows.main, WM_CANCELMODE, 0, 0);
+        }
+        let moved = rectangle(windows.main);
+        assert_eq!(
+            (moved.0, moved.1),
+            (before.0 + DRAG_DELTA_X, before.1 + DRAG_DELTA_Y)
+        );
+        // SAFETY: foreground getter observes the still-live target without changing activation.
+        assert_eq!(unsafe { GetForegroundWindow() }, target);
+        assert_eq!(
+            send_session_event(
+                windows.main as isize,
+                &EventKind::Move {
+                    x: moved.0 + CAPTION_OFFSET,
+                    y: moved.1 + CAPTION_OFFSET
+                }
+            )
+            .err()
+            .as_deref(),
+            Some(COMPACT_COLLISION)
+        );
+        assert!(view
+            .update(ViewRequest {
+                compact: false,
+                width: MIN_CONTENT_WIDTH,
+                height: CONTENT_HEIGHT
+            })
+            .error
+            .is_none());
+        // SAFETY: default activation behavior is observed only through a by-value message on the owned restored window.
+        assert_eq!(
+            unsafe {
+                SendMessageW(
+                    windows.main,
+                    WM_MOUSEACTIVATE,
+                    windows.main as usize,
+                    activation,
+                )
+            },
+            MA_ACTIVATE as isize
+        );
+    }
+
+    /// Packs bounded fixture coordinates into the signed-word representation used by native mouse messages.
+    fn packed_point(point: POINT) -> LPARAM {
+        (u32::from(point.x as u16) | (u32::from(point.y as u16) << MOUSE_WORD_SHIFT)) as isize
+    }
 
     /// Builds a real native adapter with a one-shot constraint failure after full-placement mutation.
     fn faultable_adapter(hwnd: isize, fail_restore: Arc<AtomicBool>) -> DesktopWindow {
@@ -1552,11 +2190,15 @@ mod native_view_tests {
     impl TestWindows {
         /// Creates a main frame and another application's focus stand-in on the calling native thread.
         fn new() -> Self {
+            Self::with_target_class(CLASS)
+        }
+        /// Selects a nontransparent system class when a test must verify ownership of injected mouse destinations.
+        fn with_target_class(target_class: &str) -> Self {
             // SAFETY: OS-owned foreground handle is retained only for best-effort cleanup.
             let previous = unsafe { GetForegroundWindow() };
             Self {
                 main: create(MAIN_TITLE),
-                target: create(TARGET_TITLE),
+                target: create_class(TARGET_TITLE, target_class),
                 previous,
             }
         }
@@ -1566,6 +2208,7 @@ mod native_view_tests {
             unsafe {
                 SetForegroundWindow(self.target);
             }
+            settle_native_messages();
             // SAFETY: getter returns an OS-owned value with no borrowed pointer.
             let foreground = unsafe { GetForegroundWindow() };
             // Windows may deny test foreground setup; an already foreground external window is equally valid evidence.
@@ -1590,11 +2233,19 @@ mod native_view_tests {
         }
     }
 
-    /// Creates a disposable decorated STATIC-class frame; all string pointers remain live through the synchronous call.
+    /// Creates a disposable decorated frame of the registered fixture class; native ownership lasts until TestWindows drops.
     fn create(title: &str) -> HWND {
-        let class: Vec<u16> = CLASS.encode_utf16().chain(std::iter::once(0)).collect();
+        create_class(title, CLASS)
+    }
+
+    /// Creates a decorated frame of the selected OS-owned class; initialized UTF-16 strings live through CreateWindowExW.
+    fn create_class(title: &str, class: &str) -> HWND {
+        if class == CLASS {
+            register_frame_class();
+        }
+        let class: Vec<u16> = class.encode_utf16().chain(std::iter::once(0)).collect();
         let title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: OS-provided STATIC class; terminated strings are initialized and live; no parent/menu/instance/context is borrowed.
+        // SAFETY: registered/system class, initialized terminated strings and the current executable module; no borrowed context survives the call.
         let hwnd = unsafe {
             CreateWindowExW(
                 0,
@@ -1607,12 +2258,35 @@ mod native_view_tests {
                 FULL_HEIGHT,
                 null_mut(),
                 null_mut(),
-                null_mut(),
+                windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(null_mut()),
                 null_mut(),
             )
         };
         assert!(!hwnd.is_null());
         hwnd
+    }
+
+    /// Registers a real decorated-frame class once; control classes such as STATIC return transparent nonclient hit tests.
+    fn register_frame_class() {
+        static ATOM: OnceLock<u16> = OnceLock::new();
+        ATOM.get_or_init(|| {
+            let class: Vec<u16> = CLASS.encode_utf16().chain(std::iter::once(0)).collect();
+            // SAFETY: queries this test executable's module; the class name is copied synchronously by RegisterClassW.
+            let description = windows_sys::Win32::UI::WindowsAndMessaging::WNDCLASSW {
+                lpfnWndProc: Some(windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW),
+                hInstance: unsafe {
+                    windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(null_mut())
+                },
+                lpszClassName: class.as_ptr(),
+                ..Default::default()
+            };
+            // SAFETY: initialized class description and static system window procedure remain valid throughout this synchronous registration.
+            let atom = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::RegisterClassW(&description)
+            };
+            assert_ne!(atom, 0, "The disposable native frame class must register");
+            atom
+        });
     }
 
     /// Reads initialized physical bounds of a test-owned live HWND for independent native assertions.

@@ -1,6 +1,8 @@
 //! Saved-input conversion, environment compatibility and absolute-deadline playback at one-times speed.
 use crate::input::{Capture, Event, EventKind, MouseButton};
-use crate::macro_format::{Button, EventData, MacroDocument, NativeKey, RecordingEnvironment};
+use crate::macro_format::{
+    Button, Display, EventData, MacroDocument, NativeKey, RecordingEnvironment,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -9,6 +11,49 @@ pub const ENVIRONMENT_CHANGED: &str =
 pub const INPUT_HELD: &str = "Release held keys and mouse buttons, then start playback again.";
 pub const COMPLETE: &str = "Playback complete.";
 const DEADLINE_RANGE: &str = "The recording duration exceeds the monotonic clock range.";
+pub const INVALID_TARGET: &str = "Playback blocked: mouse target outside the recorded displays";
+const FIRST_EVENT_NUMBER: usize = 1;
+
+/// Rejects any unreachable positioned event before startup, retaining valid files and preventing partial keyboard playback.
+/// Monitor surfaces use inclusive origins and exclusive far edges; widened arithmetic supports every validated signed origin.
+pub fn validate_targets(document: &MacroDocument) -> Result<(), String> {
+    for (index, event) in document.events.iter().enumerate() {
+        let Some((x, y)) = mouse_target(&event.data) else {
+            continue;
+        };
+        if !document
+            .recording
+            .displays
+            .iter()
+            .any(|display| on_display(display, x, y))
+        {
+            let number = index + FIRST_EVENT_NUMBER;
+            return Err(format!("{INVALID_TARGET}: event {number} at ({x}, {y}). Re-record the macro with mouse targets on a display."));
+        }
+    }
+    Ok(())
+}
+
+/// Returns physical destinations for every supported mouse action; keyboard-only events have no position to validate.
+fn mouse_target(data: &EventData) -> Option<(i32, i32)> {
+    match data {
+        EventData::KeyDown { .. } | EventData::KeyUp { .. } => None,
+        EventData::MouseDown { x, y, .. }
+        | EventData::MouseUp { x, y, .. }
+        | EventData::MouseMove { x, y }
+        | EventData::MouseWheel { x, y, .. } => Some((*x, *y)),
+    }
+}
+
+/// Tests a signed physical point against one monitor without mistaking virtual-desktop gaps for display pixels.
+fn on_display(display: &Display, x: i32, y: i32) -> bool {
+    let x = i64::from(x);
+    let y = i64::from(y);
+    x >= i64::from(display.x)
+        && x < i64::from(display.x) + i64::from(display.width)
+        && y >= i64::from(display.y)
+        && y < i64::from(display.y) + i64::from(display.height)
+}
 
 /// Copies validated events verbatim into a playback stream, retaining ties, repeats and trailing duration.
 /// Saved speed/repeat properties remain in the owned document; ML-17 executes once at one-times speed.
