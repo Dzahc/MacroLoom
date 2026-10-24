@@ -1,11 +1,14 @@
 //! One backend-owned recording/playback session, automatic persistence and recoverable input cleanup.
-use crate::input::{track_held, wait_until, Capture, EventKind, Held};
+use crate::input::{track_held, Capture, EventKind, Held};
+use crate::macro_format::{MacroDocument, RecordingEnvironment};
 use crate::recording::{Recording, RecordingOutcome};
 use crate::shortcuts::{Availability, RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+#[path = "session_playback.rs"]
+mod playback_session;
 #[path = "session_recording.rs"]
 mod recording_session;
 
@@ -68,6 +71,8 @@ pub struct Snapshot {
     pub message: String,
     pub shortcuts: Availability,
     pub can_record: bool,
+    pub can_play: bool,
+    pub macro_name: Option<String>,
     pub cleanup_failed: bool,
     pub close_requested: bool,
     pub unsaved: bool,
@@ -77,6 +82,18 @@ pub struct Snapshot {
 
 /// Native system boundaries; deterministic tests substitute desktop effects, never session internals.
 pub trait Platform: Send + Sync {
+    /// Reads a validated, fingerprint-checked selected macro on the session worker, without injecting input.
+    fn playback(&self, _: &str) -> Result<MacroDocument, String> {
+        Err(NO_CAPTURE.into())
+    }
+    /// Refuses playback while physical input is held; never changes or waits for user input.
+    fn playback_ready(&self) -> Result<(), String> {
+        Ok(())
+    }
+    /// Checks the live playback environment; display power alone must not interrupt a compatible desktop.
+    fn check_playback_environment(&self, _: &RecordingEnvironment) -> Result<(), String> {
+        Ok(())
+    }
     /// Performs storage preflight and captures recording metadata; None selects the explicit temporary prototype.
     fn recording(&self) -> Result<Option<Recording>, String> {
         Ok(None)
@@ -138,6 +155,7 @@ struct State {
     confirmation: Option<Box<dyn Send>>,
     confirmation_owner: Option<String>,
     recording: Option<Recording>,
+    playback: Option<Arc<MacroDocument>>,
     persistent: bool,
     save_failed: bool,
     recording_outcome: Option<RecordingOutcome>,
@@ -166,6 +184,7 @@ impl Default for State {
             confirmation: None,
             confirmation_owner: None,
             recording: None,
+            playback: None,
             persistent: false,
             save_failed: false,
             recording_outcome: None,
@@ -209,6 +228,11 @@ impl Session {
             message: state.message.clone(),
             shortcuts: state.shortcuts,
             can_record: state.can_record && state.phase == Phase::Idle && !state.starting,
+            can_play: state.can_record && state.phase == Phase::Idle && !state.starting,
+            macro_name: state
+                .playback
+                .as_ref()
+                .map(|document| document.name.clone()),
             cleanup_failed: state.cleanup_failed,
             close_requested: state.close_requested,
             unsaved: state.phase == Phase::Saving
@@ -234,6 +258,7 @@ impl Session {
     /// Refreshes idle availability and progress; a busy transition is left to its owner.
     pub fn refresh(&self) -> Result<Snapshot, String> {
         self.check_recording()?;
+        self.check_playback()?;
         if let Ok(_transition) = self.transition.try_lock() {
             if self.lock()?.phase == Phase::Idle {
                 self.idle_shortcuts()?;
@@ -417,6 +442,7 @@ impl Session {
         let mut state = self.lock()?;
         state.capture = previous;
         state.recording = None;
+        state.playback = None;
         state.phase = Phase::Stopping;
         state.start = None;
         state.worker = false;
@@ -569,6 +595,9 @@ impl Session {
         state.start = None;
         state.cleanup_failed = false;
         state.message = state.terminal.clone();
+        if state.playback.take().is_some() {
+            state.capture = Capture::default();
+        }
         let save = state.recording.is_some() && !state.capture.events.is_empty();
         if !save {
             state.recording = None;
@@ -580,101 +609,6 @@ impl Session {
             self.persist_recording()
         } else {
             self.idle_shortcuts()
-        }
-    }
-    #[cfg(test)]
-    /// Receives and starts temporary replay synchronously for deterministic session checks.
-    pub fn play(self: &Arc<Self>) -> Result<Snapshot, String> {
-        let request = self.start_request()?.ok_or(ACTIVE_SESSION)?;
-        self.play_requested(request)
-    }
-    /// Starts arrival-bound temporary playback only if its request still owns the original idle generation.
-    pub(crate) fn play_requested(
-        self: &Arc<Self>,
-        request: StartRequest,
-    ) -> Result<Snapshot, String> {
-        let Some(transition) = self.start_transition(request, true)? else {
-            return self.snapshot();
-        };
-        let result = self.start_replay();
-        drop(transition);
-        self.finish_start(result.as_ref().err().map(String::as_str))?;
-        if let Some((capture, cancel)) = result? {
-            let session = self.clone();
-            std::thread::spawn(move || session.replay(capture, cancel));
-        }
-        self.snapshot()
-    }
-    /// Prepares playback and compact entry without resetting a cancellation received during native reservations.
-    fn start_replay(&self) -> Result<Option<(Capture, Arc<AtomicBool>)>, String> {
-        self.prepare(false)?;
-        let Some((capture, cancel)) = self.begin_replay()? else {
-            return Ok(None);
-        };
-        self.publish()?;
-        self.enter_view(capture.clone())?;
-        Ok(Some((capture, cancel)))
-    }
-    /// Claims playback ownership and a stable temporary capture before native layout work starts.
-    fn begin_replay(&self) -> Result<Option<(Capture, Arc<AtomicBool>)>, String> {
-        let mut state = self.lock()?;
-        if state.cancel.load(Ordering::Acquire) {
-            return Ok(None);
-        }
-        state.phase = Phase::Playing;
-        state.start = Some(Instant::now());
-        state.worker = true;
-        state.message = PLAYING.into();
-        state.terminal = REPLAY_COMPLETE.into();
-        state.can_record = false;
-        Ok(Some((state.capture.clone(), state.cancel.clone())))
-    }
-    /// Executes ordered deadlines and guarded injection; terminal cleanup stays owned after cancellation or failure.
-    fn replay(&self, capture: Capture, cancel: Arc<AtomicBool>) {
-        let start = Instant::now();
-        for event in capture.events {
-            if !wait_until(start + event.at, &cancel) {
-                break;
-            }
-            if let Err(error) = self.dispatch(&event.kind, &cancel) {
-                self.replay_error(error);
-                break;
-            }
-        }
-        let _ = wait_until(start + capture.duration, &cancel);
-        if let Err(error) = self.finish_replay() {
-            self.report(error);
-        }
-        let _ = self.publish();
-    }
-    /// Relinquishes dispatch and captures cleanup identity under one state guard; delayed completion cannot clean up a newer generation.
-    fn finish_replay(&self) -> Result<(), String> {
-        let request = {
-            let mut state = self.lock()?;
-            state.worker = false;
-            state.phase = Phase::Stopping;
-            StopRequest {
-                generation: state.generation,
-            }
-        };
-        self.cleanup_for(request)
-    }
-    /// Checks cancellation before native injection and tracks success afterwards; never holds session state across a callback-producing OS call.
-    fn dispatch(&self, kind: &EventKind, cancel: &AtomicBool) -> Result<(), String> {
-        if cancel.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        self.platform.inject(kind)?;
-        // The playback worker retains ownership until this in-flight call and tracking complete, so Stop cannot start cleanup early.
-        track_held(&mut self.lock()?.held, kind);
-        Ok(())
-    }
-    /// Stops the worker on injection failure and gives failure precedence over successful completion.
-    fn replay_error(&self, error: String) {
-        if let Ok(mut state) = self.lock() {
-            state.cancel.store(true, Ordering::Release);
-            state.terminal = format!("Playback failed: {error}");
-            state.phase = Phase::Stopping;
         }
     }
     /// Atomically reserves/releases a native confirmation interlock so global Record cannot race a Delete dialog.
@@ -800,6 +734,9 @@ fn validate_confirmation_owner(owner: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "session_playback_tests.rs"]
+mod playback_tests;
 #[cfg(test)]
 #[path = "session_recording_tests.rs"]
 mod recording_tests;

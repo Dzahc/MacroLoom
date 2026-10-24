@@ -103,7 +103,7 @@ export function LiveLibraryApp({
       ? snapshot.message
       : nativeSession.snapshot.message,
     recordingAvailable: nativeSession.snapshot.canRecord,
-    playbackAvailable: false,
+    playbackAvailable: nativeSession.snapshot.canPlay,
   };
   const compact = isCompactView(presentation);
   const layout = useCallback(
@@ -168,6 +168,10 @@ export function LiveLibraryApp({
       return;
     }
     if (configure.busy) return;
+    if (request.action === ACTION.play) {
+      void nativeSession.controller.play(request.macroId);
+      return;
+    }
     if (request.action === ACTION.configure) {
       void configure.open(request).catch(
         /** @param reason Snapshot/window creation failure. @returns Nothing; reports actionable feedback without losing selection. */

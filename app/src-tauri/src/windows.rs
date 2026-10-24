@@ -91,6 +91,7 @@ const COMPACT_ROLLBACK_FAILED: &str = "compact rollback failed";
 const KEYBOARD_LAYOUT_MASK: usize = 0xffff_ffff;
 const FIRST_CAPTURE_KEY: u16 = 8;
 const LAST_CAPTURE_KEY: u16 = 254;
+const FIRST_PLAYBACK_KEY: u16 = 1;
 const GENERIC_MODIFIERS: [u16; 3] = [0x10, 0x11, 0x12];
 const SNAPSHOT_MODIFIERS: [u16; 8] = [0xa2, 0xa3, 0xa0, 0xa1, 0xa4, 0xa5, 0x5b, 0x5c];
 const LEFT_MOUSE_KEY: u16 = 1;
@@ -353,6 +354,15 @@ fn initial_key_excluded(key: u16, own_focus: bool) -> bool {
 fn key_held(key: u16) -> bool {
     // SAFETY: this value-only getter accepts a supported virtual key and retains no pointer.
     unsafe { GetAsyncKeyState(i32::from(key)) < 0 }
+}
+
+/// Refuses playback while any physical key or button remains down, including MacroLoom activation gestures.
+/// This is a startup snapshot, not an input lock; later manual input remains enabled and can interfere.
+pub fn playback_inputs_released() -> Result<(), String> {
+    if (FIRST_PLAYBACK_KEY..=LAST_CAPTURE_KEY).any(key_held) {
+        return Err(crate::playback::INPUT_HELD.into());
+    }
+    Ok(())
 }
 /// Adds one held native key with scan-code metadata from the foreground application's keyboard layout.
 fn append_initial_key(inputs: &mut Vec<EventKind>, vk: u16) {

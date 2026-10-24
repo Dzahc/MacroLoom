@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
+import { playbackKeyDown, playbackKeyUp } from './playback-activation';
 import { isCompactView, sessionBanner } from './compact-presentation';
 import { observeCompactLayout, restoreLibraryScroll } from './compact-layout';
 import type { WindowViewRequest } from './compact-contract';
@@ -93,6 +94,18 @@ function Toolbar(props: ViewProps) {
             aria-label={TOOLTIP[action]}
             title={TOOLTIP[action]}
             disabled={!canRequest(props.snapshot, action)}
+            onKeyDown={action === ACTION.play ? playbackKeyDown : undefined}
+            onKeyUp={
+              action === ACTION.play
+                ? /** @param event Completed keyboard gesture. @returns Nothing; rechecks availability at release. */
+                  (event) =>
+                    playbackKeyUp(
+                      event,
+                      /** Starts only the selected available macro. */ () =>
+                        emit(props, action, SOURCE.toolbar),
+                    )
+                : undefined
+            }
             onClick={
               /** Emits this toolbar action only when available. */ () =>
                 emit(props, action, SOURCE.toolbar)
