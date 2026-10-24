@@ -158,6 +158,7 @@ struct State {
     playback_stage: PlaybackStage,
     run: u64,
     interval_end: Option<Instant>,
+    progress_published: Option<Instant>,
     capture: Capture,
     held: Vec<Held>,
     cancel: Arc<AtomicBool>,
@@ -190,6 +191,7 @@ impl Default for State {
             playback_stage: PlaybackStage::Running,
             run: FIRST_RUN,
             interval_end: None,
+            progress_published: None,
             capture: Capture::default(),
             held: Vec::new(),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -375,6 +377,7 @@ impl Session {
         state.cancel = Arc::new(AtomicBool::new(false));
         state.run = FIRST_RUN;
         state.interval_end = None;
+        state.progress_published = None;
         if kind != StartKind::Recording {
             state.phase = Phase::Playing;
             state.playback_stage = PlaybackStage::Starting;

@@ -1,6 +1,10 @@
 import { PHASE } from './library-model.ts';
 import type { BackendLibraryState } from './macro-contract.ts';
-import { PLAYBACK_STAGE, type PlaybackStage } from './compact-contract.ts';
+import {
+  IDLE_PRESENTATION,
+  PLAYBACK_STAGE,
+  type PlaybackStage,
+} from './compact-contract.ts';
 
 export const SESSION_EVENT = 'session-state';
 export const SESSION_COMMAND = {
@@ -90,9 +94,9 @@ export const INITIAL_SESSION: SessionSnapshot = {
   canPlay: false,
   macroName: null,
   playbackStage: PLAYBACK_STAGE.running,
-  run: 1,
-  totalRuns: 1,
-  remainingMs: 0,
+  run: IDLE_PRESENTATION.run,
+  totalRuns: IDLE_PRESENTATION.totalRuns,
+  remainingMs: IDLE_PRESENTATION.remainingMs,
   cleanupFailed: false,
   closeRequested: false,
   unsaved: false,

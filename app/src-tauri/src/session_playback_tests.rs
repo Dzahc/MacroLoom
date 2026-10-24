@@ -28,6 +28,7 @@ const LAST_SECOND_Y: i32 = -1;
 const LAST_FIRST_X: i32 = -1;
 const LAST_FIRST_Y: i32 = 1079;
 const DISPLAY_SCALES: [f64; 4] = [1.0, 1.25, 1.5, 1.75];
+const RAPID_REPEAT_RUNS: usize = 128;
 type Callback = Box<dyn FnOnce() + Send>;
 
 /// Desktop-effects substitute with an isolated real library; it never sends input to the owner's desktop.
@@ -45,7 +46,6 @@ struct Desktop {
     callback_at: AtomicUsize,
     on_entry: Mutex<Option<Callback>>,
     on_inject: Mutex<Option<Callback>>,
-    on_interval: Mutex<Option<Callback>>,
 }
 impl Desktop {
     /// Persists a known stream with nondefault speed/repeat properties for the real selected-ID command boundary.
@@ -85,7 +85,6 @@ impl Desktop {
             callback_at: AtomicUsize::new(FIRST_INJECTION),
             on_entry: Mutex::new(None),
             on_inject: Mutex::new(None),
-            on_interval: Mutex::new(None),
         })
     }
     /// Starts the same selected-ID, arrival-bound workflow invoked by real Play and double click.
@@ -184,22 +183,21 @@ impl Platform for Desktop {
     }
     /// Observes only the public backend snapshot, including elapsed time and selected macro name.
     fn publish(&self, snapshot: Snapshot) {
-        let interval = snapshot.phase == Phase::Interval;
         self.snapshots.lock().expect("Snapshots").push(snapshot);
-        if interval {
-            let callback = self.on_interval.lock().expect("Interval callback").take();
-            if let Some(callback) = callback {
-                callback();
-            }
-        }
     }
 }
 /// Waits through the public status boundary for worker cleanup, without inspecting session internals.
 fn completed(session: &Session) -> Snapshot {
+    wait_snapshot(session, |snapshot| {
+        snapshot.phase == Phase::Idle || snapshot.cleanup_failed
+    })
+}
+/// Polls the public command snapshot for an expected lifecycle observation without relying on progress-event frequency.
+fn wait_snapshot(session: &Session, expected: impl Fn(&Snapshot) -> bool) -> Snapshot {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         let snapshot = session.snapshot().expect("Session snapshot");
-        if snapshot.phase == Phase::Idle || snapshot.cleanup_failed {
+        if expected(&snapshot) {
             return snapshot;
         }
         assert!(Instant::now() < deadline, "Playback cleanup timed out");
@@ -651,30 +649,25 @@ fn interval_cancellation_keeps_compact_ownership_until_cleanup() {
         let desktop = Desktop::new(events(), Duration::ZERO);
         desktop.configure(|properties| properties.interval_ms = LONG_WAIT.as_millis() as u64);
         let session = Session::new(desktop.clone());
-        let weak = Arc::downgrade(&session);
-        let effects = desktop.clone();
-        *desktop.on_interval.lock().expect("Interval") = Some(Box::new(move || {
-            let session = weak.upgrade().expect("Session owner");
-            let state = session.snapshot().expect("Interval status");
-            assert_eq!(state.phase, Phase::Interval);
-            assert_eq!(state.run, crate::playback::FIRST_RUN);
-            assert_eq!(state.total_runs, Some(NONDEFAULT_RUNS));
-            assert!(state.remaining_ms > 0);
-            assert!(effects.compact.load(Ordering::Acquire));
-            assert_eq!(
-                *effects.releases.lock().expect("Released drag"),
-                [Held::Button(MouseButton::Left)]
-            );
-            if reason == ENVIRONMENT {
-                effects.environment_changed.store(true, Ordering::Release);
-                session.refresh().expect("Observe changed environment");
-            } else {
-                session
-                    .signal_stop(reason == SUSPEND)
-                    .expect("Cancel interval");
-            }
-        }));
         desktop.play(&session).expect("Repeated playback");
+        let state = wait_snapshot(&session, |snapshot| snapshot.phase == Phase::Interval);
+        assert_eq!(state.phase, Phase::Interval);
+        assert_eq!(state.run, crate::playback::FIRST_RUN);
+        assert_eq!(state.total_runs, Some(NONDEFAULT_RUNS));
+        assert!(state.remaining_ms > 0);
+        assert!(desktop.compact.load(Ordering::Acquire));
+        assert_eq!(
+            *desktop.releases.lock().expect("Released drag"),
+            [Held::Button(MouseButton::Left)]
+        );
+        if reason == ENVIRONMENT {
+            desktop.environment_changed.store(true, Ordering::Release);
+            session.refresh().expect("Observe changed environment");
+        } else {
+            session
+                .signal_stop(reason == SUSPEND)
+                .expect("Cancel interval");
+        }
         let stopped = completed(&session);
         assert_eq!(stopped.phase, Phase::Idle);
         assert!(!stopped.message.contains(crate::playback::COMPLETE));
@@ -728,4 +721,51 @@ fn large_and_indefinite_totals_are_exact_in_active_snapshots() {
             FIRST_INJECTION
         );
     }
+}
+
+#[test]
+/// Rapid repeats preserve backend cancellation without flooding the public progress stream between status ticks.
+fn zero_duration_repeats_bound_progress_publication_without_delaying_input() {
+    let source = vec![Event {
+        at: Duration::ZERO,
+        kind: test_support::key(true),
+    }];
+    let desktop = Desktop::new(source, Duration::ZERO);
+    desktop.configure(|properties| {
+        properties.repeat_mode = crate::macro_format::RepeatMode::Indefinite
+    });
+    desktop
+        .callback_at
+        .store(RAPID_REPEAT_RUNS, Ordering::Release);
+    let session = Session::new(desktop.clone());
+    let weak = Arc::downgrade(&session);
+    *desktop.on_inject.lock().expect("Injection") = Some(Box::new(move || {
+        weak.upgrade()
+            .expect("Session owner")
+            .signal_stop(false)
+            .expect("Stop rapid repeats");
+    }));
+    desktop.play(&session).expect("Start rapid repeats");
+    assert_eq!(completed(&session).phase, Phase::Idle);
+    let snapshots = desktop.snapshots.lock().expect("Snapshots");
+    let elapsed = snapshots
+        .iter()
+        .map(|snapshot| snapshot.elapsed_ms)
+        .max()
+        .unwrap_or_default();
+    let progress = snapshots
+        .iter()
+        .filter(|snapshot| {
+            snapshot.phase == Phase::Playing && snapshot.playback_stage != PlaybackStage::Starting
+        })
+        .count() as u64;
+    let maximum = elapsed / STATUS_INTERVAL.as_millis() as u64 + crate::playback::FIRST_RUN;
+    assert!(
+        progress <= maximum,
+        "Unbounded progress: {progress} updates in {elapsed} ms"
+    );
+    assert_eq!(
+        desktop.events.lock().expect("Events").len(),
+        RAPID_REPEAT_RUNS
+    );
 }

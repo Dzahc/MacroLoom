@@ -39,6 +39,17 @@ function/closure complexity checks passed without exceptions. Local output:
 `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
 also passed, exit 0. Independent Standards and Spec reviews follow this gate.
 
+## Review corrections
+
+The first Standards review found three literal session defaults; they now reuse
+the existing presentation defaults. The first Spec review found unbounded
+progress publication during rapid repeats. A regression reproduced 255 progress
+snapshots in 7 ms across 128 zero-duration runs. Progress delivery now coalesces
+to the existing 100 ms status cadence while authoritative state, input scheduling,
+cancellation and terminal publications remain immediate. The regression passes;
+the session interval checks observe public snapshots independently of event rate.
+Final gate and follow-up review results are recorded after these corrections.
+
 ## Notepad acceptance — pending
 
 Launch the normal application with `npm.cmd --prefix app run tauri -- dev`.

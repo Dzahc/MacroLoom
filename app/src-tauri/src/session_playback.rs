@@ -161,8 +161,26 @@ impl Session {
             return Ok(());
         }
         self.replay_progress(step, start)?;
-        self.publish()?;
+        self.publish_replay_progress()?;
         self.release_run_input()
+    }
+    /// Bounds progress IPC independently of input rate; authoritative state and terminal/Stop publications remain immediate.
+    fn publish_replay_progress(&self) -> Result<(), String> {
+        let now = Instant::now();
+        let due = {
+            let mut state = self.lock()?;
+            let due = state
+                .progress_published
+                .is_none_or(|last| now.duration_since(last) >= STATUS_INTERVAL);
+            if due {
+                state.progress_published = Some(now);
+            }
+            due
+        };
+        if due {
+            self.publish()?;
+        }
+        Ok(())
     }
     /// Releases a completed run's remaining holds; failure stops all repetitions while retaining ownership for terminal cleanup.
     fn release_run_input(&self) -> Result<(), String> {
