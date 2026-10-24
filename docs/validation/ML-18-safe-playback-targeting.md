@@ -62,11 +62,46 @@ Also retain explicit manual checks for record/save/play clicks, wheel and drags 
 ordinary applications at those configurations; real layout-change interruption;
 moving the compact toolbar during a recorded wait while playback continues;
 recording-time manual dragging/control exclusion; and collision cleanup during an
-active drag. Existing deterministic or disposable-window checks do not establish
-those complete workflows. ML-18 remains open until its physical acceptance matrix
-has evidence.
+active drag. Exercise deliberate Stop clicks in the real WebView while compact
+mode uses its no-activation style. Existing deterministic or disposable-window
+checks do not establish those complete workflows. ML-18 remains open until its
+physical acceptance matrix has evidence.
 
-## Completion gate and review
+## Completion gate
 
-Final repository verification and independent Standards/Spec review results will
-be recorded after implementation checks complete. The review base is `06ed1e9`.
+October 23, 2026, implementation commit `ccb6b17`:
+
+`npm.cmd --prefix app run verify` — **PASS**, exit 0, against refreshed
+`origin/develop` at `06ed1e9`. Formatting, TypeScript, ESLint, production frontend
+build, rustfmt, Clippy, all maintained tests and changed-file complexity passed.
+The totals were 78 frontend/tooling tests, 92 Rust library tests plus 21 repository
+integration tests, and 33 Python fixtures. Five interactive Windows tests remain
+ignored by the unattended gate; four relevant native tests were separately run
+above. Complexity checked 420 function/closure snapshots across index/worktree,
+with zero failures and no exceptions.
+
+Full local output: `app/.quality-output/ML-18-verify-final.log`.
+
+## Standards
+
+Independent review of `06ed1e9...ccb6b17`: **0 actionable findings**.
+
+No documented-standard breaches or baseline smells identified. Native code stays
+in `windows.rs`; added helpers document their roles and invariants; fallible
+operations propagate or report failures; subclass state and unsafe pointers have
+explicit ownership. Tests separate deterministic behavior from native evidence.
+
+## Spec
+
+Independent review of `06ed1e9...ccb6b17`: **0 concrete implementation defects or
+unrequested scope**. Saved target validation precedes dispatch; dragging does not
+control the session scheduler; current-bounds collision checks, cleanup and
+restoration remain intact. Callback state survives reentrant native operations.
+
+**One evidence limitation:** the physical configurations and ordinary-application
+workflows listed above remain pending. The broader compact no-activation style
+did not establish a concrete control-delivery defect; real WebView Stop clicks
+remain in the manual matrix.
+
+Standards findings: **0**. Spec findings: **0 code defects**, **1 validation
+limitation** (the outstanding physical acceptance matrix).
