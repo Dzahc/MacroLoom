@@ -1,10 +1,13 @@
-//! Saved-input conversion, environment compatibility and absolute-deadline playback at one-times speed.
+//! Saved-input conversion, environment compatibility and absolute-deadline playback.
 use crate::input::{Capture, Event, EventKind, MouseButton};
 use crate::macro_format::{
     Button, Display, EventData, MacroDocument, NativeKey, RecordingEnvironment,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+#[path = "playback_repeat.rs"]
+mod repeated;
+pub use repeated::{repeat, PlaybackStage, RepeatPlan, Step, FIRST_RUN};
 
 pub const ENVIRONMENT_CHANGED: &str =
     "Playback stopped because the keyboard layout or display layout changed. Restore the recorded environment and retry.";
@@ -55,21 +58,39 @@ fn on_display(display: &Display, x: i32, y: i32) -> bool {
         && y < i64::from(display.y) + i64::from(display.height)
 }
 
-/// Copies validated events verbatim into a playback stream, retaining ties, repeats and trailing duration.
-/// Saved speed/repeat properties remain in the owned document; ML-17 executes once at one-times speed.
+/// Copies validated events into a speed-scaled stream, retaining ties, repeats and trailing duration.
+/// Integer duration arithmetic preserves submillisecond deadlines for every supported preset.
 pub fn capture(document: &MacroDocument) -> Capture {
     let mut capture = Capture::default();
-    capture.duration = Duration::from_millis(document.duration_ms);
+    capture.duration = scaled(document.duration_ms, document.playback.speed);
     for event in &document.events {
         if let EventData::MouseMove { .. } = event.data {
             capture.drag_moves += 1;
         }
         capture.events.push(Event {
-            at: Duration::from_millis(event.at_ms),
+            at: scaled(event.at_ms, document.playback.speed),
             kind: event_kind(&event.data),
         });
     }
     capture
+}
+
+/// Scales a validated millisecond offset with exact power-of-two arithmetic; the default preset is one-times.
+fn scaled(milliseconds: u64, speed: f64) -> Duration {
+    const QUARTER: f64 = 0.25;
+    const HALF: f64 = 0.5;
+    const DOUBLE: f64 = 2.0;
+    const QUADRUPLE: f64 = 4.0;
+    const TWO: u32 = 2;
+    const FOUR: u32 = 4;
+    let duration = Duration::from_millis(milliseconds);
+    match speed {
+        QUARTER => duration * FOUR,
+        HALF => duration * TWO,
+        DOUBLE => duration / TWO,
+        QUADRUPLE => duration / FOUR,
+        _ => duration,
+    }
 }
 
 /// Converts one validated v1 payload without capture-time filtering or movement coalescing.
@@ -137,6 +158,8 @@ fn display_geometry(environment: &RecordingEnvironment) -> Vec<(i32, i32, u32, u
 
 /// A monotonic run clock; deterministic checks substitute time while retaining the real scheduler.
 pub trait Clock {
+    /// Returns session-relative monotonic time; each repeated run takes a fresh anchor from this clock.
+    fn now(&self) -> Duration;
     /// Waits for a run-relative deadline; returns false when cancellation interrupts the wait.
     fn wait(&self, at: Duration, cancel: &AtomicBool) -> Result<bool, String>;
 }
@@ -144,6 +167,10 @@ pub trait Clock {
 /// Production clock shares the exact epoch published in the session snapshot.
 pub struct MonotonicClock(pub Instant);
 impl Clock for MonotonicClock {
+    /// Reads elapsed session time without rounding to saved-format milliseconds.
+    fn now(&self) -> Duration {
+        self.0.elapsed()
+    }
     /// Waits cancellably against the absolute epoch, so dispatch overhead never accumulates as extra delays.
     fn wait(&self, at: Duration, cancel: &AtomicBool) -> Result<bool, String> {
         let deadline = self.0.checked_add(at).ok_or(DEADLINE_RANGE)?;

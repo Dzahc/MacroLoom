@@ -1,5 +1,10 @@
 import { PHASE } from './library-model.ts';
 import type { BackendLibraryState } from './macro-contract.ts';
+import {
+  IDLE_PRESENTATION,
+  PLAYBACK_STAGE,
+  type PlaybackStage,
+} from './compact-contract.ts';
 
 export const SESSION_EVENT = 'session-state';
 export const SESSION_COMMAND = {
@@ -43,6 +48,7 @@ export type SessionSnapshot = Readonly<{
     | typeof PHASE.idle
     | typeof PHASE.recording
     | typeof PHASE.playing
+    | typeof PHASE.interval
     | typeof PHASE.saving
     | typeof PHASE.stopping;
   elapsedMs: number;
@@ -55,6 +61,10 @@ export type SessionSnapshot = Readonly<{
   canRecord: boolean;
   canPlay: boolean;
   macroName: string | null;
+  playbackStage: PlaybackStage;
+  run: number;
+  totalRuns: number | null;
+  remainingMs: number;
   cleanupFailed: boolean;
   closeRequested: boolean;
   unsaved: boolean;
@@ -83,6 +93,10 @@ export const INITIAL_SESSION: SessionSnapshot = {
   canRecord: false,
   canPlay: false,
   macroName: null,
+  playbackStage: PLAYBACK_STAGE.running,
+  run: IDLE_PRESENTATION.run,
+  totalRuns: IDLE_PRESENTATION.totalRuns,
+  remainingMs: IDLE_PRESENTATION.remainingMs,
   cleanupFailed: false,
   closeRequested: false,
   unsaved: false,

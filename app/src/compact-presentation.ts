@@ -1,11 +1,11 @@
 import {
   IDLE_PRESENTATION,
+  PLAYBACK_STAGE,
   type SessionPresentation,
 } from './compact-contract.ts';
 import {
   LABEL,
   PHASE,
-  TIME,
   formatDuration,
   type LibraryPhase,
   type LibrarySnapshot,
@@ -22,8 +22,12 @@ export const SESSION_TEXT = {
   next: 'Next run in',
   infinity: '∞',
   busy: 'busy',
+  starting: 'Starting',
+  finishing: 'Finishing run',
 } as const;
 const COUNTDOWN_DIGITS = 1;
+const COUNTDOWN_TENTH_MS = 100;
+const TENTHS_PER_SECOND = 10;
 
 /** @param phase Backend phase. @returns Whether its presentation occupies the compact window, including cleanup. */
 export function isCompactPhase(phase: LibraryPhase): boolean {
@@ -92,15 +96,11 @@ export function sessionBanner(snapshot: LibrarySnapshot): {
         indicator: PHASE.recording,
       };
     case PHASE.playing:
-      return {
-        title: session.macroName ?? SESSION_TEXT.playing,
-        detail: `${runs} · ${elapsed}`,
-        indicator: SESSION_TEXT.busy,
-      };
+      return playbackBanner(session, elapsed, runs);
     case PHASE.interval:
       return {
         title: `${runs} ${SESSION_TEXT.complete}`,
-        detail: `${SESSION_TEXT.next} ${(session.remainingMs / TIME.millisecond).toFixed(COUNTDOWN_DIGITS)} s · ${elapsed}`,
+        detail: `${SESSION_TEXT.next} ${(Math.ceil(session.remainingMs / COUNTDOWN_TENTH_MS) / TENTHS_PER_SECOND).toFixed(COUNTDOWN_DIGITS)} s · ${elapsed}`,
         indicator: SESSION_TEXT.busy,
       };
     case PHASE.stopping:
@@ -119,4 +119,33 @@ export function sessionBanner(snapshot: LibrarySnapshot): {
             : '',
       };
   }
+}
+
+/** @param session Authoritative playback progress. @param elapsed Formatted total session time. @param runs Current run label. @returns Distinct preparation/release/input feedback without frontend scheduling. */
+function playbackBanner(
+  session: SessionPresentation,
+  elapsed: string,
+  runs: string,
+): ReturnType<typeof sessionBanner> {
+  if (session.playbackStage === PLAYBACK_STAGE.starting) {
+    return {
+      title: session.macroName
+        ? `${SESSION_TEXT.starting} “${session.macroName}”`
+        : SESSION_TEXT.starting,
+      detail: elapsed,
+      indicator: SESSION_TEXT.busy,
+    };
+  }
+  if (session.playbackStage === PLAYBACK_STAGE.finishing) {
+    return {
+      title: `${SESSION_TEXT.finishing} ${session.run}/${session.totalRuns ?? SESSION_TEXT.infinity}`,
+      detail: elapsed,
+      indicator: SESSION_TEXT.busy,
+    };
+  }
+  return {
+    title: session.macroName ?? SESSION_TEXT.playing,
+    detail: `${runs} · ${elapsed}`,
+    indicator: SESSION_TEXT.busy,
+  };
 }

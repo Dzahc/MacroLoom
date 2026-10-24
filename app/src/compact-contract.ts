@@ -8,6 +8,14 @@ export const WINDOW_COMMAND = {
 } as const;
 export const PRESENTATION_EVENT = 'presentation-state';
 export const WINDOW_VIEW_EVENT = 'window-view-state';
+export const PLAYBACK_STAGE = {
+  starting: 'starting',
+  running: 'running',
+  finishing: 'finishing',
+} as const;
+/** Backend preparation/input/release progress within a playing session. */
+export type PlaybackStage =
+  (typeof PLAYBACK_STAGE)[keyof typeof PLAYBACK_STAGE];
 export const PREVIEW_QUERY = 'compact-development';
 export const COMPACT = {
   minimumWidth: 360,
@@ -24,6 +32,7 @@ export type SessionPresentation = Readonly<{
   run: number;
   totalRuns: number | null;
   remainingMs: number;
+  playbackStage?: PlaybackStage;
 }>;
 
 /** Content measurements in logical CSS pixels; the Windows adapter owns physical conversion. */

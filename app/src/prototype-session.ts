@@ -5,7 +5,7 @@ import { PHASE } from './library-model.ts';
 /** @param session Authoritative native lifecycle. @returns Compatibility presentation for the optional ML-8 view; unavailable timing metrics remain explicitly absent. */
 export function prototypeSnapshot(session: SessionSnapshot): Snapshot {
   return {
-    phase: session.phase === PHASE.saving ? PHASE.idle : session.phase,
+    phase: prototypePhase(session.phase),
     eventCount: session.eventCount,
     dragMoveCount: session.dragMoveCount,
     lastRelease: session.lastRelease ? [...session.lastRelease] : null,
@@ -22,4 +22,11 @@ export function prototypeSnapshot(session: SessionSnapshot): Snapshot {
     f9Available: session.shortcuts.record,
     f8Available: session.shortcuts.stop,
   };
+}
+
+/** @param phase Native lifecycle. @returns The corresponding phase supported by the original optional prototype view. */
+function prototypePhase(phase: SessionSnapshot['phase']): Snapshot['phase'] {
+  if (phase === PHASE.saving) return PHASE.idle;
+  if (phase === PHASE.interval) return PHASE.playing;
+  return phase;
 }

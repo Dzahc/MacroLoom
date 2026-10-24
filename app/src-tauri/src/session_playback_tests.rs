@@ -13,7 +13,7 @@ const POLL: Duration = Duration::from_millis(1);
 const NONDEFAULT_SPEED: f64 = 2.0;
 const NONDEFAULT_RUNS: u64 = 3;
 const WHEEL: i32 = -30;
-const PREPARATION_ELAPSED_MS: u64 = 0;
+const PREPARATION_WAIT: Duration = Duration::from_millis(10);
 const FIRST_INJECTION: usize = 1;
 const REJECTED_BUTTON: usize = 2;
 const THROUGH_MOVEMENT: usize = 4;
@@ -28,6 +28,7 @@ const LAST_SECOND_Y: i32 = -1;
 const LAST_FIRST_X: i32 = -1;
 const LAST_FIRST_Y: i32 = 1079;
 const DISPLAY_SCALES: [f64; 4] = [1.0, 1.25, 1.5, 1.75];
+const RAPID_REPEAT_RUNS: usize = 128;
 type Callback = Box<dyn FnOnce() + Send>;
 
 /// Desktop-effects substitute with an isolated real library; it never sends input to the owner's desktop.
@@ -47,7 +48,7 @@ struct Desktop {
     on_inject: Mutex<Option<Callback>>,
 }
 impl Desktop {
-    /// Persists a known stream with nondefault properties; playback must snapshot it and execute only once at 1x.
+    /// Persists a known stream with nondefault speed/repeat properties for the real selected-ID command boundary.
     fn new(events: Vec<Event>, duration: Duration) -> Arc<Self> {
         Self::with_environment(events, duration, test_support::environment())
     }
@@ -89,6 +90,19 @@ impl Desktop {
     /// Starts the same selected-ID, arrival-bound workflow invoked by real Play and double click.
     fn play(&self, session: &Arc<Session>) -> Result<Snapshot, String> {
         session.play_macro_requested(session.start_request()?.ok_or(ACTIVE_SESSION)?, &self.id)
+    }
+    /// Commits fixture properties through the repository's real validation and atomic property-save interface.
+    fn configure(&self, change: impl FnOnce(&mut crate::macro_format::PlaybackProperties)) {
+        let mut document = self
+            .folder
+            .repository
+            .read(&self.id)
+            .expect("Saved fixture");
+        change(&mut document.playback);
+        self.folder
+            .repository
+            .save_properties(&self.id, &document.name, &document.playback)
+            .expect("Configured fixture");
     }
 }
 impl Platform for Desktop {
@@ -174,10 +188,16 @@ impl Platform for Desktop {
 }
 /// Waits through the public status boundary for worker cleanup, without inspecting session internals.
 fn completed(session: &Session) -> Snapshot {
+    wait_snapshot(session, |snapshot| {
+        snapshot.phase == Phase::Idle || snapshot.cleanup_failed
+    })
+}
+/// Polls the public command snapshot for an expected lifecycle observation without relying on progress-event frequency.
+fn wait_snapshot(session: &Session, expected: impl Fn(&Snapshot) -> bool) -> Snapshot {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         let snapshot = session.snapshot().expect("Session snapshot");
-        if snapshot.phase == Phase::Idle || snapshot.cleanup_failed {
+        if expected(&snapshot) {
             return snapshot;
         }
         assert!(Instant::now() < deadline, "Playback cleanup timed out");
@@ -214,9 +234,19 @@ fn events() -> Vec<Event> {
     .collect()
 }
 
+/// Returns the expected verbatim stream for the fixture's fixed total, independently of scheduling implementation.
+fn repeated_kinds(source: &[Event]) -> Vec<EventKind> {
+    source
+        .iter()
+        .cycle()
+        .take(source.len() * NONDEFAULT_RUNS as usize)
+        .map(|event| event.kind.clone())
+        .collect()
+}
+
 #[test]
-/// A selected saved stream replays verbatim once, leaves properties untouched and releases an end-held drag before restoring the library.
-fn saved_playback_runs_once_and_releases_end_held_input() {
+/// Saved fixed-count playback repeats its stable stream and releases each end-held drag without changing properties.
+fn saved_playback_repeats_and_releases_each_run_held_input() {
     let source = events();
     let desktop = Desktop::new(source.clone(), END);
     let session = Session::new(desktop.clone());
@@ -224,6 +254,8 @@ fn saved_playback_runs_once_and_releases_end_held_input() {
     let final_state = completed(&session);
     assert_eq!(final_state.message, crate::playback::COMPLETE);
     assert!(!final_state.unsaved);
+    assert_eq!(final_state.run, crate::playback::FIRST_RUN);
+    assert_eq!(final_state.total_runs, Some(crate::playback::FIRST_RUN));
     assert!(desktop
         .snapshots
         .lock()
@@ -234,14 +266,13 @@ fn saved_playback_runs_once_and_releases_end_held_input() {
             && !snapshot.unsaved));
     assert_eq!(
         *desktop.events.lock().expect("Events"),
-        source
-            .iter()
-            .map(|event| event.kind.clone())
-            .collect::<Vec<_>>()
+        repeated_kinds(&source)
     );
     assert_eq!(
         *desktop.releases.lock().expect("Releases"),
-        [Held::Button(MouseButton::Left)]
+        (0..NONDEFAULT_RUNS)
+            .map(|_| Held::Button(MouseButton::Left))
+            .collect::<Vec<_>>()
     );
     assert!(!desktop.compact.load(Ordering::Acquire));
     let persisted = desktop
@@ -415,10 +446,7 @@ fn valid_monitor_pixels_replay_without_dpi_remapping() {
             assert_eq!(completed(&session).message, crate::playback::COMPLETE);
             assert_eq!(
                 *desktop.events.lock().expect("Events"),
-                source
-                    .iter()
-                    .map(|event| event.kind.clone())
-                    .collect::<Vec<_>>()
+                repeated_kinds(&source)
             );
         }
     }
@@ -456,8 +484,8 @@ fn injection_failure_retains_owned_cleanup_for_retry() {
 }
 
 #[test]
-/// Stop or system sleep during compact entry dispatches nothing, and elapsed time stays zero throughout preparation.
-fn cancelled_compact_entry_never_starts_recorded_time_or_input() {
+/// Preparation contributes to session elapsed time, but Stop/sleep still prevents every recorded event from starting.
+fn cancelled_compact_entry_counts_preparation_without_dispatching_input() {
     for interrupted in [false, true] {
         let desktop = Desktop::new(events(), END);
         let session = Session::new(desktop.clone());
@@ -468,10 +496,10 @@ fn cancelled_compact_entry_never_starts_recorded_time_or_input() {
         let weak = Arc::downgrade(&session);
         *desktop.on_entry.lock().expect("Entry") = Some(Box::new(move || {
             let session = weak.upgrade().expect("Session owner");
-            assert_eq!(
-                session.snapshot().expect("Preparing snapshot").elapsed_ms,
-                PREPARATION_ELAPSED_MS
-            );
+            std::thread::sleep(PREPARATION_WAIT);
+            let preparing = session.snapshot().expect("Preparing snapshot");
+            assert!(preparing.elapsed_ms >= PREPARATION_WAIT.as_millis() as u64);
+            assert_eq!(preparing.playback_stage, PlaybackStage::Starting);
             session.signal_stop(interrupted).expect("Cancel startup");
         }));
         desktop.play(&session).expect("Cancelled start completes");
@@ -536,7 +564,10 @@ fn session_snapshot_is_stable_and_next_start_checks_file_fingerprint() {
     }));
     desktop.play(&session).expect("Start");
     assert_eq!(completed(&session).message, crate::playback::COMPLETE);
-    assert_eq!(desktop.events.lock().expect("Events").len(), events().len());
+    assert_eq!(
+        desktop.events.lock().expect("Events").len(),
+        events().len() * NONDEFAULT_RUNS as usize
+    );
     assert!(desktop.play(&session).is_err());
 }
 
@@ -582,4 +613,159 @@ fn failed_final_preflight_preserves_previous_capture() {
     assert_eq!(stopped.event_count, retained.event_count);
     assert!(stopped.unsaved);
     assert!(desktop.events.lock().expect("Events").is_empty());
+}
+
+#[test]
+/// Once ignores inactive counts and intervals; a fixed total of one also completes without a final interval.
+fn single_run_modes_ignore_the_final_interval() {
+    use crate::macro_format::RepeatMode;
+    for mode in [RepeatMode::Once, RepeatMode::Fixed] {
+        let desktop = Desktop::new(events(), Duration::ZERO);
+        desktop.configure(|properties| {
+            properties.total_runs = crate::playback::FIRST_RUN;
+            properties.repeat_mode = mode;
+            properties.interval_ms = LONG_WAIT.as_millis() as u64;
+        });
+        let session = Session::new(desktop.clone());
+        desktop.play(&session).expect("One run");
+        assert_eq!(completed(&session).message, crate::playback::COMPLETE);
+        assert_eq!(desktop.events.lock().expect("Events").len(), events().len());
+        assert!(!desktop
+            .snapshots
+            .lock()
+            .expect("Snapshots")
+            .iter()
+            .any(|state| state.phase == Phase::Interval));
+    }
+}
+
+#[test]
+/// Stop, suspend and layout changes during an interval cancel the next run after the previous run has released its drag.
+fn interval_cancellation_keeps_compact_ownership_until_cleanup() {
+    const STOP: usize = 0;
+    const SUSPEND: usize = 1;
+    const ENVIRONMENT: usize = 2;
+    for reason in [STOP, SUSPEND, ENVIRONMENT] {
+        let desktop = Desktop::new(events(), Duration::ZERO);
+        desktop.configure(|properties| properties.interval_ms = LONG_WAIT.as_millis() as u64);
+        let session = Session::new(desktop.clone());
+        desktop.play(&session).expect("Repeated playback");
+        let state = wait_snapshot(&session, |snapshot| snapshot.phase == Phase::Interval);
+        assert_eq!(state.phase, Phase::Interval);
+        assert_eq!(state.run, crate::playback::FIRST_RUN);
+        assert_eq!(state.total_runs, Some(NONDEFAULT_RUNS));
+        assert!(state.remaining_ms > 0);
+        assert!(desktop.compact.load(Ordering::Acquire));
+        assert_eq!(
+            *desktop.releases.lock().expect("Released drag"),
+            [Held::Button(MouseButton::Left)]
+        );
+        if reason == ENVIRONMENT {
+            desktop.environment_changed.store(true, Ordering::Release);
+            session.refresh().expect("Observe changed environment");
+        } else {
+            session
+                .signal_stop(reason == SUSPEND)
+                .expect("Cancel interval");
+        }
+        let stopped = completed(&session);
+        assert_eq!(stopped.phase, Phase::Idle);
+        assert!(!stopped.message.contains(crate::playback::COMPLETE));
+        assert_eq!(desktop.events.lock().expect("Events").len(), events().len());
+        assert!(!desktop.compact.load(Ordering::Acquire));
+    }
+}
+
+#[test]
+/// Failed run-end release blocks every repeat and retains the same actionable terminal cleanup ownership.
+fn failed_run_release_prevents_another_run_or_interval() {
+    let desktop = Desktop::new(events(), Duration::ZERO);
+    desktop.fail_release.store(true, Ordering::Release);
+    let session = Session::new(desktop.clone());
+    desktop.play(&session).expect("First run starts");
+    let failed = completed(&session);
+    assert_eq!(failed.phase, Phase::Stopping);
+    assert!(failed.cleanup_failed);
+    assert_eq!(desktop.events.lock().expect("Events").len(), events().len());
+    desktop.fail_release.store(false, Ordering::Release);
+    assert_eq!(session.stop().expect("Retry release").phase, Phase::Idle);
+}
+
+#[test]
+/// Fixed safe-integer totals and infinity survive command snapshots without u32 truncation, and both remain stoppable.
+fn large_and_indefinite_totals_are_exact_in_active_snapshots() {
+    use crate::macro_format::{RepeatMode, MAX_SAFE_INTEGER};
+    for (mode, expected) in [
+        (RepeatMode::Fixed, Some(MAX_SAFE_INTEGER)),
+        (RepeatMode::Indefinite, None),
+    ] {
+        let desktop = Desktop::new(events(), Duration::ZERO);
+        desktop.configure(|properties| {
+            properties.repeat_mode = mode;
+            properties.total_runs = MAX_SAFE_INTEGER;
+        });
+        let session = Session::new(desktop.clone());
+        let weak = Arc::downgrade(&session);
+        *desktop.on_inject.lock().expect("Injection") = Some(Box::new(move || {
+            let session = weak.upgrade().expect("Session owner");
+            assert_eq!(
+                session.snapshot().expect("Active snapshot").total_runs,
+                expected
+            );
+            session.signal_stop(false).expect("Stop first run");
+        }));
+        desktop.play(&session).expect("Start saved plan");
+        assert_eq!(completed(&session).phase, Phase::Idle);
+        assert_eq!(
+            desktop.events.lock().expect("Events").len(),
+            FIRST_INJECTION
+        );
+    }
+}
+
+#[test]
+/// Rapid repeats preserve backend cancellation without flooding the public progress stream between status ticks.
+fn zero_duration_repeats_bound_progress_publication_without_delaying_input() {
+    let source = vec![Event {
+        at: Duration::ZERO,
+        kind: test_support::key(true),
+    }];
+    let desktop = Desktop::new(source, Duration::ZERO);
+    desktop.configure(|properties| {
+        properties.repeat_mode = crate::macro_format::RepeatMode::Indefinite
+    });
+    desktop
+        .callback_at
+        .store(RAPID_REPEAT_RUNS, Ordering::Release);
+    let session = Session::new(desktop.clone());
+    let weak = Arc::downgrade(&session);
+    *desktop.on_inject.lock().expect("Injection") = Some(Box::new(move || {
+        weak.upgrade()
+            .expect("Session owner")
+            .signal_stop(false)
+            .expect("Stop rapid repeats");
+    }));
+    desktop.play(&session).expect("Start rapid repeats");
+    assert_eq!(completed(&session).phase, Phase::Idle);
+    let snapshots = desktop.snapshots.lock().expect("Snapshots");
+    let elapsed = snapshots
+        .iter()
+        .map(|snapshot| snapshot.elapsed_ms)
+        .max()
+        .unwrap_or_default();
+    let progress = snapshots
+        .iter()
+        .filter(|snapshot| {
+            snapshot.phase == Phase::Playing && snapshot.playback_stage != PlaybackStage::Starting
+        })
+        .count() as u64;
+    let maximum = elapsed / STATUS_INTERVAL.as_millis() as u64 + crate::playback::FIRST_RUN;
+    assert!(
+        progress <= maximum,
+        "Unbounded progress: {progress} updates in {elapsed} ms"
+    );
+    assert_eq!(
+        desktop.events.lock().expect("Events").len(),
+        RAPID_REPEAT_RUNS
+    );
 }
