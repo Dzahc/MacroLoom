@@ -8,6 +8,11 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
+import { RenameEditor } from './rename-editor';
+import { RenamePencil } from './rename-pencil';
+import { restoreRenameFocus } from './rename-focus';
+import type { RenameBinding } from './rename-contract';
+import { useRenameShortcut } from './rename-shortcut';
 import { playbackKeyDown, playbackKeyUp } from './playback-activation';
 import { isCompactView, sessionBanner } from './compact-presentation';
 import { observeCompactLayout, restoreLibraryScroll } from './compact-layout';
@@ -41,6 +46,7 @@ import {
 } from './library-model';
 
 type ViewProps = LibraryCallbacks & {
+  rename?: RenameBinding;
   snapshot: LibrarySnapshot;
   notifications?: ReactNode;
   onDeleteConfirmed: DeleteConfirmed;
@@ -52,7 +58,7 @@ type ViewProps = LibraryCallbacks & {
 };
 type MenuAnchor = { macroId: string; x: number; y: number };
 const MENU_GAP = 8;
-const MENU_ACTIONS = [ACTION.configure, ACTION.delete] as const;
+const MENU_ACTIONS = [ACTION.rename, ACTION.configure, ACTION.delete] as const;
 const MENU_EVENT = {
   pointerDown: 'pointerdown',
   blur: 'blur',
@@ -60,6 +66,7 @@ const MENU_EVENT = {
 } as const;
 const POINTER_CLICK = 'click';
 const FIRST_CLICK = 1;
+const RENAME_ROW_SELECTOR = 'button[data-macro-id]';
 
 /**
  * Sends an available action request to the host without changing library state.
@@ -246,6 +253,10 @@ function MacroRow({
   openMenu: (event: MouseEvent, id: string) => void;
 }) {
   const selected = macro.id === props.snapshot.selectedId;
+  const disabled =
+    props.snapshot.phase !== PHASE.idle ||
+    props.snapshot.confirmationOpen === true;
+  const duration = formatDuration(macro.durationMs);
   /** Sends this row's identity/source to the host; does not mutate the supplied snapshot. */
   function select() {
     props.onSelect({ macroId: macro.id, source: SOURCE.row });
@@ -257,28 +268,46 @@ function MacroRow({
   }
   return (
     <li>
-      <button
-        type="button"
-        className={`macro-row ${selected ? 'selected' : ''}`}
-        data-macro-id={macro.id}
-        aria-pressed={selected}
-        disabled={
-          props.snapshot.phase !== PHASE.idle || props.snapshot.confirmationOpen
-        }
-        onClick={select}
-        onContextMenu={
-          /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */ (
-            event,
-          ) => openMenu(event, macro.id)
-        }
-        onDoubleClick={play}
-        title={macro.name}
-      >
-        <span className="macro-name">{macro.name}</span>
-        <span className="macro-duration">
-          {formatDuration(macro.durationMs)}
-        </span>
-      </button>
+      {props.rename?.snapshot.draft?.macroId === macro.id ? (
+        <RenameEditor rename={props.rename} />
+      ) : (
+        <div
+          className={`macro-row ${selected ? 'selected' : ''}`}
+          aria-disabled={disabled}
+          onContextMenu={
+            /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */
+            (event) => openMenu(event, macro.id)
+          }
+        >
+          <button
+            type="button"
+            className="macro-row-select"
+            data-macro-id={macro.id}
+            aria-pressed={selected}
+            aria-label={`${macro.name} ${duration}`}
+            disabled={disabled}
+            onClick={select}
+            onDoubleClick={play}
+            title={macro.name}
+          />
+          <span className="macro-name" aria-hidden="true">
+            {macro.name}
+          </span>
+          <span className="macro-rename-slot">
+            {selected && (
+              <RenamePencil
+                snapshot={props.snapshot}
+                macroId={macro.id}
+                editorAvailable={Boolean(props.rename)}
+                onAction={props.onAction}
+              />
+            )}
+          </span>
+          <span className="macro-duration" aria-hidden="true">
+            {duration}
+          </span>
+        </div>
+      )}
     </li>
   );
 }
@@ -311,6 +340,33 @@ export function LibraryView(props: ViewProps) {
   const suppressDismissalGesture = useRef(false);
   const scrollPosition = useRef(0);
   const compact = isCompactView(props.snapshot);
+  const renameFocus = props.rename?.snapshot.focusId;
+  const takeRenameFocus = props.rename?.takeFocus;
+  useLayoutEffect(
+    /** Consumes each Save/Cancel restoration once, preserving foreground and session focus through later transitions. */
+    () => {
+      restoreRenameFocus(takeRenameFocus, props.snapshot.phase, {
+        /** @returns Whether restoring a row would preserve the foreground document. */
+        hasFocus: () => document.hasFocus(),
+        /** @param macroId Requested origin. @returns Nothing; only an existing stable-ID row may receive focus. */
+        focusRow: (macroId) => {
+          const rows =
+            owner.current?.querySelectorAll<HTMLButtonElement>(
+              RENAME_ROW_SELECTOR,
+            );
+          rows?.forEach(
+            /** @param row Mounted row. @returns Nothing; avoids user-controlled selector interpolation. */ (
+              row,
+            ) => {
+              if (row.dataset.macroId === macroId)
+                row.focus({ preventScroll: true });
+            },
+          );
+        },
+      });
+    },
+    [renameFocus, takeRenameFocus, props.snapshot.phase],
+  );
   const onLayout = props.onLayout;
   useLayoutEffect(
     /** Observes external layout measurements and restores list scroll without activating controls. */
@@ -340,12 +396,22 @@ export function LibraryView(props: ViewProps) {
     },
     onAction: action,
   };
+  useRenameShortcut(viewProps.snapshot, props.rename);
 
   /** @param request Available typed request; Delete opens a frozen confirmation rather than executing an action. @returns Nothing. */
   function action(request: LibraryAction) {
     const macroId =
       'macroId' in request ? request.macroId : props.snapshot.selectedId;
     if (attempt || !canRequest(props.snapshot, request.action, macroId)) return;
+    if (request.action === ACTION.rename) {
+      const target = props.snapshot.macros.find(
+        /** @param macro Existing requested row. @returns Identity match. */ (
+          macro,
+        ) => macro.id === request.macroId,
+      );
+      if (target) props.rename?.open(target);
+      return;
+    }
     if (request.action !== ACTION.delete) {
       props.onAction(request);
       return;

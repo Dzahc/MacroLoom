@@ -45,6 +45,9 @@ export const SESSION_TEXT = {
 /** Native command/event contract; capture data and injected held-input ownership never enter React state. */
 export type SessionSnapshot = Readonly<{
   revision: number;
+  renameSaving: boolean;
+  deferredStart: boolean;
+  startSequence: number;
   phase:
     | typeof PHASE.idle
     | typeof PHASE.recording
@@ -83,6 +86,9 @@ export type RecordingOutcome = Readonly<{
 }>;
 export const INITIAL_SESSION: SessionSnapshot = {
   revision: -1,
+  renameSaving: false,
+  deferredStart: false,
+  startSequence: 0,
   phase: PHASE.idle,
   elapsedMs: 0,
   eventCount: 0,

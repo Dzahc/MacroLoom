@@ -104,6 +104,14 @@ impl Drop for StagedFile {
 }
 
 impl Repository {
+    /// Renames display metadata only; current validated playback settings and extension metadata are preserved.
+    pub fn rename(&self, id: &str, name: &str) -> Result<PropertySave, ValidationError> {
+        macro_format::validate_name(name.trim())?;
+        let mut playback = self.read(id).map_err(storage_error)?.playback;
+        playback.extra.clear();
+        self.save_properties(id, name, &playback)
+    }
+
     /// Validates the complete external property draft, checks the cached file digest, and atomically commits on a worker.
     /// ID, filename, recording, events and unknown metadata remain unchanged. Equal normalized properties perform no write.
     /// Errors mean no commit occurred; cache failures after commit return a successful receipt with a warning instead.

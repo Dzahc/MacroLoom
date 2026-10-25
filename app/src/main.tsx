@@ -4,6 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { LibraryApp } from './library-app';
 import './style.css';
 import './configure.css';
+import './rename.css';
 import { CONFIGURE_QUERY } from './configure-contract';
 import { NativeConfigureApp } from './native-configure-app';
 import { ConfigureSample } from './configure-sample';

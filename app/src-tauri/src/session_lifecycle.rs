@@ -11,7 +11,7 @@ impl Session {
     ) -> Result<Result<R, E>, String> {
         let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
         let mut state = self.lock()?;
-        if !start_available(&state) {
+        if !start_available(&state) || state.rename_saving || state.deferred_start {
             return Err(ACTIVE_SESSION.into());
         }
         let result = operation();
@@ -77,7 +77,7 @@ impl Session {
     /// Marks mutation ownership before disk work, rejecting a Close that won the reservation race.
     fn begin_deletion(&self) -> Result<(), String> {
         let mut state = self.lock()?;
-        if !start_available(&state) {
+        if !start_available(&state) || state.rename_saving || state.deferred_start {
             return Err(ACTIVE_SESSION.into());
         }
         state.deleting = true;
@@ -101,6 +101,7 @@ fn exit_available(state: &State) -> bool {
         && state.phase == Phase::Idle
         && !state.starting
         && !state.deleting
+        && !state.rename_saving
         && !state.cleanup_failed
         && state.capture.events.is_empty()
         && state.recording.is_none()

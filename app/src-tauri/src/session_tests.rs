@@ -1013,3 +1013,155 @@ fn confirmation_cancel_waits_for_transient_transition_and_recovers() {
     );
     assert!(session.record().is_ok());
 }
+
+#[test]
+/// A waiting start exposes native Stop before Save finishes and Stop prevents recording afterwards.
+fn rename_wait_exposes_stop_and_cancels_start() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Initial availability");
+    let mut save = session.begin_rename().expect("Begin rename");
+    assert!(
+        desktop
+            .registered
+            .lock()
+            .expect("Stop armed before deferred arrival")
+            .stop
+    );
+    let initial_sequence = session
+        .snapshot()
+        .expect("Before queued start")
+        .start_sequence;
+    let request = session
+        .start_request()
+        .expect("Receive Record")
+        .expect("Eligible start");
+    assert_eq!(
+        session
+            .snapshot()
+            .expect("Deferred draft lifetime")
+            .start_sequence,
+        initial_sequence
+    );
+    assert!(session.start_request().expect("Repeated start").is_none());
+    let worker_session = session.clone();
+    let worker = std::thread::spawn(move || worker_session.record_requested(request));
+    let deadline = Instant::now() + TEST_DEADLINE;
+    while !desktop.registered.lock().expect("Shortcuts").stop && Instant::now() < deadline {
+        std::thread::sleep(TEST_POLL);
+    }
+    assert!(desktop.registered.lock().expect("Shortcuts").stop);
+    session.signal_stop(false).expect("Immediate Stop");
+    assert!(!session.snapshot().expect("Cancelled start").deferred_start);
+    assert!(!save.finish(true).expect("Save success"));
+    assert_eq!(
+        worker
+            .join()
+            .expect("Start worker")
+            .expect("Start result")
+            .phase,
+        Phase::Idle
+    );
+}
+
+#[test]
+/// A failed name save yields to the first requested start, without accumulating repeated starts.
+fn rename_failure_yields_to_one_record_request() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    let mut save = session.begin_rename().expect("Begin rename");
+    let request = session
+        .start_request()
+        .expect("Record arrival")
+        .expect("First start");
+    assert!(session.start_request().expect("Repeat arrival").is_none());
+    assert!(save.finish(false).expect("Failed Save yields draft"));
+    assert_eq!(
+        session
+            .record_requested(request)
+            .expect("Deferred Record")
+            .phase,
+        Phase::Recording
+    );
+    assert!(session.begin_rename().is_err());
+    session.stop().expect("Stop recording");
+}
+
+#[test]
+/// Close cancels deferred starts, waits for disk completion, and retains failure drafts by cancelling exit.
+fn rename_close_waits_and_failure_cancels_exit() {
+    for succeeds in [false, true] {
+        let session = Session::new(Arc::new(Desktop::default()));
+        let mut save = session.begin_rename().expect("Begin rename");
+        let request = session
+            .start_request()
+            .expect("Start arrival")
+            .expect("Deferred start");
+        session.request_close().expect("Close");
+        assert!(!session.finish_exit().expect("Wait for Save"));
+        assert!(!save.finish(succeeds).expect("Resolve Save"));
+        assert_eq!(
+            session
+                .record_requested(request)
+                .expect("Cancelled start")
+                .phase,
+            Phase::Idle
+        );
+        assert_eq!(
+            session.snapshot().expect("Exit state").close_requested,
+            succeeds
+        );
+        assert_eq!(session.finish_exit().expect("Exit eligibility"), succeeds);
+    }
+}
+
+#[test]
+/// A Record received while native Stop is being armed wins before a name write can be accepted.
+fn rename_arming_yields_to_an_arriving_global_record() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    let received = Arc::new(Mutex::new(None));
+    let observed = received.clone();
+    let owner = Arc::downgrade(&session);
+    *desktop.on_shortcuts.lock().expect("Arming callback") = Some(Box::new(move || {
+        let session = owner.upgrade().expect("Live session during native arming");
+        *observed.lock().expect("Received start") =
+            session.start_request().expect("Record arrival");
+    }));
+    assert!(session.begin_rename().is_err());
+    assert!(!session.snapshot().expect("No accepted Save").rename_saving);
+    let request = received
+        .lock()
+        .expect("Captured start")
+        .take()
+        .expect("Priority Record");
+    assert_eq!(
+        session
+            .record_requested(request)
+            .expect("Start after arming")
+            .phase,
+        Phase::Recording
+    );
+    session.stop().expect("Stop recording");
+}
+
+#[test]
+/// A Stop reservation conflict permits metadata saving but cannot accept an uncancellable deferred start.
+fn rename_save_rejects_deferred_starts_without_reserved_stop() {
+    let desktop = Arc::new(Desktop::default());
+    desktop.stop_conflict.store(true, Ordering::Release);
+    let session = Session::new(desktop);
+    let mut save = session
+        .begin_rename()
+        .expect("Name saving remains available");
+    assert_eq!(
+        session.start_request().err().as_deref(),
+        Some(crate::shortcuts::STOP_UNAVAILABLE)
+    );
+    assert!(
+        !session
+            .snapshot()
+            .expect("No accepted deferred start")
+            .deferred_start
+    );
+    save.finish(true).expect("Metadata save completes normally");
+}

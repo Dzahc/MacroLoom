@@ -14,6 +14,7 @@ import {
 import type { BackendLibraryState, MacroDocument } from './macro-contract.ts';
 import type { RecordingOutcome } from './session-contract.ts';
 import { OutcomeQueue } from './outcome-queue.ts';
+import { RENAME_TEXT, type RenameCompletion } from './rename-contract.ts';
 import {
   CONFIGURE_TEXT,
   CONFIGURE_OUTCOME,
@@ -56,6 +57,7 @@ export class LibraryController {
   private seenFailures = 0;
   private nextOutcome = 0;
   private lastConfigureAttempt = INITIAL_CONFIGURE_ATTEMPT;
+  private lastRenameAttempt = INITIAL_CONFIGURE_ATTEMPT;
   private recordingSequence = 0;
   private generation = 0;
   private pendingDelete: MacroSummary | null = null;
@@ -213,6 +215,28 @@ export class LibraryController {
   configured(completion: ConfigureCompletion): void {
     if (completion.attemptId <= this.lastConfigureAttempt) return;
     this.lastConfigureAttempt = completion.attemptId;
+    this.propertySaved(completion);
+  }
+
+  /** @param completion Inline rename receipt. @returns Nothing; each native attempt produces at most one committed-name outcome. */
+  renamed(completion: RenameCompletion): void {
+    if (completion.attemptId <= this.lastRenameAttempt) return;
+    this.lastRenameAttempt = completion.attemptId;
+    if (!completion.result.ok && !completion.discarded) {
+      this.outcome(
+        CONFIGURE_OUTCOME.failure,
+        `${RENAME_TEXT.failure}: ${completion.result.message}`,
+      );
+      return;
+    }
+    this.propertySaved(completion, RENAME_TEXT.updated);
+  }
+
+  /** @param completion Authoritative property receipt. @returns Nothing; selection and list order follow committed metadata only. */
+  private propertySaved(
+    completion: ConfigureCompletion,
+    verb: string = CONFIGURE_TEXT.updated,
+  ): void {
     if (completion.library) this.apply(completion.library);
     const result = completion.result;
     if (!result.ok || !result.changed) return;
@@ -224,7 +248,7 @@ export class LibraryController {
       result.warning ? CONFIGURE_OUTCOME.failure : CONFIGURE_OUTCOME.success,
       result.warning
         ? `“${result.name}”: ${result.warning}`
-        : `${CONFIGURE_TEXT.updated} “${result.name}”`,
+        : `${verb} “${result.name}”`,
     );
   }
 

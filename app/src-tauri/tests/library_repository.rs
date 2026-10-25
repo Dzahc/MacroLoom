@@ -71,6 +71,7 @@ const UNSUPPORTED_SPEED: f64 = 3.0;
 const FIRST_ITEM: usize = 0;
 const NO_RUNS: u64 = 0;
 const RANGE_INCREMENT: u64 = 1;
+const PLAYBACK_SPEED_FIELD: &str = "speed";
 const SPEED_ERROR_FIELD: &str = "playback.speed";
 const RUNS_ERROR_FIELD: &str = "playback.totalRuns";
 const INTERVAL_ERROR_FIELD: &str = "playback.intervalMs";
@@ -714,4 +715,27 @@ fn locked_file_delete_preserves_file_and_entry() {
         DOCUMENT.as_str()
     );
     repository.delete(ID, |_| {}).unwrap();
+}
+
+#[test]
+/// Name-only saves preserve playback, input, identity, and extensions through a fresh public repository read.
+fn rename_preserves_every_property_except_name_and_update_timestamp() {
+    let folder = LibraryFolder::new();
+    let mut original: Value = serde_json::from_str(DOCUMENT.as_str()).unwrap();
+    original[ROOT_METADATA_FIELD] = json!(UNKNOWN_METADATA);
+    original[fields::PLAYBACK][EVENT_METADATA_FIELD] = json!(UNKNOWN_METADATA);
+    original[fields::PLAYBACK][PLAYBACK_SPEED_FIELD] = json!(SPEEDS[DOUBLE_SPEED_INDEX]);
+    folder.write(FILE, &original.to_string());
+    let repository = loaded_repository(&folder);
+    let original = serde_json::to_value(repository.read(ID).unwrap()).unwrap();
+    let saved = repository.rename(ID, RENAMED_MACRO_NAME).unwrap();
+    assert!(saved.changed);
+    let restarted = loaded_repository(&folder);
+    let mut actual = serde_json::to_value(restarted.read(ID).unwrap()).unwrap();
+    assert_eq!(actual[fields::NAME], RENAMED_MACRO_NAME);
+    assert_ne!(actual[fields::UPDATED_AT], original[fields::UPDATED_AT]);
+    actual[fields::NAME] = original[fields::NAME].clone();
+    actual[fields::UPDATED_AT] = original[fields::UPDATED_AT].clone();
+    assert_eq!(actual, original);
+    assert!(!restarted.rename(ID, RENAMED_MACRO_NAME).unwrap().changed);
 }

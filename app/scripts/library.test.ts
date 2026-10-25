@@ -1,3 +1,7 @@
+import { RenameController } from '../src/rename-controller.ts';
+import type { RenameBinding } from '../src/rename-contract.ts';
+import { RENAME_TEXT } from '../src/rename-contract.ts';
+import { RENAME_PENCIL_REASON } from '../src/rename-pencil-model.ts';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -39,6 +43,9 @@ const MISSING_ID = 'missing-macro';
 const OUTCOME_ID = { first: 1, second: 2 } as const;
 const READ_ONLY = false;
 const EXPECTED_COUNTDOWN = '3.0 s';
+const ONE_PENCIL = 1;
+const FIRST_INDEX = 0;
+const PENCIL_PATTERN = new RegExp(`data-action="${ACTION.rename}"`, 'g');
 const DURATION_CASES = [
   [0, '00:00'],
   [TIME.millisecond - 1, '00:00'],
@@ -93,10 +100,11 @@ function snapshot(overrides: Partial<LibrarySnapshot> = {}): LibrarySnapshot {
 }
 
 /** @param state Supplied library state. @returns Static markup with inert host callbacks. */
-function render(state: LibrarySnapshot): string {
+function render(state: LibrarySnapshot, rename?: RenameBinding): string {
   return renderToStaticMarkup(
     createElement(view.LibraryView, {
       snapshot: state,
+      rename,
       onSelect:
         /** Ignores selection requests during static rendering. */ () => {},
       onAction:
@@ -222,7 +230,10 @@ void test('pending deletion keeps rows selectable while actions are disabled', (
   for (const action of TOOLBAR) {
     assert.match(toolbar, new RegExp(`data-action="${action}"[^>]*disabled`));
   }
-  assert.doesNotMatch(rows, /disabled/);
+  assert.doesNotMatch(
+    rows,
+    /<button[^>]*data-macro-id[^>]*\sdisabled(?:=|[\s>])/,
+  );
   assert.ok(rows.includes(SELECTED.id));
   assert.match(markup, /status-dot busy/);
   assert.match(markup, /role="status" aria-live="polite"/);
@@ -385,4 +396,94 @@ void test('empty and failed-load samples omit failed rows without adding a produ
     (failure) => assert.equal(markup.includes(failure), false),
   );
   assert.ok(markup.includes(SELECTED.name));
+});
+
+/** Inline rename replaces the row button with accessible independent controls and yields the duration space. */
+void test('inline rename renders a selected name and two labelled boxed controls without nested buttons', () => {
+  const rename = new RenameController({
+    /** @returns Inert status; rendering never saves. */
+    status: () =>
+      Promise.resolve({ attemptId: 0, pending: false, completion: null }),
+    /** @returns An unused successful receipt. */
+    submit: () =>
+      Promise.resolve({
+        attemptId: OUTCOME_ID.first,
+        result: { ok: true },
+        library: null,
+        discarded: false,
+      }),
+  });
+  rename.open(SELECTED);
+  const markup = render(
+    snapshot({ macros: [SELECTED], selectedId: SELECTED.id }),
+    rename,
+  );
+  assert.ok(markup.includes(`aria-label="${RENAME_TEXT.name}"`));
+  assert.ok(markup.includes(`aria-label="${RENAME_TEXT.save}"`));
+  assert.ok(markup.includes(`aria-label="${RENAME_TEXT.cancel}"`));
+  assert.doesNotMatch(markup, /class="macro-duration"/);
+  assert.doesNotMatch(markup, /maxlength/i);
+  assert.doesNotMatch(markup, /<button[^>]*class="macro-row/);
+});
+
+/** @returns An idle editor owner; rendering never submits its inert native boundary. */
+function pencilEditor(): RenameController {
+  return new RenameController({
+    /** @returns An idle native receipt sequence. */
+    status: () =>
+      Promise.resolve({
+        attemptId: OUTCOME_ID.first,
+        pending: false,
+        completion: null,
+      }),
+    /** @returns An unused successful receipt. */
+    submit: () =>
+      Promise.resolve({
+        attemptId: OUTCOME_ID.second,
+        result: { ok: true },
+        library: null,
+        discarded: false,
+      }),
+  });
+}
+
+/** Only a selected macro exposes a pencil, and its button is independent of row selection/playback. */
+void test('selected row has a separate rename pencil while other rows reserve empty space', () => {
+  const markup = render(snapshot({ selectedId: SELECTED.id }), pencilEditor());
+  assert.equal([...markup.matchAll(PENCIL_PATTERN)].length, ONE_PENCIL);
+  assert.equal(
+    [...markup.matchAll(/class="macro-rename-slot"/g)].length,
+    SAMPLE_MACROS.length,
+  );
+  assert.doesNotMatch(
+    markup,
+    /<button[^>]*data-macro-id[^>]*>(?:(?!<\/button>)[\s\S])*<button/,
+  );
+  assert.doesNotMatch(render(snapshot(), pencilEditor()), PENCIL_PATTERN);
+});
+
+/** Disabled pencils use a native disabled button and put their reason only on the icon-sized, non-focusable hover wrapper. */
+void test('disabled-pencil tooltip belongs only to the icon hover target', () => {
+  const markup = render(
+    snapshot({ selectedId: SELECTED.id, writable: false }),
+    pencilEditor(),
+  );
+  const iconTarget = markup.match(/<span class="macro-rename-pencil"[^>]*>/)?.[
+    FIRST_INDEX
+  ];
+  assert.ok(iconTarget);
+  assert.ok(iconTarget.includes(`title="${RENAME_PENCIL_REASON.storage}"`));
+  assert.doesNotMatch(iconTarget, /tabindex|role=/);
+  const pencil = markup.match(
+    new RegExp(`<button[^>]*data-action="${ACTION.rename}"[^>]*>`),
+  )?.[FIRST_INDEX];
+  assert.ok(pencil);
+  assert.match(pencil, /\sdisabled=/);
+  assert.doesNotMatch(pencil, /title=|tabindex=/);
+  const enabled = render(snapshot({ selectedId: SELECTED.id }), pencilEditor());
+  assert.ok(
+    enabled.includes(
+      `<span class="macro-rename-pencil" title="${LABEL.rename}">`,
+    ),
+  );
 });

@@ -5,6 +5,7 @@ export const ACTION = {
   play: 'play',
   stop: 'stop',
   configure: 'configure',
+  rename: 'rename',
   delete: 'delete',
 } as const;
 export const PHASE = {
@@ -20,6 +21,7 @@ export const SOURCE = {
   row: 'row',
   context: 'context-menu',
   doubleClick: 'double-click',
+  keyboard: 'keyboard',
 } as const;
 export const TOOLBAR = [
   ACTION.record,
@@ -43,6 +45,7 @@ export const LABEL = {
   play: 'Play',
   stop: 'Stop',
   configure: 'Configure',
+  rename: 'Rename',
   delete: 'Delete',
 } as const;
 export const TOOLTIP = {
@@ -50,6 +53,7 @@ export const TOOLTIP = {
   play: 'Play',
   stop: 'Stop (F8)',
   configure: 'Configure',
+  rename: 'Rename',
   delete: 'Delete',
 } as const;
 export const TIME = {
@@ -74,6 +78,7 @@ export type LibraryAction =
   | {
       action:
         | typeof ACTION.play
+        | typeof ACTION.rename
         | typeof ACTION.configure
         | typeof ACTION.delete;
       macroId: string;
@@ -89,6 +94,8 @@ export type LibrarySnapshot = Readonly<{
   phase: LibraryPhase;
   message: string;
   loading?: boolean;
+  renameSaving?: boolean;
+  deferredStart?: boolean;
   writable?: boolean;
   /** Native session availability includes the required global Stop reservation check. */
   recordingAvailable?: boolean;
@@ -140,27 +147,47 @@ export function canRequest(
   action: ActionName,
   macroId: string | null = snapshot.selectedId,
 ): boolean {
-  if (action === ACTION.stop)
-    return [
-      PHASE.recording,
-      PHASE.playing,
-      PHASE.interval,
-      PHASE.stopping,
-    ].some(
-      /** @param phase Stop-capable phase. @returns Whether the current phase matches. */
-      (phase) => phase === snapshot.phase,
-    );
-  if (!canStartOperation(snapshot)) return false;
+  if (action === ACTION.stop) return canStop(snapshot);
+  if (!canStartOperation(snapshot) || blockedByRename(snapshot, action))
+    return false;
   if (action === ACTION.record)
     return snapshot.recordingAvailable ?? snapshot.writable !== false;
   if (action === ACTION.play && snapshot.playbackAvailable === false)
     return false;
-  if (action === ACTION.delete) {
+  if (requiresWritableLibrary(action)) {
     if (snapshot.writable === false) return false;
   }
   return snapshot.macros.some(
     /** @param macro Candidate entry. @returns Whether the requested ID exists. */
     (macro) => macro.id === macroId,
+  );
+}
+
+/** @param action Requested library operation. @returns Whether the action requires writable metadata storage. */
+function requiresWritableLibrary(action: ActionName): boolean {
+  return action === ACTION.delete || action === ACTION.rename;
+}
+
+/** @param snapshot Current backend wait/phase. @returns Whether Stop can cancel active input or a deferred start. */
+function canStop(snapshot: LibrarySnapshot): boolean {
+  return (
+    snapshot.deferredStart === true ||
+    [PHASE.recording, PHASE.playing, PHASE.interval, PHASE.stopping].some(
+      /** @param phase Stop-capable phase. @returns Phase match. */ (phase) =>
+        phase === snapshot.phase,
+    )
+  );
+}
+
+/** @param snapshot Native name-save state. @param action Requested operation. @returns Whether a pending name save excludes this library mutation. */
+function blockedByRename(
+  snapshot: LibrarySnapshot,
+  action: ActionName,
+): boolean {
+  return (
+    snapshot.renameSaving === true &&
+    action !== ACTION.record &&
+    action !== ACTION.play
   );
 }
 

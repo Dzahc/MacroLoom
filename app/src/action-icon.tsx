@@ -2,6 +2,7 @@ import { ACTION, type ActionName } from './library-model';
 
 const PATH = {
   play: 'M8 5v14l11-7z',
+  rename: 'm4 16 12-12 4 4-12 12H4Zm10-10 4 4',
   stop: 'M6 6h12v12H6z',
   configure:
     'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1Z',
