@@ -33,6 +33,14 @@ All maintained checks passed, including the production build, frontend/tooling t
 - **Standards:** 0 outstanding documented violations; 0 actionable smell findings on `6aeae0f...48304c9`. The missing enabled-icon tooltip was fixed with a red/green rendering regression.
 - **Spec:** 0 outstanding findings on the same pencil delta. Keyboard-visible focus replaced `:focus-within` so mouse selection alone cannot keep the pencil visible after hover ends. Interactive verification remains a manual check due to the Chrome access approval timeout.
 
+## Focus restoration correction
+
+- The review reproduced a stale `focusId`: after Save/Cancel restored macro A, a later Play/Record → Stop → Idle transition could focus A again instead of preserving toolbar focus.
+- `app/scripts/rename-focus.test.ts` runs the same restoration policy used by the production layout effect, with the real editor controller and a substituted browser-focus boundary. It covers Save and Cancel, selecting another row, later playback/recording and Stop, skipped requests while unfocused or active, and fresh requests for the same macro.
+- The minimized Cancel → playback → Stop → Idle regression failed with `sample-report` focused instead of `toolbar-stop` before the fix and passed after focus requests were consumed once. The expanded regression suite passes all three tests.
+- The rename failure outcome now reuses `CONFIGURE_OUTCOME.failure`.
+- Full completion verification and the separate review results are recorded below after the final gate. Interactive desktop focus checks remain separate manual evidence.
+
 ## Original implementation completion gate
 
 Final command on 2026-10-25: `npm.cmd --prefix app run verify` — **PASS**, exit code 0, against code commit `ad3429a`.

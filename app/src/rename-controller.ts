@@ -82,6 +82,12 @@ export class RenameController implements RenameBinding {
     const focusId = restoreFocus ? (this.state.draft?.macroId ?? null) : null;
     this.update({ ...INITIAL, focusId });
   };
+  /** @returns The pending restoration origin once, clearing it before browser/session checks can defer its use. */
+  takeFocus = (): string | null => {
+    const macroId = this.state.focusId;
+    if (macroId !== null) this.update({ ...this.state, focusId: null });
+    return macroId;
+  };
   /** Validates and submits the current name; backend acknowledgement owns success. @returns Completion with draft retention on failure. */
   save = async (): Promise<void> => {
     if (this.state.uncertain) {

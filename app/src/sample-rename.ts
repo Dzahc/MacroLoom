@@ -66,6 +66,7 @@ export function useSampleRename(
     change: controller.change,
     save: controller.save,
     cancel: controller.cancel,
+    takeFocus: controller.takeFocus,
   };
   return {
     binding,

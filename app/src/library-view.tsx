@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
 import { RenameEditor } from './rename-editor';
 import { RenamePencil } from './rename-pencil';
+import { restoreRenameFocus } from './rename-focus';
 import type { RenameBinding } from './rename-contract';
 import { useRenameShortcut } from './rename-shortcut';
 import { playbackKeyDown, playbackKeyUp } from './playback-activation';
@@ -65,6 +66,7 @@ const MENU_EVENT = {
 } as const;
 const POINTER_CLICK = 'click';
 const FIRST_CLICK = 1;
+const RENAME_ROW_SELECTOR = 'button[data-macro-id]';
 
 /**
  * Sends an available action request to the host without changing library state.
@@ -339,28 +341,31 @@ export function LibraryView(props: ViewProps) {
   const scrollPosition = useRef(0);
   const compact = isCompactView(props.snapshot);
   const renameFocus = props.rename?.snapshot.focusId;
+  const takeRenameFocus = props.rename?.takeFocus;
   useLayoutEffect(
-    /** Restores explicit Save/Cancel focus only while the main window remains focused and idle. */
+    /** Consumes each Save/Cancel restoration once, preserving foreground and session focus through later transitions. */
     () => {
-      if (
-        !renameFocus ||
-        !document.hasFocus() ||
-        props.snapshot.phase !== PHASE.idle
-      )
-        return;
-      const rows = owner.current?.querySelectorAll<HTMLButtonElement>(
-        'button[data-macro-id]',
-      );
-      rows?.forEach(
-        /** @param row Stable-identity row; no user-controlled selector interpolation. */ (
-          row,
-        ) => {
-          if (row.dataset.macroId === renameFocus)
-            row.focus({ preventScroll: true });
+      restoreRenameFocus(takeRenameFocus, props.snapshot.phase, {
+        /** @returns Whether restoring a row would preserve the foreground document. */
+        hasFocus: () => document.hasFocus(),
+        /** @param macroId Requested origin. @returns Nothing; only an existing stable-ID row may receive focus. */
+        focusRow: (macroId) => {
+          const rows =
+            owner.current?.querySelectorAll<HTMLButtonElement>(
+              RENAME_ROW_SELECTOR,
+            );
+          rows?.forEach(
+            /** @param row Mounted row. @returns Nothing; avoids user-controlled selector interpolation. */ (
+              row,
+            ) => {
+              if (row.dataset.macroId === macroId)
+                row.focus({ preventScroll: true });
+            },
+          );
         },
-      );
+      });
     },
-    [renameFocus, props.snapshot.phase],
+    [renameFocus, takeRenameFocus, props.snapshot.phase],
   );
   const onLayout = props.onLayout;
   useLayoutEffect(

@@ -52,4 +52,5 @@ export type RenameBinding = {
   change: (name: string) => void;
   cancel: (restoreFocus?: boolean) => void;
   save: () => Promise<void>;
+  takeFocus: () => string | null;
 };

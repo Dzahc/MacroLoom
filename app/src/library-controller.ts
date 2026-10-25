@@ -224,7 +224,7 @@ export class LibraryController {
     this.lastRenameAttempt = completion.attemptId;
     if (!completion.result.ok && !completion.discarded) {
       this.outcome(
-        'failure',
+        CONFIGURE_OUTCOME.failure,
         `${RENAME_TEXT.failure}: ${completion.result.message}`,
       );
       return;

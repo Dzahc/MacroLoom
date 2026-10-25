@@ -51,5 +51,6 @@ export function useNativeRename(
     change: controller.change,
     save: controller.save,
     cancel: controller.cancel,
+    takeFocus: controller.takeFocus,
   };
 }
