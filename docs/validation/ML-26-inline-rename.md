@@ -36,10 +36,11 @@ All maintained checks passed, including the production build, frontend/tooling t
 ## Focus restoration correction
 
 - The review reproduced a stale `focusId`: after Save/Cancel restored macro A, a later Play/Record → Stop → Idle transition could focus A again instead of preserving toolbar focus.
-- `app/scripts/rename-focus.test.ts` runs the same restoration policy used by the production layout effect, with the real editor controller and a substituted browser-focus boundary. It covers Save and Cancel, selecting another row, later playback/recording and Stop, skipped requests while unfocused or active, and fresh requests for the same macro.
+- `app/scripts/rename-focus.test.ts` runs the same restoration policy used by the production layout effect, with the real editor controller and a substituted browser-focus boundary. It covers Save and Cancel, moving focus to another row, later playback/recording and Stop, skipped requests while unfocused or active, and fresh requests for the same macro.
 - The minimized Cancel → playback → Stop → Idle regression failed with `sample-report` focused instead of `toolbar-stop` before the fix and passed after focus requests were consumed once. The expanded regression suite passes all three tests.
 - The rename failure outcome now reuses `CONFIGURE_OUTCOME.failure`.
-- Full completion verification and the separate review results are recorded below after the final gate. Interactive desktop focus checks remain separate manual evidence.
+- Final command on 2026-10-25: `npm.cmd --prefix app run verify` — **PASS**, exit code 0, against code commit `aaffeb3`. Every maintained check passed; complexity checked 1,130 functions across index/worktree snapshots with zero failures at the limit of 10. Seven existing desktop-only Rust tests remain explicitly ignored.
+- The focused focus/rename/library run passed all 31 tests. Separate Standards and Spec re-reviews of `1242811...aaffeb3` each report **0 outstanding findings** and confirm that the regression exercises the production restoration policy. Interactive desktop focus checks remain separate manual evidence.
 
 ## Original implementation completion gate
 
