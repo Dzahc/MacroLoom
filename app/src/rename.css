@@ -57,3 +57,67 @@
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
+
+.macro-row-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.macro-row-select:focus-visible {
+  outline-offset: -2px;
+}
+
+.macro-row[aria-disabled='true'] > .macro-name,
+.macro-row[aria-disabled='true'] > .macro-duration {
+  opacity: 0.45;
+}
+
+.macro-rename-slot,
+.macro-rename-pencil,
+.macro-rename-button {
+  width: var(--rename-pencil-size);
+  height: var(--rename-pencil-size);
+}
+
+.macro-rename-slot {
+  position: relative;
+  pointer-events: none;
+}
+
+.macro-rename-pencil {
+  display: inline-flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.macro-row.selected:hover .macro-rename-pencil,
+.macro-row.selected:focus-within .macro-rename-pencil {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.macro-rename-button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--accent);
+}
+
+.macro-rename-button svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.macro-rename-button:disabled {
+  pointer-events: none;
+  color: var(--muted);
+}

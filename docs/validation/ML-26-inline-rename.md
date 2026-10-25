@@ -18,6 +18,13 @@ No browser or native computer surface was connected in this session, so interact
 - With another application focused, F9 cancels an unsaved draft and starts recording without activating MacroLoom. Verify F8 can cancel a start waiting for an intentionally delayed save.
 - Delay/fail a rename write and exercise Record/Play, repeated starts, Stop, Close, and lost IPC acknowledgement. Confirm no duplicate writes, unintended later starts, or false success feedback.
 
+## Selected-row pencil extension
+
+- `app/scripts/rename-pencil.test.ts` covers explicit selected-target activation, loading exclusion, and disabled explanations for sessions, saves, dialogs, deletion, unavailable storage, and a missing editor owner.
+- `app/scripts/library.test.ts` covers one pencil on the selected row, reserved slots across all normal rows, independent sibling buttons, preserved selection during deletion, native disabled semantics, and reason tooltips restricted to the non-focusable icon hover target.
+- Interactive Chrome access was attempted for this extension, but app access approval timed out. Hover/focus behavior, tooltip timing, and minimum-width visual layout remain manual checks. Check selected versus unselected rows, stable name/duration positions, keyboard Tab activation, and that double-clicking the pencil never starts playback.
+- Completion verification and the separate Standards/Spec reviews for this extension are recorded after the final gate below.
+
 ## Completion gate
 
 Final command on 2026-10-25: `npm.cmd --prefix app run verify` — **PASS**, exit code 0, against code commit `ad3429a`.

@@ -15,6 +15,16 @@ Issue: [#38](https://github.com/Dzahc/MacroLoom/issues/38). These acceptance cri
 - Closing discards an unsaved draft. Closing during Save cancels any deferred start, waits for Save, exits on success, and cancels exit on failure while retaining the draft and error. No deferred session starts after closing.
 - Explicit Save/Cancel returns focus to the originating row only while the main window remains focused and idle. Outside-click dismissal and session starts preserve the destination's focus.
 
+## Selected-row pencil entry point
+
+The user confirmed this extension after the original implementation:
+
+- Only the selected macro shows a pencil, and only while its row is hovered or has keyboard focus. The enabled pencil is a labelled button in the normal Tab order. Unselected rows never show a pencil.
+- Keep the pencil in a fixed slot at the end of the name area, before duration. Reserve that width in every normal row even when the pencil is hidden, so hover and selection do not move text or durations.
+- Clicking the pencil opens the existing editor with the full name selected. It does not change selection or trigger Play. Keep existing row selection, double-click playback, F2, context-menu Rename, and editor/session rules.
+- Show a gray disabled pencil when loading, an active session, pending saves, confirmations, deletion, or unavailable writable storage prevents Rename. Disabled pencils cannot activate and are excluded from the Tab order.
+- Explain a disabled pencil with a reason tooltip only when hovering directly over its icon area. Row hover and keyboard focus reveal the pencil but do not show that tooltip.
+
 ## Test seams
 
 The user approved public library/editor interactions, backend rename/session controls, and repository save behavior as test seams. The review base is commit `30a66737ac7dd9459aec43db12a51caeb055d84d`.

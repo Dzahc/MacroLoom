@@ -9,6 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
 import { RenameEditor } from './rename-editor';
+import { RenamePencil } from './rename-pencil';
 import type { RenameBinding } from './rename-contract';
 import { useRenameShortcut } from './rename-shortcut';
 import { playbackKeyDown, playbackKeyUp } from './playback-activation';
@@ -250,6 +251,10 @@ function MacroRow({
   openMenu: (event: MouseEvent, id: string) => void;
 }) {
   const selected = macro.id === props.snapshot.selectedId;
+  const disabled =
+    props.snapshot.phase !== PHASE.idle ||
+    props.snapshot.confirmationOpen === true;
+  const duration = formatDuration(macro.durationMs);
   /** Sends this row's identity/source to the host; does not mutate the supplied snapshot. */
   function select() {
     props.onSelect({ macroId: macro.id, source: SOURCE.row });
@@ -264,29 +269,42 @@ function MacroRow({
       {props.rename?.snapshot.draft?.macroId === macro.id ? (
         <RenameEditor rename={props.rename} />
       ) : (
-        <button
-          type="button"
+        <div
           className={`macro-row ${selected ? 'selected' : ''}`}
-          data-macro-id={macro.id}
-          aria-pressed={selected}
-          disabled={
-            props.snapshot.phase !== PHASE.idle ||
-            props.snapshot.confirmationOpen
-          }
-          onClick={select}
+          aria-disabled={disabled}
           onContextMenu={
-            /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */ (
-              event,
-            ) => openMenu(event, macro.id)
+            /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */
+            (event) => openMenu(event, macro.id)
           }
-          onDoubleClick={play}
-          title={macro.name}
         >
-          <span className="macro-name">{macro.name}</span>
-          <span className="macro-duration">
-            {formatDuration(macro.durationMs)}
+          <button
+            type="button"
+            className="macro-row-select"
+            data-macro-id={macro.id}
+            aria-pressed={selected}
+            aria-label={`${macro.name} ${duration}`}
+            disabled={disabled}
+            onClick={select}
+            onDoubleClick={play}
+            title={macro.name}
+          />
+          <span className="macro-name" aria-hidden="true">
+            {macro.name}
           </span>
-        </button>
+          <span className="macro-rename-slot">
+            {selected && (
+              <RenamePencil
+                snapshot={props.snapshot}
+                macroId={macro.id}
+                editorAvailable={Boolean(props.rename)}
+                onAction={props.onAction}
+              />
+            )}
+          </span>
+          <span className="macro-duration" aria-hidden="true">
+            {duration}
+          </span>
+        </div>
       )}
     </li>
   );
