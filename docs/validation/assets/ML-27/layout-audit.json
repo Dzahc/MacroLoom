@@ -1,5 +1,5 @@
 {
-  "method": "Static production-component renders; theme media condition forced per fixture; Chromium device scale 1/1.25/1.5; root font 100%/200%; not Windows DPI observations.",
+  "method": "Static production-component renders; theme media condition forced per fixture; Chromium device scale 1/1.25/1.5; root font 100%/200%; includes footer progress-text range intersections with button bounds; not Windows DPI observations.",
   "reports": [
     {
       "theme": "light",
@@ -131,14 +131,14 @@
           "label": "pending-100",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 227,
+          "fieldsHeight": 198,
           "errors": []
         },
         {
           "label": "pending-200",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 155,
+          "fieldsHeight": 96,
           "errors": []
         }
       ]
@@ -273,14 +273,14 @@
           "label": "pending-100",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 227,
+          "fieldsHeight": 198,
           "errors": []
         },
         {
           "label": "pending-200",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 155,
+          "fieldsHeight": 97,
           "errors": []
         }
       ]
@@ -415,14 +415,14 @@
           "label": "pending-100",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 227,
+          "fieldsHeight": 198,
           "errors": []
         },
         {
           "label": "pending-200",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 155,
+          "fieldsHeight": 97,
           "errors": []
         }
       ]
@@ -557,14 +557,14 @@
           "label": "pending-100",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 227,
+          "fieldsHeight": 198,
           "errors": []
         },
         {
           "label": "pending-200",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 155,
+          "fieldsHeight": 96,
           "errors": []
         }
       ]
@@ -699,14 +699,14 @@
           "label": "pending-100",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 227,
+          "fieldsHeight": 198,
           "errors": []
         },
         {
           "label": "pending-200",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 155,
+          "fieldsHeight": 97,
           "errors": []
         }
       ]
@@ -841,14 +841,14 @@
           "label": "pending-100",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 227,
+          "fieldsHeight": 198,
           "errors": []
         },
         {
           "label": "pending-200",
           "width": 360,
           "height": 300,
-          "fieldsHeight": 155,
+          "fieldsHeight": 97,
           "errors": []
         }
       ]

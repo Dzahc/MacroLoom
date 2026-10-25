@@ -95,7 +95,7 @@ a name-validation error and the persistent actions.
   the production `measureCompact` function until width and height settle.
   Ordinary recording/playback/repeat banners share the same measured height
   within each case; at default text the window is 360×130–131 CSS pixels.
-- `npm.cmd --prefix app run verify` passed with exit code 0. All 14 gate checks
+- Initial `npm.cmd --prefix app run verify` passed with exit code 0. All 14 gate checks
   passed, including refreshed `origin`, formatting, TypeScript, ESLint, production
   build, Clippy, 104 frontend/tooling tests, 123 Rust unit tests and 22 repository
   integration tests, 33 Python quality fixtures, and 253 function complexity
@@ -111,6 +111,41 @@ commit `cdcadd350264bdc169e7a9d34d21ea4e2b3b5ef1` as the fixed point and inspect
 the uncommitted implementation plus this evidence. Standards: no remaining
 findings. Spec: no confirmed code defect or scope creep; one acceptance-evidence
 gap remains, the native observations below. The issue stays open for that evidence.
+
+## Pending-save footer overlap follow-up
+
+The original element-box audit missed text painting outside the status paragraph.
+At 360px width and 200% text, the pending “Saving…” text overlapped Cancel by
+63.6px. A nonempty footer status now occupies its own row, and long status text
+can wrap within the available width. Empty idle status keeps its previous layout;
+Save/Cancel remain together in the action row.
+
+`node --test scripts/configure-layout.browser.test.ts` (from `app/`) measures
+painted text with `Range.getClientRects()` against the real footer button bounds.
+It renders production `ConfigureForm`/CSS at 360×300 and 480×620, 100%/200% text,
+and idle/pending Save: eight cases. It also checks the expected status text, footer
+viewport containment, and a noncollapsed field scroller. The test failed on the
+63.6px overlap before the CSS fix and passed afterward; the targeted browser and
+deterministic Configure suites passed together (11 tests).
+
+This browser integration is included in the existing `scripts/*.test.ts` suite.
+It uses an installed Chromium browser in an isolated headless profile and can be
+pointed at another installed executable with `MACROLOOM_BROWSER_PATH`. It reports
+an explicit skip when no supported browser is installed; an invalid explicit
+path fails. Deterministic Configure tests remain independent of browser setup.
+The current Windows run found Chrome and executed the regression without skips.
+The full 96-case rendering matrix was regenerated with footer text-range overlap
+checks and passed in both themes at all three rendering scales.
+
+![Pending Save at 360×300 and 200% text after the overlap fix](assets/ML-27/pending-save-enlarged.png)
+
+Follow-up `npm.cmd --prefix app run verify` passed with exit code 0 and all 14
+checks passing: 105 frontend/tooling tests (including the browser regression,
+zero skips), the unchanged Rust and Python suites, and 521 complexity checks
+across index/worktree snapshots with zero failures. Standards and Spec follow-up
+reviews have no remaining new findings; native acceptance evidence remains open.
+The follow-up result is recorded in the
+[issue validation comment](https://github.com/Dzahc/MacroLoom/issues/46#issuecomment-6404495243).
 
 ## Native observations still required
 

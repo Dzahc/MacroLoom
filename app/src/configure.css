@@ -78,6 +78,11 @@
   flex: 1;
   margin: 0;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+.configure-window footer p:not(:empty) {
+  /* Progress text gets its own row so enlarged text cannot paint over actions. */
+  flex-basis: 100%;
 }
 .configure-window footer button,
 .configure-sample button {
