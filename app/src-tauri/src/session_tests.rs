@@ -286,6 +286,8 @@ fn interrupted_playback_feedback_waits_for_held_input_cleanup() {
     session.play().expect("Play held key");
     let failed = completed(&session);
     assert!(failed.cleanup_failed);
+    assert!(failed.message.contains(crate::session::SUSPEND_INTERRUPTED));
+    assert!(failed.message.contains(crate::session::CLEANUP_FAILED));
     assert!(!failed.message.contains(crate::session::REPLAY_INTERRUPTED));
     desktop.release_failure.store(false, Ordering::Release);
     assert_eq!(

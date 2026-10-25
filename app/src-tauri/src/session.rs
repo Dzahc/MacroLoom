@@ -35,6 +35,7 @@ pub const CLEANUP_FAILED: &str =
 pub const REPLAY_COMPLETE: &str = "Temporary playback complete.";
 pub const REPLAY_CANCELLED: &str = "Playback stopped; injected input released.";
 pub const REPLAY_INTERRUPTED: &str = "Playback interrupted by computer sleep or hibernation; injected input released. Playback will not resume.";
+pub const SUSPEND_INTERRUPTED: &str = "Session interrupted by computer sleep or hibernation.";
 pub const EXIT_PENDING: &str = "Closing; releasing native resources.";
 pub const EXIT_CLEANUP_FAILED: &str = "Cleanup failed; new sessions are blocked.";
 pub const STATUS_INTERVAL: Duration = Duration::from_millis(100);
@@ -872,15 +873,19 @@ fn update_interrupted_shortcuts(state: &mut State, availability: Availability) {
         state.message = state.terminal.clone();
     }
 }
-/// Composes completed interruption context with current feedback and transient native errors without duplicating equal messages.
+/// Composes interruption context with current feedback and transient native errors without duplicating equal messages.
 /// Native error recovery retains any unrelated actionable feedback alongside the interruption outcome.
 fn session_message(state: &State) -> String {
-    let message =
-        if state.interrupted && state.phase == Phase::Idle && state.message != state.terminal {
-            format!("{} {}", state.terminal, state.message)
-        } else {
-            state.message.clone()
-        };
+    let context = if state.phase == Phase::Stopping {
+        SUSPEND_INTERRUPTED
+    } else {
+        &state.terminal
+    };
+    let message = if state.interrupted && state.message != context {
+        format!("{context} {}", state.message)
+    } else {
+        state.message.clone()
+    };
     match &state.shortcut_error {
         Some(error) if error != &state.message => format!("{message} {error}"),
         _ => message,
