@@ -115,6 +115,37 @@ passed again with `--features native-checks --all-targets -- -D warnings`.
 Follow-up Standards review: **0 remaining actionable findings**.
 Follow-up Spec review: **0 remaining actionable findings**.
 
+## Shortcut-error feedback regression
+
+October 24, 2026, through `d04149f`: automatic native shortcut refresh errors
+are retained separately from session feedback. Previously, `Session::report`
+replaced the interruption message, and successful refresh recognized only conflict
+text, leaving the native error visible indefinitely. The snapshot now composes
+interruption context and current native errors; recovery removes only that
+transient error. Unrelated actionable feedback remains visible, and repeated
+reports do not duplicate text. Failed cleanup uses a reason-only sleep/hibernation
+explanation until held input is actually released.
+
+`cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline --lib wake_shortcut_error_preserves_the_interruption_outcome -- --nocapture`
+reproduced the reported failure before the fix: recovered feedback was
+`Injected native failure` instead of the retained interruption outcome. The
+regression now covers interrupted recording and playback. Additional tests cover
+a real committed recording outcome, unrelated errors, duplicate reporting, and
+truthful interruption feedback during failed held-input cleanup. All four
+`wake_shortcut` tests and all 35 `session::tests::` tests passed.
+
+Final `npm.cmd --prefix app run verify` — **PASS**, exit 0: 81 frontend/tooling
+tests, 115 Rust unit tests (seven interactive tests ignored), 21 Rust repository
+integration tests, 33 Python fixtures, and 1,260 function/closure checks across
+index/worktree. Formatting, type checking, lint, production build, Clippy and all
+other checks passed against refreshed `origin/develop` at `15a6c95`, with no
+complexity exceptions. Output:
+`app/.quality-output/ML-22-shortcut-feedback-verify-final.log`.
+
+Follow-up Standards and Spec reviews: **0 remaining actionable findings**.
+These are deterministic regressions; actual sleep/hibernation evidence below
+remains pending.
+
 ## Owner evidence
 
 Actual sleep and hibernation checks: **pending**.
