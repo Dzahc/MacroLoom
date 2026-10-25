@@ -416,6 +416,9 @@ impl Session {
         if !start_available(&state) || state.deferred_start {
             return Ok(None);
         }
+        if state.rename_saving && !state.shortcuts.stop {
+            return Err(STOP_UNAVAILABLE.into());
+        }
         state.deferred_start = state.rename_saving;
         state.start_requested = true;
         // Deferred starts retain the pending draft until their receipt decides its fate.

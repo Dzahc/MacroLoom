@@ -1143,3 +1143,25 @@ fn rename_arming_yields_to_an_arriving_global_record() {
     );
     session.stop().expect("Stop recording");
 }
+
+#[test]
+/// A Stop reservation conflict permits metadata saving but cannot accept an uncancellable deferred start.
+fn rename_save_rejects_deferred_starts_without_reserved_stop() {
+    let desktop = Arc::new(Desktop::default());
+    desktop.stop_conflict.store(true, Ordering::Release);
+    let session = Session::new(desktop);
+    let mut save = session
+        .begin_rename()
+        .expect("Name saving remains available");
+    assert_eq!(
+        session.start_request().err().as_deref(),
+        Some(crate::shortcuts::STOP_UNAVAILABLE)
+    );
+    assert!(
+        !session
+            .snapshot()
+            .expect("No accepted deferred start")
+            .deferred_start
+    );
+    save.finish(true).expect("Metadata save completes normally");
+}
