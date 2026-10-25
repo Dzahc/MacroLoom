@@ -186,6 +186,7 @@ struct State {
     can_record: bool,
     message: String,
     terminal: String,
+    shortcut_error: Option<String>,
     interrupted: bool,
     cleanup_failed: bool,
     close_requested: bool,
@@ -221,6 +222,7 @@ impl Default for State {
             can_record: false,
             message: READY.into(),
             terminal: READY.into(),
+            shortcut_error: None,
             interrupted: false,
             cleanup_failed: false,
             close_requested: false,
@@ -273,7 +275,7 @@ impl Session {
                 }),
             drag_move_count: state.capture.drag_moves,
             last_release: state.capture.last_release,
-            message: state.message.clone(),
+            message: session_message(&state),
             shortcuts: state.shortcuts,
             can_record: state.can_record && state.phase == Phase::Idle && !state.starting,
             can_play: state.can_record && state.phase == Phase::Idle && !state.starting,
@@ -304,10 +306,12 @@ impl Session {
         self.platform.publish(self.snapshot()?);
         Ok(())
     }
-    /// Publishes actionable command errors, including errors from global controls with no frontend caller.
+    /// Publishes actionable command errors; idle shortcut failures supplement completed interruption feedback.
     pub fn report(&self, error: String) {
         if let Ok(mut state) = self.lock() {
-            state.message = error;
+            if !state.interrupted || state.shortcut_error.as_ref() != Some(&error) {
+                state.message = error;
+            }
         }
         let _ = self.publish();
     }
@@ -329,7 +333,7 @@ impl Session {
             return Ok(());
         }
         let available = self.platform.available() && self.idle_available()?;
-        let result = self.platform.shortcuts(available, false)?;
+        let result = self.refresh_idle_shortcuts(available)?;
         let mut state = self.lock()?;
         state.shortcuts = result;
         state.can_record = available && result.stop;
@@ -337,6 +341,13 @@ impl Session {
             update_shortcut_message(&mut state, result);
         }
         Ok(())
+    }
+    /// Reconciles idle native reservations and retains their transient error independently until a successful native refresh.
+    /// Propagates failure for ordinary caller reporting without losing the prior session outcome.
+    fn refresh_idle_shortcuts(&self, record: bool) -> Result<Availability, String> {
+        let result = self.platform.shortcuts(record, false);
+        self.lock()?.shortcut_error = result.as_ref().err().cloned();
+        result
     }
     /// Rejects idle Record reservations during native confirmation or a pending close decision.
     fn idle_available(&self) -> Result<bool, String> {
@@ -394,6 +405,7 @@ impl Session {
             .checked_add(GENERATION_STEP)
             .ok_or(STATE_ERROR)?;
         state.starting = true;
+        state.shortcut_error = None;
         state.interrupted = false;
         state.can_record = false;
         state.cancel = Arc::new(AtomicBool::new(false));
@@ -855,11 +867,23 @@ fn update_interrupted_shortcuts(state: &mut State, availability: Availability) {
         None
     };
     if let Some(conflict) = conflict {
-        state.message = format!("{} {conflict}", state.terminal);
-    } else if state.message.ends_with(STOP_UNAVAILABLE)
-        || state.message.ends_with(RECORD_UNAVAILABLE)
-    {
+        state.message = conflict.into();
+    } else if state.message == STOP_UNAVAILABLE || state.message == RECORD_UNAVAILABLE {
         state.message = state.terminal.clone();
+    }
+}
+/// Composes completed interruption context with current feedback and transient native errors without duplicating equal messages.
+/// Native error recovery retains any unrelated actionable feedback alongside the interruption outcome.
+fn session_message(state: &State) -> String {
+    let message =
+        if state.interrupted && state.phase == Phase::Idle && state.message != state.terminal {
+            format!("{} {}", state.terminal, state.message)
+        } else {
+            state.message.clone()
+        };
+    match &state.shortcut_error {
+        Some(error) if error != &state.message => format!("{message} {error}"),
+        _ => message,
     }
 }
 /// Validates externally supplied owner IDs before they can acquire or release native operation ownership.

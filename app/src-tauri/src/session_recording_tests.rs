@@ -78,6 +78,7 @@ struct Desktop {
     folder: Folder,
     fail_save: AtomicBool,
     fail_start: AtomicBool,
+    shortcut_failure: AtomicBool,
     changed: AtomicBool,
     compact: AtomicBool,
     initial: Vec<EventKind>,
@@ -91,6 +92,7 @@ impl Desktop {
             folder: Folder::new(),
             fail_save: AtomicBool::new(false),
             fail_start: AtomicBool::new(false),
+            shortcut_failure: AtomicBool::new(false),
             changed: AtomicBool::new(false),
             compact: AtomicBool::new(false),
             initial,
@@ -151,8 +153,11 @@ impl Platform for Desktop {
     fn available(&self) -> bool {
         true
     }
-    /// Makes both fixed shortcuts available without registering anything with Windows.
+    /// Makes both shortcuts available or reports a controlled native failure without touching Windows registrations.
     fn shortcuts(&self, _: bool, _: bool) -> Result<Availability, String> {
+        if self.shortcut_failure.load(Ordering::Acquire) {
+            return Err(FAILURE.into());
+        }
         Ok(Availability {
             record: true,
             stop: true,
@@ -177,6 +182,27 @@ impl Platform for Desktop {
     }
     /// Tests query the same durable snapshots that disconnected native clients can query.
     fn publish(&self, _: Snapshot) {}
+}
+
+#[test]
+/// A committed interrupted recording retains its save outcome across native shortcut failure and recovery after wake.
+fn wake_shortcut_error_retains_the_saved_interruption_outcome() {
+    let desktop = Desktop::new(vec![test_support::key(true)]);
+    let session = Session::new(desktop.clone());
+    session.record().expect("Record before suspend");
+    let interrupted = session.suspend().expect("Save interrupted recording");
+    let outcome = interrupted.recording_outcome.expect("Committed outcome");
+    assert!(outcome.success);
+    desktop.shortcut_failure.store(true, Ordering::Release);
+    session.report(session.refresh().err().expect("Automatic shortcut error"));
+    let failed = session.snapshot().expect("Outcome and native error");
+    assert!(failed.message.contains(&outcome.message));
+    assert!(failed.message.contains(FAILURE));
+    desktop.shortcut_failure.store(false, Ordering::Release);
+    assert_eq!(
+        session.refresh().expect("Native recovery").message,
+        outcome.message
+    );
 }
 
 #[test]

@@ -11,6 +11,7 @@ const CONFIRMATION_OWNER: &str = "session-test-owner";
 const TEST_KEY: u16 = 0x41;
 const TEST_SCAN: u16 = 0x1e;
 const REJECTED: &str = "Injected native failure";
+const OTHER_FAILURE: &str = "Different command failure";
 const TEST_DEADLINE: Duration = Duration::from_secs(2);
 const TEST_POLL: Duration = Duration::from_millis(1);
 const STARTUP_CANCEL_CONTROLS: [ControlRequest; 2] =
@@ -216,6 +217,102 @@ fn wake_shortcut_conflict_preserves_the_interruption_banner() {
         session.refresh().expect("Availability recovers").message,
         interrupted.message
     );
+}
+
+#[test]
+/// Automatic native shortcut errors must supplement the interruption outcome and disappear after native recovery.
+fn wake_shortcut_error_preserves_the_interruption_outcome() {
+    for playback in [false, true] {
+        let desktop = Arc::new(Desktop::default());
+        let session = Session::new(desktop.clone());
+        session.record().expect("Record before suspend");
+        session.capture(key(true));
+        let interrupted = if playback {
+            session.stop().expect("Retain playback capture");
+            let weak = Arc::downgrade(&session);
+            *desktop.on_inject.lock().expect("Suspend fixture") = Some(Box::new(
+                // Signals suspension while the actual playback worker still owns dispatch and held-input cleanup.
+                move || {
+                    weak.upgrade()
+                        .expect("Playback owner")
+                        .signal_stop(true)
+                        .expect("Suspend playback")
+                },
+            ));
+            session.play().expect("Start playback");
+            completed(&session)
+        } else {
+            session.suspend().expect("Interrupt recording")
+        };
+        desktop.shortcut_failure.store(true, Ordering::Release);
+        let error = session
+            .refresh()
+            .err()
+            .expect("Automatic shortcut refresh fails");
+        session.report(error.clone());
+        let failed = session.snapshot().expect("Reported native error");
+        session.report(error);
+        assert_eq!(
+            session.snapshot().expect("Repeated report").message,
+            failed.message
+        );
+        desktop.shortcut_failure.store(false, Ordering::Release);
+        let recovered = session.refresh().expect("Native shortcut error clears");
+        assert_eq!(recovered.message, interrupted.message);
+        assert!(failed.message.contains(&interrupted.message));
+        assert!(failed.message.contains(REJECTED));
+    }
+}
+
+#[test]
+/// Interruption feedback must not claim injected input was released while cleanup still retains failed holds.
+fn interrupted_playback_feedback_waits_for_held_input_cleanup() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    session.record().expect("Record held key");
+    session.capture(key(true));
+    session.stop().expect("Retain capture");
+    desktop.release_failure.store(true, Ordering::Release);
+    let weak = Arc::downgrade(&session);
+    *desktop.on_inject.lock().expect("Suspend fixture") = Some(Box::new(
+        // Interrupts after successful key-down while the worker still owns release responsibility.
+        move || {
+            weak.upgrade()
+                .expect("Playback owner")
+                .signal_stop(true)
+                .expect("Suspend playback")
+        },
+    ));
+    session.play().expect("Play held key");
+    let failed = completed(&session);
+    assert!(failed.cleanup_failed);
+    assert!(!failed.message.contains(crate::session::REPLAY_INTERRUPTED));
+    desktop.release_failure.store(false, Ordering::Release);
+    assert_eq!(
+        session.stop().expect("Retry releases hold").message,
+        crate::session::REPLAY_INTERRUPTED
+    );
+}
+
+#[test]
+/// Recovering native reservations removes their transient error without erasing other actionable feedback or sleep context.
+fn wake_shortcut_recovery_preserves_unrelated_feedback() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    session.record().expect("Record");
+    session.capture(key(true));
+    let interrupted = session.suspend().expect("Interrupt recording");
+    desktop.shortcut_failure.store(true, Ordering::Release);
+    session.report(session.refresh().err().expect("Native failure"));
+    session.report(OTHER_FAILURE.into());
+    let failed = session.snapshot().expect("Both errors");
+    assert!(failed.message.contains(REJECTED));
+    assert!(failed.message.contains(OTHER_FAILURE));
+    desktop.shortcut_failure.store(false, Ordering::Release);
+    let recovered = session.refresh().expect("Native recovery");
+    assert!(recovered.message.contains(&interrupted.message));
+    assert!(recovered.message.contains(OTHER_FAILURE));
+    assert!(!recovered.message.contains(REJECTED));
 }
 
 #[test]
