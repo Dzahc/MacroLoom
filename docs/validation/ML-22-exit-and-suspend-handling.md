@@ -146,6 +146,39 @@ Follow-up Standards and Spec reviews: **0 remaining actionable findings**.
 These are deterministic regressions; actual sleep/hibernation evidence below
 remains pending.
 
+## Suspension during rejected injection
+
+October 24, 2026, through `58f3cf1`: suspension feedback now has its own retained
+context instead of borrowing the mutable terminal outcome. A native injection
+failure may update playback's terminal failure without replacing the suspension
+explanation. Recording save receipts refresh the retained recording outcome;
+accepted new work and explicit Discard/Discard and exit clear that context.
+Shortcut availability updates now use one shared policy.
+
+`cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline --lib suspend_during_rejected_injection_preserves_interruption_context -- --nocapture`
+reproduced the reported race before the fix: after cleanup reached Idle, feedback
+was only `Playback failed: Simulated native rejection`. The fixture signals
+suspend inside the external injection call before returning failure. It now
+passes with both immediate cleanup and failed cleanup followed by Retry, retains
+the suspension explanation and native failure after wake refresh, releases the
+accepted owned key, and dispatches no subsequent ordinary input. A real-repository
+regression also checks that explicit discard acknowledges the retained context.
+All 67 Session tests passed; the four shortcut-feedback regressions passed after
+the shared-policy cleanup.
+
+Final `npm.cmd --prefix app run verify` — **PASS**, exit 0, against refreshed
+`origin/develop` at `15a6c95`: 81 frontend/tooling tests, 117 Rust unit tests
+(seven interactive tests ignored), 21 Rust repository integration tests, 33 Python
+fixtures, and 1,268 function/closure checks across index/worktree. Formatting,
+type checking, lint, production build, Clippy, and all other checks passed with
+no complexity exceptions. Output:
+`app/.quality-output/ML-22-injection-suspend-verify-final.log`.
+
+Final Standards and Spec reviews through `58f3cf1`: **0 remaining findings**.
+The final Spec follow-up resumed after the usage-limit interruption; its review
+and the completed verification result were checked before recording completion.
+Actual sleep/hibernation evidence remains pending below.
+
 ## Owner evidence
 
 Actual sleep and hibernation checks: **pending**.
