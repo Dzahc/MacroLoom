@@ -1021,6 +1021,13 @@ fn rename_wait_exposes_stop_and_cancels_start() {
     let session = Session::new(desktop.clone());
     session.refresh().expect("Initial availability");
     let mut save = session.begin_rename().expect("Begin rename");
+    assert!(
+        desktop
+            .registered
+            .lock()
+            .expect("Stop armed before deferred arrival")
+            .stop
+    );
     let initial_sequence = session
         .snapshot()
         .expect("Before queued start")
@@ -1105,4 +1112,34 @@ fn rename_close_waits_and_failure_cancels_exit() {
         );
         assert_eq!(session.finish_exit().expect("Exit eligibility"), succeeds);
     }
+}
+
+#[test]
+/// A Record received while native Stop is being armed wins before a name write can be accepted.
+fn rename_arming_yields_to_an_arriving_global_record() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    let received = Arc::new(Mutex::new(None));
+    let observed = received.clone();
+    let owner = Arc::downgrade(&session);
+    *desktop.on_shortcuts.lock().expect("Arming callback") = Some(Box::new(move || {
+        let session = owner.upgrade().expect("Live session during native arming");
+        *observed.lock().expect("Received start") =
+            session.start_request().expect("Record arrival");
+    }));
+    assert!(session.begin_rename().is_err());
+    assert!(!session.snapshot().expect("No accepted Save").rename_saving);
+    let request = received
+        .lock()
+        .expect("Captured start")
+        .take()
+        .expect("Priority Record");
+    assert_eq!(
+        session
+            .record_requested(request)
+            .expect("Start after arming")
+            .phase,
+        Phase::Recording
+    );
+    session.stop().expect("Stop recording");
 }

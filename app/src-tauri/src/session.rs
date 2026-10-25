@@ -176,6 +176,7 @@ struct State {
     phase: Phase,
     generation: u64,
     starting: bool,
+    start_requested: bool,
     deleting: bool,
     rename_saving: bool,
     deferred_start: bool,
@@ -216,6 +217,7 @@ impl Default for State {
             phase: Phase::Idle,
             generation: 0,
             starting: false,
+            start_requested: false,
             deleting: false,
             rename_saving: false,
             deferred_start: false,
@@ -369,7 +371,9 @@ impl Session {
     /// Reconciles idle native reservations and retains their transient error independently until a successful native refresh.
     /// Propagates failure for ordinary caller reporting without losing the prior session outcome.
     fn refresh_idle_shortcuts(&self, record: bool) -> Result<Availability, String> {
-        let waiting = self.lock()?.deferred_start;
+        let state = self.lock()?;
+        let waiting = state.rename_saving || state.deferred_start;
+        drop(state);
         let result = self.platform.shortcuts(record, waiting);
         self.lock()?.shortcut_error = result.as_ref().err().cloned();
         result
@@ -413,6 +417,7 @@ impl Session {
             return Ok(None);
         }
         state.deferred_start = state.rename_saving;
+        state.start_requested = true;
         // Deferred starts retain the pending draft until their receipt decides its fate.
         // Stop/Close may cancel them before any frontend snapshot is delivered.
         if !state.rename_saving {
@@ -431,6 +436,7 @@ impl Session {
         if request.generation != state.generation {
             return Ok(false);
         }
+        state.start_requested = false;
         if !start_available(&state) {
             return Err(ACTIVE_SESSION.into());
         }
@@ -588,6 +594,7 @@ impl Session {
     pub(crate) fn stop_request(&self, interrupted: bool) -> Result<StopRequest, String> {
         let mut state = self.lock()?;
         state.deferred_start = false;
+        state.start_requested = false;
         self.rename_ready.notify_all();
         let request = StopRequest {
             generation: state.generation,

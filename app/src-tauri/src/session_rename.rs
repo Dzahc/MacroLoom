@@ -10,12 +10,20 @@ impl Session {
     /// Claims a name-only save while idle; drafting itself never reserves the native session boundary.
     pub(crate) fn begin_rename(self: &Arc<Self>) -> Result<RenameGuard, String> {
         let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
-        let mut state = self.lock()?;
-        if !start_available(&state) || state.rename_saving || state.deferred_start {
+        if !rename_available(&*self.lock()?) {
             return Err(ACTIVE_SESSION.into());
         }
         let reservation = self.platform.reserve()?;
+        // Arm Stop before any deferred request can be accepted. Never hold the
+        // session mutex while waiting for the native hook owner's acknowledgement.
+        let shortcuts = self.platform.shortcuts(true, true)?;
+        let mut state = self.lock()?;
+        if !rename_available(&state) {
+            return Err(ACTIVE_SESSION.into());
+        }
         state.rename_saving = true;
+        state.shortcuts = shortcuts;
+        state.can_record = shortcuts.stop;
         drop(state);
         Ok(RenameGuard {
             session: self.clone(),
@@ -25,7 +33,9 @@ impl Session {
 
     /// Waits only on a command worker until Save resolves or Stop/Close invalidates this start generation.
     pub(super) fn wait_for_rename(&self, request: StartRequest) -> Result<(), String> {
-        self.prepare_rename_wait()?;
+        if self.lock()?.rename_saving {
+            self.publish()?;
+        }
         let mut state = self.lock()?;
         while state.rename_saving
             && request.generation == state.generation
@@ -35,17 +45,14 @@ impl Session {
         }
         Ok(())
     }
-    /// Registers pending-start Stop on its native owner before a command worker begins waiting.
-    fn prepare_rename_wait(&self) -> Result<(), String> {
-        if !self.lock()?.rename_saving {
-            return Ok(());
-        }
-        if let Err(error) = self.idle_shortcuts() {
-            self.signal_stop(false)?;
-            return Err(error);
-        }
-        self.publish()
-    }
+}
+
+/// Rejects writes when a previously received start owns priority, including while native Stop is being armed.
+fn rename_available(state: &State) -> bool {
+    start_available(state)
+        && !state.rename_saving
+        && !state.deferred_start
+        && !state.start_requested
 }
 impl RenameGuard {
     /// Resolves Save, releases mutation ownership, and wakes starts; returns whether failure should discard the draft.

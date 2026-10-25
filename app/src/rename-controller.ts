@@ -10,6 +10,7 @@ import {
   type RenameCompletion,
   type RenameSnapshot,
   type RenameTransport,
+  type RenameStatus,
 } from './rename-contract.ts';
 import { PHASE, type MacroSummary } from './library-model.ts';
 import type { SessionSnapshot } from './session-contract.ts';
@@ -22,6 +23,7 @@ const INITIAL: RenameSnapshot = {
   error: '',
   focusId: null,
 };
+type Recovery = Readonly<{ generation: number; attemptId: number }>;
 
 /** Owns one inline draft; native receipts alone determine committed names and uncertain writes are never resubmitted. */
 export class RenameController implements RenameBinding {
@@ -33,6 +35,8 @@ export class RenameController implements RenameBinding {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private startSequence = 0;
   private restoreOnComplete = true;
+  private discardOnComplete = false;
+  private recovery: Recovery | null = null;
   private completed: (completion: RenameCompletion) => void;
   /** @param transport Native persistence boundary; construction performs no writes. @param completed Authoritative outcome subscriber. */
   constructor(
@@ -60,6 +64,7 @@ export class RenameController implements RenameBinding {
   open = (macro: MacroSummary): void => {
     if (this.state.pending) return;
     this.restoreOnComplete = true;
+    this.discardOnComplete = false;
     this.update({ ...INITIAL, draft: { macroId: macro.id, name: macro.name } });
   };
   /** @param name Untrimmed input. @returns Nothing; validation becomes visible only after Save. */
@@ -125,46 +130,74 @@ export class RenameController implements RenameBinding {
       }
       if (this.state.pending && (session.renameSaving || session.deferredStart))
         return;
-      this.update({ ...this.state, draft: null, focusId: null });
+      this.discardOnComplete = true;
     }
   }
   /** Cancels owned polling and invalidates pending IPC callbacks on unmount; accepted native writes continue safely. */
   dispose(): void {
     this.generation++;
     clearTimeout(this.timer);
+    this.recovery = null;
     this.attemptId = null;
     this.state = INITIAL;
   }
   /** @param reason Original IPC diagnostic. @param generation Mounted owner. @returns Receipt reconciliation without another write. */
   private async recover(reason: unknown, generation: number): Promise<void> {
+    if (this.attemptId === null || this.recovery) return;
+    const recovery = { generation, attemptId: this.attemptId };
+    this.recovery = recovery;
+    clearTimeout(this.timer);
     try {
       const status = await this.transport.status();
-      if (generation !== this.generation) return;
-      if (status.completion?.attemptId === this.attemptId) {
-        this.complete(status.completion);
-        return;
-      }
-      if (status.pending && status.attemptId === this.attemptId) {
-        this.poll(reason, generation);
-        return;
-      }
-      this.failed(reason);
+      if (this.ownsRecovery(recovery))
+        this.acceptStatus(status, reason, recovery);
     } catch {
-      if (generation === this.generation)
+      if (this.ownsRecovery(recovery))
         this.update({
           ...this.state,
           pending: true,
           uncertain: true,
           error: RENAME_TEXT.uncertain,
         });
+    } finally {
+      if (this.recovery === recovery) this.recovery = null;
     }
   }
-  /** @param reason Retained acknowledgement error. @param generation Current owner. @returns Nothing; schedules one disposable status query. */
-  private poll(reason: unknown, generation: number): void {
+  /** @param recovery Captured query identity. @returns Whether this mounted owner still awaits that exact attempt. */
+  private ownsRecovery(recovery: Recovery): boolean {
+    return this.recovery === recovery && this.ownsAttempt(recovery);
+  }
+  /** @param recovery Captured attempt identity. @returns Whether a delayed query/timer may still affect current work. */
+  private ownsAttempt(recovery: Recovery): boolean {
+    return (
+      recovery.generation === this.generation &&
+      recovery.attemptId === this.attemptId
+    );
+  }
+  /** @param status Native status. @param reason Original transport diagnostic. @param recovery Query owner. @returns Nothing; settles or polls only its original attempt. */
+  private acceptStatus(
+    status: RenameStatus,
+    reason: unknown,
+    recovery: Recovery,
+  ): void {
+    if (status.completion?.attemptId === recovery.attemptId) {
+      this.complete(status.completion);
+      return;
+    }
+    if (status.pending && status.attemptId === recovery.attemptId) {
+      this.poll(reason, recovery);
+      return;
+    }
+    this.failed(reason);
+  }
+  /** @param reason Retained acknowledgement error. @param recovery Current attempt. @returns Nothing; schedules one disposable status query. */
+  private poll(reason: unknown, recovery: Recovery): void {
+    clearTimeout(this.timer);
     this.update({ ...this.state, uncertain: false });
     this.timer = setTimeout(
       /** Reconciles accepted work without resubmission. */ () => {
-        void this.recover(reason, generation);
+        if (this.ownsAttempt(recovery))
+          void this.recover(reason, recovery.generation);
       },
       RENAME_POLL_MS,
     );
@@ -181,9 +214,14 @@ export class RenameController implements RenameBinding {
   }
   /** @param completion Authoritative native receipt. @returns Nothing; only a successful or explicitly discarded edit closes. */
   private complete(completion: RenameCompletion): void {
+    clearTimeout(this.timer);
     this.attemptId = null;
     this.completed(completion);
-    if (completion.result.ok || completion.discarded || !this.state.draft) {
+    if (
+      completion.result.ok ||
+      completion.discarded ||
+      this.discardOnComplete
+    ) {
       this.update({
         ...INITIAL,
         focusId:

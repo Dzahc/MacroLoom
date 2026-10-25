@@ -235,6 +235,85 @@ void test('Stop cancels a deferred start without discarding an eventual failed-s
 /** @returns Nothing before the controlled receipt promise installs its resolver. */
 function ignoreReceipt(): void {}
 
+void test('a submitted draft keeps receipt recovery accessible after an actual session starts', /** @returns Recovery remains available after a lost reply and temporary status failure. */ async () => {
+  let writes = NO_SAVE;
+  let reachable = true;
+  const controller = new RenameController({
+    /** @returns Initial status or the final saved receipt, except during the simulated outage. */
+    status: () =>
+      reachable
+        ? Promise.resolve({
+            attemptId: writes,
+            pending: false,
+            completion: writes ? SAVED : null,
+          })
+        : Promise.reject(new Error(LOST_ACK)),
+    /** @returns A reply lost after native commit and session activation. */
+    submit: () => {
+      writes++;
+      controller.observe({
+        ...INITIAL_SESSION,
+        phase: PHASE.recording,
+        startSequence: FIRST_SAVE,
+      });
+      reachable = false;
+      return Promise.reject(new Error(LOST_ACK));
+    },
+  });
+  controller.open(TARGET);
+  controller.change(NEW_NAME);
+  await controller.save();
+  assert.ok(controller.getSnapshot().uncertain);
+  assert.equal(controller.getSnapshot().draft?.name, NEW_NAME);
+  controller.observe({ ...INITIAL_SESSION, startSequence: FIRST_SAVE });
+  reachable = true;
+  await controller.save();
+  assert.equal(controller.getSnapshot().draft, null);
+  assert.equal(writes, FIRST_SAVE);
+  assert.equal(controller.getSnapshot().focusId, null);
+});
+
+void test('repeated uncertain Retry permits only one active status query', /** @returns Duplicate Retry cannot create a stale response capable of unlocking a newer save. */ async () => {
+  let writes = NO_SAVE;
+  let queryCount = NO_SAVE;
+  let retrying = false;
+  let resolveStatus: (status: RenameStatus) => void = ignoreReceipt;
+  const statusWait = new Promise<RenameStatus>(
+    /** @param resolve Controlled recovery receipt. */ (resolve) => {
+      resolveStatus = resolve;
+    },
+  );
+  const controller = new RenameController({
+    /** @returns Unavailable acknowledgement status until deliberate Retry enters the controlled query. */
+    status: () => {
+      if (retrying) {
+        queryCount++;
+        return statusWait;
+      }
+      if (writes) return Promise.reject(new Error(LOST_ACK));
+      return Promise.resolve({
+        attemptId: NO_SAVE,
+        pending: false,
+        completion: null,
+      });
+    },
+    /** @returns A lost acknowledgement of accepted work. */
+    submit: () => {
+      writes++;
+      return Promise.reject(new Error(LOST_ACK));
+    },
+  });
+  controller.open(TARGET);
+  await controller.save();
+  retrying = true;
+  const first = controller.save();
+  const repeated = controller.save();
+  assert.equal(queryCount, FIRST_SAVE);
+  resolveStatus({ attemptId: FIRST_SAVE, pending: false, completion: FAILED });
+  await Promise.all([first, repeated]);
+  assert.equal(controller.getSnapshot().pending, false);
+});
+
 void test('rename receipts update confirmed metadata once independently of Configure receipts', /** @returns Public library and toast evidence without optimistic draft updates. */ () => {
   const initial: BackendLibraryState = {
     revision: FIRST_SAVE,
