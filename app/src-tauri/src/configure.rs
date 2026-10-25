@@ -82,7 +82,7 @@ pub async fn open_configure(
     AppMode::current().require_library()?;
     let repository = library.repository()?;
     app.state::<Arc<crate::session::Session>>()
-        .reserve_editor(|| service.lock()?.reserve())?;
+        .editor_operation(|| service.lock()?.reserve())??;
     let result = tauri::async_runtime::spawn_blocking(move || {
         if repository.snapshot()?.deleting.is_some() {
             return Err(CONFIGURE_BUSY.into());
@@ -188,7 +188,10 @@ pub async fn configure_submit(
             return Ok(completed.result);
         }
     }
-    let (attempt_id, draft) = match prepare_submission(&service, draft) {
+    let submission = app
+        .state::<Arc<crate::session::Session>>()
+        .editor_operation(|| prepare_submission(&service, draft))?;
+    let (attempt_id, draft) = match submission {
         Ok(submission) => submission,
         Err(error) => return Ok(ConfigureResult::rejected(error)),
     };
@@ -370,11 +373,7 @@ fn owner_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         api.prevent_close();
         return;
     };
-    if !state.occupied {
-        return;
-    }
-    if state.pending.is_some() || state.original.is_none() {
-        state.exit_requested = true;
+    if state.defer_exit() {
         api.prevent_close();
     }
 }

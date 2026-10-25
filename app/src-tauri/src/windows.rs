@@ -73,6 +73,9 @@ const HOOK_FAILED: &str =
     "Native input capture is unavailable; Retry shortcuts or restart MacroLoom.";
 const UNREGISTER_FAILED: &str = "Could not release a global shortcut reservation.";
 const UNHOOK_FAILED: &str = "Could not release a native input hook.";
+const SHUTDOWN_UNAVAILABLE: &str = "Native shutdown was not acknowledged. Use Retry cleanup.";
+const SHUTDOWN_STOP_READY: &str = "Retry cleanup or press F8.";
+const SHUTDOWN_STOP_UNAVAILABLE: &str = "F8 is unavailable; use Retry cleanup.";
 const POWER_SUBCLASS: usize = 14;
 const POWER_HOOK_FAILED: &str = "Could not observe computer sleep notifications.";
 const COMPACT_COLLISION: &str =
@@ -934,6 +937,16 @@ struct HookRuntime {
     hooks_ready: bool,
 }
 impl HookRuntime {
+    /// Reacquires Stop independently of failed Record release; publishes actual ownership for native control dispatch.
+    fn recover_stop(&mut self) -> Result<bool, String> {
+        self.stop = update_registration(self.stop, STOP_ID, STOP_KEY, true)?;
+        self.stop_available = self.stop;
+        *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
+            record: self.record,
+            stop: self.stop,
+        };
+        Ok(self.stop)
+    }
     /// Reconciles physical reservations; errors retain actual ownership rather than pretending unregistration succeeded.
     fn apply(&mut self, record: bool, stop: bool) -> Result<Availability, String> {
         if !self.hooks_ready && (record || stop) {
@@ -1028,18 +1041,18 @@ pub fn shutdown_hooks_checked() -> Result<(), String> {
     let (reply, receive) = mpsc::sync_channel(1);
     HOOK_JOBS
         .get()
-        .ok_or(HOOK_FAILED)?
+        .ok_or(SHUTDOWN_UNAVAILABLE)?
         .send(ReservationJob {
             record: false,
             stop: false,
             shutdown: true,
             reply,
         })
-        .map_err(|_| HOOK_FAILED)?;
-    wake_hook(RESERVATION_MESSAGE)?;
+        .map_err(|_| SHUTDOWN_UNAVAILABLE)?;
+    wake_hook(RESERVATION_MESSAGE).map_err(|_| SHUTDOWN_UNAVAILABLE)?;
     receive
         .recv_timeout(HOOK_TIMEOUT)
-        .map_err(|_| HOOK_FAILED)??;
+        .map_err(|_| SHUTDOWN_UNAVAILABLE)??;
     Ok(())
 }
 /// Reports whether this application owns a session hook service, including an already acknowledged shutdown.
@@ -1129,15 +1142,16 @@ fn pump_hook_message(
                 .apply(job.record, job.stop)
                 .and_then(|availability| {
                     if job.shutdown {
-                        if let Err(error) = handles.release() {
-                            let _ = runtime.apply(false, true);
-                            return Err(error);
-                        }
+                        handles.release()?;
                         runtime.hooks_ready = false;
                         HOOK_THREAD.store(0, Ordering::Release);
                     }
                     Ok(availability)
                 });
+            let result = match result {
+                Err(error) if job.shutdown => Err(shutdown_recovery(runtime, error)),
+                result => result,
+            };
             let stopped = job.shutdown && result.is_ok();
             let _ = job.reply.send(result);
             if stopped {
@@ -1152,6 +1166,14 @@ fn pump_hook_message(
         }
     }
     false
+}
+/// Makes every shutdown failure actionable, naming F8 only when actual reservation recovery succeeded.
+fn shutdown_recovery(runtime: &mut HookRuntime, error: String) -> String {
+    let guidance = match runtime.recover_stop() {
+        Ok(true) => SHUTDOWN_STOP_READY,
+        _ => SHUTDOWN_STOP_UNAVAILABLE,
+    };
+    format!("{error} {guidance}")
 }
 /// Queues a control without waiting for a frontend callback; Stop freezes/cancels input before worker delivery.
 fn queue_control(control: ControlJob) {
@@ -1809,6 +1831,66 @@ mod tests {
         );
         assert!(normalize_pixel(i32::MIN, VIRTUAL_ORIGIN, VIRTUAL_SPAN).is_err());
     }
+    #[test]
+    #[ignore = "Requires an interactive Windows desktop with F8/F9 initially unreserved"]
+    /// Lost native F9 ownership makes shutdown fail; the real shutdown-job boundary still reserves F8 for recovery.
+    fn native_shutdown_reservation_failure_restores_stop() {
+        let mut runtime = HookRuntime {
+            record: false,
+            stop: false,
+            stop_available: false,
+            hooks_ready: true,
+        };
+        assert!(
+            runtime
+                .apply(true, false)
+                .expect("Reserve fixture F9")
+                .record
+        );
+        update_registration(true, RECORD_ID, RECORD_KEY, false)
+            .expect("Simulate lost OS reservation");
+        let _stop_cleanup = TestReservation(STOP_ID);
+        let (jobs, receive_jobs) = mpsc::channel();
+        let (reply, receive_reply) = mpsc::sync_channel(1);
+        jobs.send(ReservationJob {
+            record: false,
+            stop: false,
+            shutdown: true,
+            reply,
+        })
+        .expect("Queue shutdown");
+        // SAFETY: zero initializes writable by-value MSG storage; only its initialized message field is inspected here.
+        let mut message: MSG = unsafe { std::mem::zeroed() };
+        message.message = RESERVATION_MESSAGE;
+        let mut handles = HookHandles {
+            keyboard: null_mut(),
+            mouse: null_mut(),
+        };
+        assert!(!pump_hook_message(
+            &message,
+            &receive_jobs,
+            &mut runtime,
+            &mut handles
+        ));
+        assert!(receive_reply
+            .recv_timeout(HOOK_TIMEOUT)
+            .expect("Shutdown acknowledgement")
+            .is_err());
+        assert!(
+            runtime.stop,
+            "Reservation failure must preserve F8 recovery"
+        );
+        let competing = std::thread::spawn(|| {
+            let acquired =
+                update_registration(false, STOP_ID, STOP_KEY, true).expect("Competing F8 check");
+            let _reservation = acquired.then_some(TestReservation(STOP_ID));
+            acquired
+        })
+        .join()
+        .expect("Competing owner");
+        assert!(!competing, "Recovery owns the real F8 reservation");
+    }
+
     #[test]
     #[ignore = "Requires an interactive Windows desktop with F8/F9 initially unreserved"]
     /// Real hooks and both shortcut reservations are acknowledged as released before another thread can acquire them.

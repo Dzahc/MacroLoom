@@ -2,22 +2,26 @@
 use super::*;
 
 impl Session {
-    /// Reserves an editor atomically against Close/start and acknowledges interruption after successful reservation.
+    /// Gates editor creation/submission atomically against Close/start, retaining the editor's typed validation result.
     /// The callback may only update the short-lived editor interlock, never perform disk/UI work or reenter Session.
-    pub fn reserve_editor(
+    /// Successful actions acknowledge interruption; outer errors reject ownership before executing the callback.
+    pub fn editor_operation<R, E>(
         &self,
-        reserve: impl FnOnce() -> Result<(), String>,
-    ) -> Result<(), String> {
+        operation: impl FnOnce() -> Result<R, E>,
+    ) -> Result<Result<R, E>, String> {
         let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
         let mut state = self.lock()?;
         if !start_available(&state) {
             return Err(ACTIVE_SESSION.into());
         }
-        reserve()?;
-        acknowledge_interruption(&mut state);
-        state.can_record = false;
+        let result = operation();
+        if result.is_ok() {
+            acknowledge_interruption(&mut state);
+            state.can_record = false;
+        }
         drop(state);
-        self.publish()
+        self.publish()?;
+        Ok(result)
     }
     /// Attempts final native teardown only after all session/mutation work and saving completed; failure waits for explicit Retry/F8.
     /// Returns true only when exit is safe. Never blocks a UI callback: callers use a worker.
@@ -29,7 +33,7 @@ impl Session {
             return Ok(false);
         }
         if let Err(error) = self.platform.shutdown() {
-            self.cleanup_error(format!("{CLEANUP_FAILED} {error}"))?;
+            self.cleanup_error(format!("{EXIT_CLEANUP_FAILED} {error}"))?;
             self.publish()?;
             return Ok(false);
         }

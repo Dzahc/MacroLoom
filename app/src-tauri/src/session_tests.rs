@@ -226,7 +226,8 @@ fn editor_reservation_acknowledges_interruption_and_cannot_race_exit() {
     session.capture(key(true));
     session.suspend().expect("Interrupt");
     session
-        .reserve_editor(|| Ok(()))
+        .editor_operation(|| Ok::<(), String>(()))
+        .expect("Editor ownership")
         .expect("Deliberate editor operation");
     assert_eq!(
         session
@@ -237,8 +238,20 @@ fn editor_reservation_acknowledges_interruption_and_cannot_race_exit() {
     );
     session.request_close().expect("Close requested");
     assert!(session
-        .reserve_editor(|| panic!("Closing must reject before editor effects"))
+        .editor_operation::<(), String>(|| panic!("Closing must reject before editor effects"))
         .is_err());
+}
+
+#[test]
+/// An already open editor cannot accept a new property save after main Close has won the session's exit gate.
+fn accepted_close_fences_editor_submissions() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    session
+        .editor_operation(|| Ok::<(), String>(()))
+        .expect("Editor ownership")
+        .expect("Open editor");
+    session.request_close().expect("Accept main Close");
+    assert!(session.editor_operation(|| Ok::<(), String>(())).is_err());
 }
 
 #[test]

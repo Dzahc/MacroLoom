@@ -81,11 +81,7 @@ impl Platform for NativePlatform {
     fn defer_close(&self) -> Result<bool, String> {
         let service = self.app.state::<ConfigureService>();
         let mut state = service.lock()?;
-        let deferred = state.occupied && (state.pending.is_some() || state.original.is_none());
-        if deferred {
-            state.exit_requested = true;
-        }
-        Ok(deferred)
+        Ok(state.defer_exit())
     }
     /// Waits on the worker for the hook owner's acknowledged release before permitting application exit.
     fn shutdown(&self) -> Result<(), String> {

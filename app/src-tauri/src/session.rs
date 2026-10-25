@@ -36,6 +36,7 @@ pub const REPLAY_COMPLETE: &str = "Temporary playback complete.";
 pub const REPLAY_CANCELLED: &str = "Playback stopped; injected input released.";
 pub const REPLAY_INTERRUPTED: &str = "Playback interrupted by computer sleep or hibernation; injected input released. Playback will not resume.";
 pub const EXIT_PENDING: &str = "Closing; releasing native resources.";
+pub const EXIT_CLEANUP_FAILED: &str = "Cleanup failed; new sessions are blocked.";
 pub const STATUS_INTERVAL: Duration = Duration::from_millis(100);
 const CONFIRMATION_OWNER_MAX: usize = 64;
 const INVALID_CONFIRMATION_OWNER: &str = "Invalid confirmation owner";

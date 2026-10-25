@@ -16,7 +16,6 @@ const BANNER_OPEN = '<section class="library-banner"';
 const BANNER_CLOSE = '</section>';
 const CONTROLS_ENTRY = 'src/session-controls.tsx';
 const VIEW_ENTRY = 'src/library-view.tsx';
-const RETRY_AND_EXIT = 'Retry and exit';
 let controls: typeof import('../src/session-controls.tsx');
 let view: typeof import('../src/library-view.tsx');
 
@@ -133,7 +132,7 @@ void test('close save failure offers explicit exit recovery choices', () => {
   const markup = renderToStaticMarkup(
     createElement(controls.SessionControls, { snapshot, controller }),
   );
-  assert.match(markup, new RegExp(RETRY_AND_EXIT));
+  assert.match(markup, new RegExp(SESSION_TEXT.retryExit));
   assert.match(markup, new RegExp(SESSION_TEXT.keepOpen));
   assert.match(markup, new RegExp(SESSION_TEXT.discard));
   assert.doesNotMatch(markup, new RegExp(SESSION_TEXT.discardRecording));
