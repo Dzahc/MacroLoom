@@ -22,7 +22,7 @@ export function RenamePencil({
   const reason = renamePencilReason(snapshot, macroId, editorAvailable);
   const disabled = Boolean(reason);
   return (
-    <span className="macro-rename-pencil" title={reason || undefined}>
+    <span className="macro-rename-pencil" title={reason || LABEL.rename}>
       <button
         type="button"
         className="macro-rename-button"

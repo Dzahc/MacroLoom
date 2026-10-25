@@ -97,7 +97,7 @@
 }
 
 .macro-row.selected:hover .macro-rename-pencil,
-.macro-row.selected:focus-within .macro-rename-pencil {
+.macro-row.selected:has(:focus-visible) .macro-rename-pencil {
   opacity: 1;
   pointer-events: auto;
 }

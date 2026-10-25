@@ -481,5 +481,9 @@ void test('disabled-pencil tooltip belongs only to the icon hover target', () =>
   assert.match(pencil, /\sdisabled=/);
   assert.doesNotMatch(pencil, /title=|tabindex=/);
   const enabled = render(snapshot({ selectedId: SELECTED.id }), pencilEditor());
-  assert.match(enabled, /<span class="macro-rename-pencil">/);
+  assert.ok(
+    enabled.includes(
+      `<span class="macro-rename-pencil" title="${LABEL.rename}">`,
+    ),
+  );
 });

@@ -22,7 +22,7 @@ No browser or native computer surface was connected in this session, so interact
 
 - `app/scripts/rename-pencil.test.ts` covers explicit selected-target activation, loading exclusion, and disabled explanations for sessions, saves, dialogs, deletion, unavailable storage, and a missing editor owner.
 - `app/scripts/library.test.ts` covers one pencil on the selected row, reserved slots across all normal rows, independent sibling buttons, preserved selection during deletion, native disabled semantics, and reason tooltips restricted to the non-focusable icon hover target.
-- Interactive Chrome access was attempted for this extension, but app access approval timed out. Hover/focus behavior, tooltip timing, and minimum-width visual layout remain manual checks. Check selected versus unselected rows, stable name/duration positions, keyboard Tab activation, and that double-clicking the pencil never starts playback.
+- Interactive Chrome access was attempted for this extension, but app access approval timed out. Hover/focus behavior, tooltip timing, and minimum-width visual layout remain manual checks. Check selected versus unselected rows, stable name/duration positions, keyboard Tab activation, and that double-clicking the pencil never starts playback. After mouse selection, moving the pointer away must hide the pencil; keyboard-visible focus must reveal it. The enabled Rename tooltip and disabled-reason tooltip belong only to the icon hover target.
 - Completion verification and the separate Standards/Spec reviews for this extension are recorded after the final gate below.
 
 ## Completion gate
