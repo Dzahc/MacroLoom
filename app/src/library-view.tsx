@@ -339,6 +339,7 @@ export function LibraryView(props: ViewProps) {
   const previousAttempt = useRef<DeleteConfirmation | null>(null);
   const suppressDismissalGesture = useRef(false);
   const scrollPosition = useRef(0);
+  const panelScrollPosition = useRef(0);
   const compact = isCompactView(props.snapshot);
   const renameFocus = props.rename?.snapshot.focusId;
   const takeRenameFocus = props.rename?.takeFocus;
@@ -372,7 +373,12 @@ export function LibraryView(props: ViewProps) {
     /** Observes external layout measurements and restores list scroll without activating controls. */
     () => {
       if (!owner.current) return;
-      if (!compact) restoreLibraryScroll(owner.current, scrollPosition.current);
+      if (!compact)
+        restoreLibraryScroll(
+          owner.current,
+          scrollPosition.current,
+          panelScrollPosition.current,
+        );
       if (onLayout)
         return observeCompactLayout(owner.current, compact, onLayout);
     },
@@ -504,15 +510,15 @@ export function LibraryView(props: ViewProps) {
       onClickCapture={suppressFollowingClicks}
       onDoubleClickCapture={suppressFollowingClicks}
       onScrollCapture={
-        /** @param event Library scroll event. @returns Nothing; retains full-list position independently of compact layout. */
+        /** @param event Library scroll event. @returns Nothing; retains both full-view scroll surfaces independently of compact layout. */
         (event) => {
           setMenu(null);
-          if (
-            !compact &&
-            event.target instanceof HTMLElement &&
-            event.target.classList.contains('macro-list')
-          )
-            scrollPosition.current = event.target.scrollTop;
+          if (!compact && event.target instanceof HTMLElement) {
+            if (event.target.classList.contains('macro-list'))
+              scrollPosition.current = event.target.scrollTop;
+            if (event.target === owner.current)
+              panelScrollPosition.current = event.target.scrollTop;
+          }
         }
       }
     >

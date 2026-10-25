@@ -35,8 +35,7 @@ export const SESSION_TEXT = {
     'F9 Record is unavailable; use the Record button or Retry shortcuts.',
   f8Conflict:
     'F8 Stop is unavailable. Close the application using it, then Retry shortcuts.',
-  playbackGuidance:
-    'Playback shares the Windows cursor and keyboard focus. Record a click into the target before typing; keep its window in the recorded position. Manual input can interfere.',
+  playbackGuidance: 'Playback uses your cursor and keyboard',
   retryRecording: 'Retry save',
   retryExit: 'Retry and exit',
   discardRecording: 'Discard recording',

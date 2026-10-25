@@ -12,6 +12,16 @@
   --hover: #f0f3f8;
   --danger: #b02b39;
   --success: #216843;
+  /* Density tokens at a 16px root: 4/6/8/12px spacing, 36px controls,
+     and 18px toolbar icons. Rem units retain text scaling; typography is unchanged. */
+  --space-label: 0.25rem;
+  --space-control: 0.375rem;
+  --space-inline: 0.5rem;
+  --space-panel: 0.75rem;
+  --control-size: 2.25rem;
+  --toolbar-icon-size: 1.125rem;
+  /* Reserve one row, its heading, and list padding when small windows need scrolling. */
+  --library-min-height: calc(var(--control-size) + 3rem);
   color: var(--text);
   background: var(--background);
 }
@@ -72,27 +82,34 @@ svg {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
-  padding: 1rem 1.25rem 1.25rem;
+  gap: var(--space-panel);
+  padding: var(--space-panel);
+}
+.library-window:not(.compact) {
+  overflow-y: auto;
 }
 .library-toolbar {
   position: relative;
   z-index: 3;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-control);
   flex-shrink: 0;
 }
 .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.75rem;
-  min-height: 2.75rem;
-  padding: 0.6rem;
+  width: var(--control-size);
+  min-height: var(--control-size);
+  padding: var(--space-control);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--surface);
+}
+.library-toolbar svg {
+  width: var(--toolbar-icon-size);
+  height: var(--toolbar-icon-size);
 }
 .icon-button:hover:not(:disabled) {
   background: var(--hover);
@@ -102,16 +119,16 @@ svg {
   color: var(--danger);
 }
 .library-toolbar .action-configure {
-  margin-left: 0.5rem;
+  margin-left: var(--space-control);
 }
 .library-banner {
   display: flex;
   align-items: flex-start;
-  gap: 0.65rem;
+  gap: var(--space-inline);
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: 0.5rem;
-  padding: 0.8rem 0.9rem;
+  padding: var(--space-inline) var(--space-panel);
   flex-shrink: 0;
 }
 .library-banner strong {
@@ -122,7 +139,7 @@ svg {
 }
 .library-banner div > span {
   display: block;
-  margin-top: 0.25rem;
+  margin-top: var(--space-label);
   color: var(--muted);
   font-size: 0.75rem;
 }
@@ -134,11 +151,17 @@ svg {
   display: none;
 }
 .session-controls p {
+  margin: var(--space-inline) 0 0;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 .session-controls button {
-  margin: 0.25rem 0.4rem 0 0;
+  min-height: var(--control-size);
+  margin: var(--space-label) var(--space-control) 0 0;
+  padding: var(--space-control) var(--space-inline);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--surface);
 }
 .library-window.compact {
   flex: none;
@@ -199,14 +222,14 @@ svg {
 .macro-library {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: var(--library-min-height);
   flex: 1;
 }
 .library-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.25rem 0 0.65rem;
+  padding: var(--space-label) 0 var(--space-inline);
 }
 .library-heading h1 {
   font-size: 0.8rem;
@@ -232,14 +255,15 @@ svg {
   margin-top: 0.1rem;
 }
 .macro-row {
-  --rename-pencil-size: 1.5rem;
+  --rename-pencil-size: var(--control-size);
   position: relative;
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--rename-pencil-size) max-content;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
+  min-height: var(--control-size);
+  gap: var(--space-control);
+  padding: 0 var(--space-inline);
   border: 1px solid transparent;
   border-radius: 0.3rem;
   background: transparent;
@@ -275,7 +299,7 @@ svg {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding: var(--space-panel);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--surface);
@@ -290,7 +314,7 @@ svg {
 .macro-menu {
   position: fixed;
   z-index: 10;
-  padding: 0.3rem;
+  padding: var(--space-label);
   min-width: 11rem;
   max-width: calc(100vw - 1rem);
   background: var(--surface);
@@ -301,9 +325,10 @@ svg {
 .macro-menu button {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
+  gap: var(--space-inline);
   width: 100%;
-  padding: 0.65rem;
+  min-height: var(--control-size);
+  padding: var(--space-control) var(--space-inline);
   background: transparent;
   border: 0;
   border-radius: 0.25rem;
@@ -316,7 +341,7 @@ svg {
 .delete-dialog {
   width: min(28rem, calc(100vw - 2rem));
   max-height: calc(100dvh - 2rem);
-  padding: 1.25rem;
+  padding: var(--space-panel);
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 0.65rem;
@@ -333,14 +358,14 @@ svg {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: var(--space-panel);
 }
 .delete-dialog h2 {
   margin: 0;
   font-size: 1.1rem;
 }
 .delete-dialog p {
-  margin: 1rem 0 1.5rem;
+  margin: var(--space-panel) 0;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -348,7 +373,9 @@ svg {
   justify-content: flex-end;
 }
 .delete-dialog button {
-  padding: 0.55rem 1rem;
+  min-width: var(--control-size);
+  min-height: var(--control-size);
+  padding: var(--space-control) var(--space-inline);
   border: 1px solid var(--border);
   border-radius: 0.35rem;
   background: var(--surface);
@@ -361,7 +388,7 @@ svg {
   outline-offset: 3px;
 }
 .delete-dialog .delete-dialog-close {
-  padding: 0.25rem 0.65rem;
+  padding: var(--space-label) var(--space-inline);
   font-size: 1.25rem;
 }
 .delete-dialog .delete-confirm {
@@ -417,6 +444,8 @@ svg {
   border: 0;
   width: 2.25rem;
   min-height: 2.25rem;
+  /* Preserve the existing toast dismiss button independently of toolbar density. */
+  padding: 0.6rem;
 }
 .sr-only {
   position: absolute;

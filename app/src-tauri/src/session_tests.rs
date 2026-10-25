@@ -11,6 +11,7 @@ const CONFIRMATION_OWNER: &str = "session-test-owner";
 const TEST_KEY: u16 = 0x41;
 const TEST_SCAN: u16 = 0x1e;
 const REJECTED: &str = "Injected native failure";
+const EXPECTED_IDLE_MESSAGE: &str = "Ready";
 const OTHER_FAILURE: &str = "Different command failure";
 const TEST_DEADLINE: Duration = Duration::from_secs(2);
 const TEST_POLL: Duration = Duration::from_millis(1);
@@ -18,6 +19,16 @@ const STARTUP_CANCEL_CONTROLS: [ControlRequest; 2] =
     [ControlRequest::Stop, ControlRequest::Suspend];
 const STARTUP_RECORD_STOP_CONTROLS: [ControlRequest; 2] =
     [ControlRequest::Record, ControlRequest::Stop];
+
+#[test]
+/// Idle snapshots leave shortcut instructions to the presentation's dedicated hint line.
+fn idle_message_does_not_repeat_shortcut_instructions() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    assert_eq!(
+        session.snapshot().expect("Initial idle snapshot").message,
+        EXPECTED_IDLE_MESSAGE
+    );
+}
 
 #[test]
 /// Close waits for deletion's disk result; failed deletion cancels exit and success retains the exit request.

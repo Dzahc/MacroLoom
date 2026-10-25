@@ -16,8 +16,30 @@ const BANNER_OPEN = '<section class="library-banner"';
 const BANNER_CLOSE = '</section>';
 const CONTROLS_ENTRY = 'src/session-controls.tsx';
 const VIEW_ENTRY = 'src/library-view.tsx';
+const EXPECTED_PLAYBACK_GUIDANCE = 'Playback uses your cursor and keyboard';
 let controls: typeof import('../src/session-controls.tsx');
 let view: typeof import('../src/library-view.tsx');
+
+/** Idle presents the owner's brief shared-input reminder without the former paragraph of recording advice. */
+void test('idle playback guidance contains only the brief shared-input reminder', () => {
+  const snapshot = {
+    ...INITIAL_SESSION,
+    shortcuts: { record: true, stop: true },
+  };
+  const controller = new SessionController({
+    /** @returns An inert listener cleanup; rendering owns no native resources. */
+    listen: () =>
+      Promise.resolve(/** Releases no fixture resources. */ () => {}),
+    /** @returns The supplied idle snapshot without starting a session. */
+    invoke: () => Promise.resolve(snapshot),
+  });
+  assert.equal(
+    renderToStaticMarkup(
+      createElement(controls.SessionControls, { snapshot, controller }),
+    ),
+    `<div class="session-controls"><p>${EXPECTED_PLAYBACK_GUIDANCE}</p></div>`,
+  );
+});
 
 /** Bundles the real presentation modules; no native session effects execute during server rendering. */
 before(async () => {

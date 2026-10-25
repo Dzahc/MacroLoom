@@ -20,7 +20,7 @@ use lifecycle::acknowledge_interruption;
 
 pub const SESSION_EVENT: &str = "session-state";
 pub const ACTIVE_SESSION: &str = "A session is already active or stopping";
-pub const READY: &str = "Ready. F9 records; F8 stops recording or playback.";
+pub const READY: &str = "Ready";
 pub const UNSAVED: &str = "Recording retained in memory; not saved.";
 pub const EMPTY_CAPTURE: &str = crate::recording::EMPTY_RECORDING;
 pub const RECORDING: &str = "Recording. F8 stops.";
