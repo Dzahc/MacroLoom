@@ -54,7 +54,8 @@ work first. Use ordinary Notepad targets and the normal library build.
 
 ## Automated result
 
-October 24, 2026: `npm.cmd --prefix app run verify` — **PASS**, exit 0,
+Initial implementation (`99af403`), October 24, 2026:
+`npm.cmd --prefix app run verify` — **PASS**, exit 0,
 against refreshed `origin/develop` at `15a6c95`. Formatting, type checking, ESLint,
 production build, rustfmt, Clippy, 81 frontend/tooling tests, 110 Rust unit tests
 (six additional interactive tests ignored), 21 Rust repository integration tests,
@@ -84,6 +85,35 @@ suspend observation is inferred from callback fixtures.
 
 `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
 — **PASS** for the additional native-check feature code.
+
+## Review corrections and final verification
+
+Independent review found and corrected two lifecycle edges: property submissions
+after accepted main Close now use the same atomic session gate as editor creation;
+every native shutdown-job failure attempts F8 recovery independently of failed F9
+release. Recovery text names F8 only when its reservation is available. The shared
+Configure deferred-exit rule now lives on ConfigureState, and the rendering test
+uses the source-owned recovery label. Deterministic and real native regressions
+reproduced the corresponding failures before their fixes.
+
+Through `e9f5c46`, `npm.cmd --prefix app run verify` — **PASS**, exit 0, against
+refreshed `origin/develop` at `15a6c95`: 81 frontend/tooling tests, 111 Rust unit
+tests (seven interactive tests ignored), 21 Rust repository integration tests,
+33 Python fixtures, and 1,244 function/closure checks across index/worktree.
+All formatting, static analysis, production build, and environment checks passed,
+with no complexity exceptions. Output: `app/.quality-output/ML-22-verify-final.log`.
+
+`cargo test --manifest-path app/src-tauri/Cargo.toml --locked --offline --lib native_shutdown_reservation_failure_restores_stop -- --ignored --test-threads=1 --nocapture`
+— **PASS**, verifying actual F8 recovery and rejection of a competing owner after
+an intentionally lost F9 reservation makes shutdown fail. No target input is sent.
+
+The real-WebView `session-control-check` above passed again after corrections,
+including acknowledged close and shortcut handoff. Output:
+`app/.quality-output/ML-22-native-controls-final.log`. Native-feature Clippy also
+passed again with `--features native-checks --all-targets -- -D warnings`.
+
+Follow-up Standards review: **0 remaining actionable findings**.
+Follow-up Spec review: **0 remaining actionable findings**.
 
 ## Owner evidence
 
