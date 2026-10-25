@@ -121,6 +121,9 @@ impl Session {
         let outcome = recording_outcome(&recording, result, state.outcome_sequence);
         state.message = outcome.message.clone();
         state.terminal = outcome.message.clone();
+        if let Some(context) = &mut state.interruption_context {
+            *context = outcome.message.clone();
+        }
         state.save_failed = !outcome.success;
         if outcome.success {
             state.capture = Capture::default();
@@ -145,7 +148,7 @@ impl Session {
     pub fn discard_recording(&self) -> Result<Snapshot, String> {
         let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
         let mut state = self.lock()?;
-        if !state.save_failed {
+        if !state.save_failed || state.close_requested {
             return Err(ACTIVE_SESSION.into());
         }
         state.recording = None;
@@ -153,6 +156,7 @@ impl Session {
         state.save_failed = false;
         state.phase = Phase::Idle;
         state.reservation = None;
+        state.interruption_context = None;
         state.message = READY.into();
         state.terminal = READY.into();
         drop(state);

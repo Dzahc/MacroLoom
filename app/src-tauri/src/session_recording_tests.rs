@@ -12,16 +12,78 @@ const EXPECTED_MOUSE_DOWN: &str = "Initial held button must be saved as a press"
 const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 /// One delayed platform observation, substituted only at the external environment boundary.
 type EnvironmentCheck = Box<dyn FnOnce() -> Result<(), String> + Send>;
+const FIRST_SAVE: u64 = 1;
+
+#[test]
+/// Both empty and nonempty recordings retain the explicit sleep reason after wake without restarting or duplicating a macro.
+fn sleep_recording_outcome_retains_the_interruption_reason() {
+    for initial in [Vec::new(), vec![test_support::key(true)]] {
+        let empty = initial.is_empty();
+        let desktop = Desktop::new(initial);
+        let session = Session::new(desktop.clone());
+        session.record().expect("Record before sleep");
+        let stopped = session
+            .suspend()
+            .expect("Freeze and save interrupted capture");
+        assert_eq!(stopped.phase, Phase::Idle);
+        assert!(stopped.message.contains(RECORDING_INTERRUPTED));
+        assert_eq!(stopped.recording_outcome.is_none(), empty);
+        assert_eq!(
+            session.refresh().expect("Wake refresh").message,
+            stopped.message
+        );
+        assert_eq!(
+            desktop
+                .folder
+                .repository
+                .snapshot()
+                .expect("Library")
+                .macros
+                .len(),
+            usize::from(!empty)
+        );
+    }
+}
+
+#[test]
+/// Failed close saves retain their receipt across repeated Close/suspend; Keep open restores ordinary recovery without exit.
+fn close_failure_requires_an_explicit_exit_recovery_choice() {
+    let desktop = Desktop::new(vec![test_support::key(true)]);
+    let session = Session::new(desktop.clone());
+    desktop.fail_save.store(true, Ordering::Release);
+    session.record().expect("Start recording");
+    session.request_close().expect("Close freezes capture");
+    let failed = session.stop().expect("Save fails safely");
+    let receipt = failed.recording_outcome.expect("Failure receipt");
+    assert!(failed.close_requested && failed.save_failed);
+    session.request_close().expect("Repeated Close");
+    let unchanged = session.suspend().expect("Sleep after failure");
+    let retained = unchanged.recording_outcome.expect("Same failure receipt");
+    assert_eq!(retained.sequence, receipt.sequence);
+    assert_eq!(retained.id, receipt.id);
+    assert!(session.discard_recording().is_err());
+    let kept = session.keep_open().expect("Cancel exit, retain recording");
+    assert!(!kept.close_requested && kept.unsaved && kept.save_failed);
+    desktop.fail_save.store(false, Ordering::Release);
+    let saved = session.retry_recording().expect("Ordinary Retry");
+    assert!(!saved.close_requested && !saved.unsaved);
+    assert_eq!(
+        saved.recording_outcome.expect("Saved receipt").id,
+        receipt.id
+    );
+}
 
 /// Desktop-effect fixture; input, window activation and disk-failure flags never replace session internals.
 struct Desktop {
     folder: Folder,
     fail_save: AtomicBool,
     fail_start: AtomicBool,
+    shortcut_failure: AtomicBool,
     changed: AtomicBool,
     compact: AtomicBool,
     initial: Vec<EventKind>,
     environment_check: Mutex<Option<EnvironmentCheck>>,
+    save_check: Mutex<Option<EnvironmentCheck>>,
 }
 impl Desktop {
     /// Creates a writable real library and optionally held boundary inputs, with no physical input effects.
@@ -30,10 +92,12 @@ impl Desktop {
             folder: Folder::new(),
             fail_save: AtomicBool::new(false),
             fail_start: AtomicBool::new(false),
+            shortcut_failure: AtomicBool::new(false),
             changed: AtomicBool::new(false),
             compact: AtomicBool::new(false),
             initial,
             environment_check: Mutex::new(None),
+            save_check: Mutex::new(None),
         })
     }
 }
@@ -72,6 +136,10 @@ impl Platform for Desktop {
     /// Uses the real commit path and verifies that native restoration precedes storage work.
     fn save_recording(&self, recording: &mut Recording) -> Result<RecordingCommit, String> {
         assert!(!self.compact.load(Ordering::Acquire));
+        let check = self.save_check.lock().expect("Save fixture lock").take();
+        if let Some(check) = check {
+            check()?;
+        }
         if self.fail_save.load(Ordering::Acquire) {
             return Err(FAILURE.into());
         }
@@ -85,8 +153,11 @@ impl Platform for Desktop {
     fn available(&self) -> bool {
         true
     }
-    /// Makes both fixed shortcuts available without registering anything with Windows.
+    /// Makes both shortcuts available or reports a controlled native failure without touching Windows registrations.
     fn shortcuts(&self, _: bool, _: bool) -> Result<Availability, String> {
+        if self.shortcut_failure.load(Ordering::Acquire) {
+            return Err(FAILURE.into());
+        }
         Ok(Availability {
             record: true,
             stop: true,
@@ -111,6 +182,82 @@ impl Platform for Desktop {
     }
     /// Tests query the same durable snapshots that disconnected native clients can query.
     fn publish(&self, _: Snapshot) {}
+}
+
+#[test]
+/// A committed interrupted recording retains its save outcome across native shortcut failure and recovery after wake.
+fn wake_shortcut_error_retains_the_saved_interruption_outcome() {
+    let desktop = Desktop::new(vec![test_support::key(true)]);
+    let session = Session::new(desktop.clone());
+    session.record().expect("Record before suspend");
+    let interrupted = session.suspend().expect("Save interrupted recording");
+    let outcome = interrupted.recording_outcome.expect("Committed outcome");
+    assert!(outcome.success);
+    desktop.shortcut_failure.store(true, Ordering::Release);
+    session.report(session.refresh().err().expect("Automatic shortcut error"));
+    let failed = session.snapshot().expect("Outcome and native error");
+    assert!(failed.message.contains(&outcome.message));
+    assert!(failed.message.contains(FAILURE));
+    desktop.shortcut_failure.store(false, Ordering::Release);
+    assert_eq!(
+        session.refresh().expect("Native recovery").message,
+        outcome.message
+    );
+}
+
+#[test]
+/// Explicit discard acknowledges a failed suspended capture, including the discard-and-exit path.
+fn discarding_a_suspended_recording_clears_its_interruption_context() {
+    for exit in [false, true] {
+        let desktop = Desktop::new(vec![test_support::key(true)]);
+        let session = Session::new(desktop.clone());
+        desktop.fail_save.store(true, Ordering::Release);
+        session.record().expect("Record before suspend");
+        assert!(session.suspend().expect("Retain failed save").save_failed);
+        let discarded = if exit {
+            session.request_close().expect("Close failed save");
+            session.discard_exit().expect("Explicit discard and exit");
+            session.snapshot().expect("Discarded exit state")
+        } else {
+            session.discard_recording().expect("Explicit discard")
+        };
+        assert!(!discarded.unsaved);
+        assert_eq!(discarded.message, if exit { EXIT_PENDING } else { READY });
+    }
+}
+
+#[test]
+/// Close joins an in-flight save; suspend/repeated Close cannot create another attempt or release exit before its result.
+fn close_and_suspend_join_one_pending_save() {
+    let desktop = Desktop::new(vec![test_support::key(true)]);
+    let session = Session::new(desktop.clone());
+    let (entered, observed) = std::sync::mpsc::sync_channel(1);
+    let (release, resume) = std::sync::mpsc::sync_channel(1);
+    *desktop.save_check.lock().expect("Save fixture") = Some(Box::new(move || {
+        entered.send(()).expect("Save observer");
+        resume
+            .recv_timeout(ENVIRONMENT_CHECK_TIMEOUT)
+            .expect("Release save");
+        Ok(())
+    }));
+    session.record().expect("Start recording");
+    let worker_session = session.clone();
+    let save = std::thread::spawn(move || worker_session.stop());
+    observed
+        .recv_timeout(ENVIRONMENT_CHECK_TIMEOUT)
+        .expect("Save is pending");
+    session.request_close().expect("Close joins save");
+    session.request_close().expect("Repeated Close joins save");
+    let suspended = session.suspend().expect("Sleep while saving");
+    assert_eq!(suspended.phase, Phase::Saving);
+    assert!(!session.finish_exit().expect("Cannot exit before commit"));
+    assert!(session.discard_exit().is_err());
+    release.send(()).expect("Resume pending commit");
+    let saved = save.join().expect("Save worker").expect("Save completes");
+    let outcome = saved.recording_outcome.expect("One receipt");
+    assert!(outcome.success && saved.close_requested && !saved.unsaved);
+    assert_eq!(outcome.sequence, FIRST_SAVE);
+    assert!(session.finish_exit().expect("Exit after commit"));
 }
 #[test]
 /// A delayed failure for recording A must not stop/save recording B after A's ownership has ended.

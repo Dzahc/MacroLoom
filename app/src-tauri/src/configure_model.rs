@@ -232,6 +232,15 @@ pub struct ConfigureState {
 }
 
 impl ConfigureState {
+    /// Defers main close only during editor creation or Save; completion owns whether that queued exit proceeds.
+    /// Returns false for an idle draft, which ordinary application close may discard.
+    pub fn defer_exit(&mut self) -> bool {
+        let deferred = self.occupied && (self.pending.is_some() || self.original.is_none());
+        if deferred {
+            self.exit_requested = true;
+        }
+        deferred
+    }
     /// Reserves an editor before asynchronous disk reads; concurrent operation/open requests fail without changing state.
     pub fn reserve(&mut self) -> Result<(), String> {
         if self.occupied || self.operation {

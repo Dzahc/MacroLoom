@@ -77,6 +77,16 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    /// Atomically preserves Configure's pending-save exit ownership; idle drafts may close with the application.
+    fn defer_close(&self) -> Result<bool, String> {
+        let service = self.app.state::<ConfigureService>();
+        let mut state = service.lock()?;
+        Ok(state.defer_exit())
+    }
+    /// Waits on the worker for the hook owner's acknowledged release before permitting application exit.
+    fn shutdown(&self) -> Result<(), String> {
+        windows::shutdown_hooks_checked()
+    }
     /// Loads only a trusted selected ID; repository validation and fingerprint checks precede input startup.
     fn playback(&self, id: &str) -> Result<crate::macro_format::MacroDocument, String> {
         AppMode::current().require_library()?;
@@ -254,18 +264,16 @@ fn playback_name(snapshot: &Snapshot) -> Option<String> {
 /// Publishes bounded progress and reconciles idle reservations away from UI/input event loops.
 pub fn start_status(session: Arc<Session>, app: AppHandle) {
     std::thread::spawn(move || loop {
-        let running = windows::hooks_running();
+        match session.finish_exit() {
+            Ok(true) => {
+                app.exit(SUCCESS_EXIT);
+                break;
+            }
+            Ok(false) => {}
+            Err(error) => session.report(error),
+        }
         if let Err(error) = session.refresh() {
             session.report(error);
-        }
-        if session.snapshot().is_ok_and(|snapshot| {
-            snapshot.close_requested && snapshot.phase == Phase::Idle && !snapshot.unsaved
-        }) {
-            windows::shutdown_hooks();
-            app.exit(SUCCESS_EXIT);
-        }
-        if !running {
-            break;
         }
         std::thread::sleep(STATUS_INTERVAL);
     });
@@ -433,13 +441,11 @@ pub fn session_discard_exit(
             .require_operation()?;
     }
     session.discard_exit()?;
-    windows::shutdown_hooks();
-    window.app_handle().exit(SUCCESS_EXIT);
     Ok(())
 }
 /// Prevents native close until worker cleanup and an explicit unsaved-recording decision complete.
 pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
-    if window.label() != MAIN {
+    if window.label() != MAIN || !windows::has_session_hooks() {
         return;
     }
     let tauri::WindowEvent::CloseRequested { api, .. } = event else {

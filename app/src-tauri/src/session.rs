@@ -8,10 +8,13 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+#[path = "session_lifecycle.rs"]
+mod lifecycle;
 #[path = "session_playback.rs"]
 mod playback_session;
 #[path = "session_recording.rs"]
 mod recording_session;
+use lifecycle::acknowledge_interruption;
 
 pub const SESSION_EVENT: &str = "session-state";
 pub const ACTIVE_SESSION: &str = "A session is already active or stopping";
@@ -21,13 +24,20 @@ pub const EMPTY_CAPTURE: &str = crate::recording::EMPTY_RECORDING;
 pub const RECORDING: &str = "Recording. F8 stops.";
 pub const PLAYING: &str = "Playing temporary recording. F8 stops.";
 pub const STOPPING: &str = "Stopping; releasing input and restoring the window.";
-pub const INTERRUPTED: &str = "Recording interrupted; not saved.";
+pub const INTERRUPTED: &str = "Recording interrupted by computer sleep or hibernation; not saved.";
+pub const RECORDING_INTERRUPTED: &str = "Recording interrupted by computer sleep or hibernation.";
+pub const EMPTY_INTERRUPTED: &str =
+    "Recording interrupted by computer sleep or hibernation. No input recorded; no file created.";
 pub const NO_CAPTURE: &str = "Record input before replaying the temporary capture.";
 pub const STATE_ERROR: &str = "Session state is unavailable; restart MacroLoom.";
 pub const CLEANUP_FAILED: &str =
     "Cleanup failed. Retry cleanup or press F8; new sessions are blocked.";
 pub const REPLAY_COMPLETE: &str = "Temporary playback complete.";
 pub const REPLAY_CANCELLED: &str = "Playback stopped; injected input released.";
+pub const REPLAY_INTERRUPTED: &str = "Playback interrupted by computer sleep or hibernation; injected input released. Playback will not resume.";
+pub const SUSPEND_INTERRUPTED: &str = "Session interrupted by computer sleep or hibernation.";
+pub const EXIT_PENDING: &str = "Closing; releasing native resources.";
+pub const EXIT_CLEANUP_FAILED: &str = "Cleanup failed; new sessions are blocked.";
 pub const STATUS_INTERVAL: Duration = Duration::from_millis(100);
 const CONFIRMATION_OWNER_MAX: usize = 64;
 const INVALID_CONFIRMATION_OWNER: &str = "Invalid confirmation owner";
@@ -96,6 +106,14 @@ pub struct Snapshot {
 
 /// Native system boundaries; deterministic tests substitute desktop effects, never session internals.
 pub trait Platform: Send + Sync {
+    /// Delegates main close to a pending editor create/save, retaining that owner's success/failure exit policy.
+    fn defer_close(&self) -> Result<bool, String> {
+        Ok(false)
+    }
+    /// Acknowledges release of native hooks/reservations on a worker; failure retains resources for explicit retry.
+    fn shutdown(&self) -> Result<(), String> {
+        Ok(())
+    }
     /// Reads a validated, fingerprint-checked selected macro on the session worker, without injecting input.
     fn playback(&self, _: &str) -> Result<MacroDocument, String> {
         Err(NO_CAPTURE.into())
@@ -153,6 +171,7 @@ struct State {
     phase: Phase,
     generation: u64,
     starting: bool,
+    deleting: bool,
     revision: u64,
     start: Option<Instant>,
     playback_stage: PlaybackStage,
@@ -168,6 +187,9 @@ struct State {
     can_record: bool,
     message: String,
     terminal: String,
+    shortcut_error: Option<String>,
+    /// Suspension feedback survives later terminal failures; recording save receipts refresh its retained outcome.
+    interruption_context: Option<String>,
     cleanup_failed: bool,
     close_requested: bool,
     confirmation: Option<Box<dyn Send>>,
@@ -186,6 +208,7 @@ impl Default for State {
             phase: Phase::Idle,
             generation: 0,
             starting: false,
+            deleting: false,
             revision: 0,
             start: None,
             playback_stage: PlaybackStage::Running,
@@ -201,6 +224,8 @@ impl Default for State {
             can_record: false,
             message: READY.into(),
             terminal: READY.into(),
+            shortcut_error: None,
+            interruption_context: None,
             cleanup_failed: false,
             close_requested: false,
             confirmation: None,
@@ -252,7 +277,7 @@ impl Session {
                 }),
             drag_move_count: state.capture.drag_moves,
             last_release: state.capture.last_release,
-            message: state.message.clone(),
+            message: session_message(&state),
             shortcuts: state.shortcuts,
             can_record: state.can_record && state.phase == Phase::Idle && !state.starting,
             can_play: state.can_record && state.phase == Phase::Idle && !state.starting,
@@ -283,10 +308,13 @@ impl Session {
         self.platform.publish(self.snapshot()?);
         Ok(())
     }
-    /// Publishes actionable command errors, including errors from global controls with no frontend caller.
+    /// Publishes actionable command errors; idle shortcut failures supplement completed interruption feedback.
     pub fn report(&self, error: String) {
         if let Ok(mut state) = self.lock() {
-            state.message = error;
+            if state.interruption_context.is_none() || state.shortcut_error.as_ref() != Some(&error)
+            {
+                state.message = error;
+            }
         }
         let _ = self.publish();
     }
@@ -295,7 +323,7 @@ impl Session {
         self.check_recording()?;
         self.check_playback()?;
         if let Ok(_transition) = self.transition.try_lock() {
-            if self.lock()?.phase == Phase::Idle {
+            if self.idle_available()? {
                 self.idle_shortcuts()?;
             }
         }
@@ -308,7 +336,7 @@ impl Session {
             return Ok(());
         }
         let available = self.platform.available() && self.idle_available()?;
-        let result = self.platform.shortcuts(available, false)?;
+        let result = self.refresh_idle_shortcuts(available)?;
         let mut state = self.lock()?;
         state.shortcuts = result;
         state.can_record = available && result.stop;
@@ -317,10 +345,17 @@ impl Session {
         }
         Ok(())
     }
+    /// Reconciles idle native reservations and retains their transient error independently until a successful native refresh.
+    /// Propagates failure for ordinary caller reporting without losing the prior session outcome.
+    fn refresh_idle_shortcuts(&self, record: bool) -> Result<Availability, String> {
+        let result = self.platform.shortcuts(record, false);
+        self.lock()?.shortcut_error = result.as_ref().err().cloned();
+        result
+    }
     /// Rejects idle Record reservations during native confirmation or a pending close decision.
     fn idle_available(&self) -> Result<bool, String> {
         let state = self.lock()?;
-        Ok(state.confirmation.is_none() && !state.close_requested && !state.starting)
+        Ok(start_available(&state))
     }
     /// Explicitly reprobes global shortcuts while idle; no recording or playback is started by retry.
     pub fn retry_shortcuts(&self) -> Result<Snapshot, String> {
@@ -373,6 +408,8 @@ impl Session {
             .checked_add(GENERATION_STEP)
             .ok_or(STATE_ERROR)?;
         state.starting = true;
+        state.shortcut_error = None;
+        state.interruption_context = None;
         state.can_record = false;
         state.cancel = Arc::new(AtomicBool::new(false));
         state.run = FIRST_RUN;
@@ -519,44 +556,46 @@ impl Session {
         };
         match state.phase {
             Phase::Idle => {
-                if !state.starting {
-                    state.generation = state
-                        .generation
-                        .checked_add(GENERATION_STEP)
-                        .ok_or(STATE_ERROR)?;
-                    return Ok(StopRequest {
-                        generation: state.generation,
-                    });
+                if let Some(request) = idle_stop(&mut state, interrupted)? {
+                    return Ok(request);
                 }
+            }
+            Phase::Stopping => {
+                if !interrupted {
+                    state.cleanup_failed = false;
+                }
+                return Ok(request);
+            }
+            Phase::Saving => return Ok(request),
+            Phase::Playing | Phase::Interval => {
                 state.cancel.store(true, Ordering::Release);
                 state.terminal = if interrupted {
-                    START_INTERRUPTED
+                    REPLAY_INTERRUPTED
                 } else {
-                    START_CANCELLED
+                    REPLAY_CANCELLED
                 }
                 .into();
             }
-            Phase::Stopping | Phase::Saving => return Ok(request),
-            Phase::Playing | Phase::Interval => {
-                state.cancel.store(true, Ordering::Release);
-                state.terminal = REPLAY_CANCELLED.into();
-            }
             Phase::Recording => {
-                let duration = state.start.map_or(Duration::ZERO, |start| start.elapsed());
-                state.capture.finish(duration, self.platform.cursor());
-                if interrupted {
-                    if let Some(recording) = &mut state.recording {
-                        recording.reason = crate::recording::CAPTURE_INTERRUPTED.into();
-                    }
-                }
-                state.terminal =
-                    recording_message(interrupted, state.capture.events.is_empty()).into();
+                self.stop_recording(&mut state, interrupted);
             }
         }
+        state.interruption_context = interrupted.then(|| state.terminal.clone());
         state.phase = Phase::Stopping;
         state.message = STOPPING.into();
         state.can_record = false;
         Ok(request)
+    }
+    /// Freezes capture at the initiating boundary and retains the interruption reason for eventual save/retry outcomes.
+    fn stop_recording(&self, state: &mut State, interrupted: bool) {
+        let duration = state.start.map_or(Duration::ZERO, |start| start.elapsed());
+        state.capture.finish(duration, self.platform.cursor());
+        if interrupted {
+            if let Some(recording) = &mut state.recording {
+                recording.reason = RECORDING_INTERRUPTED.into();
+            }
+        }
+        state.terminal = recording_message(interrupted, state.capture.events.is_empty()).into();
     }
     #[cfg(any(test, feature = "native-checks"))]
     /// Receives and completes Stop synchronously for deterministic and native integration checks.
@@ -579,6 +618,7 @@ impl Session {
         let state = self.lock()?;
         Ok(state.generation == request.generation
             && state.phase == Phase::Stopping
+            && !state.cleanup_failed
             && !state.starting
             && !state.worker)
     }
@@ -673,7 +713,7 @@ impl Session {
     /// Claims a confirmation for exactly one frontend owner; stale/reconnected owners cannot reuse another dialog's reservation.
     fn reserve_confirmation(&self, owner: &str) -> Result<(), String> {
         let mut state = self.lock()?;
-        if state.phase != Phase::Idle || state.starting {
+        if state.phase != Phase::Idle || state.starting || state.close_requested || state.deleting {
             return Err(ACTIVE_SESSION.into());
         }
         if let Some(existing) = &state.confirmation_owner {
@@ -684,6 +724,7 @@ impl Session {
         if state.confirmation.is_none() {
             state.confirmation = Some(self.platform.reserve()?);
             state.confirmation_owner = Some(owner.into());
+            acknowledge_interruption(&mut state);
         }
         Ok(())
     }
@@ -700,7 +741,7 @@ impl Session {
     pub fn take_confirmation(&self, owner: Option<&str>) -> Result<Option<Box<dyn Send>>, String> {
         let _transition = self.transition.lock().map_err(|_| STATE_ERROR)?;
         let mut state = self.lock()?;
-        if state.phase != Phase::Idle || state.starting {
+        if state.phase != Phase::Idle || state.starting || state.close_requested {
             return Err(ACTIVE_SESSION.into());
         }
         if state.confirmation_owner.as_deref() != owner {
@@ -712,28 +753,40 @@ impl Session {
     /// Prevents exit until active work stops and any unsaved recording receives an explicit discard decision.
     pub fn request_close(&self) -> Result<bool, String> {
         let mut state = self.lock()?;
-        let prevent =
-            state.phase != Phase::Idle || state.starting || !state.capture.events.is_empty();
-        if prevent {
-            state.close_requested = true;
+        if self.platform.defer_close()? {
+            return Ok(true);
         }
+        let already_requested = state.close_requested;
+        state.close_requested = true;
+        state.can_record = false;
+        state.confirmation = None;
+        state.confirmation_owner = None;
         drop(state);
-        if prevent {
+        if !already_requested {
             self.signal_stop(false)?;
-            self.publish()?;
         }
-        Ok(prevent)
+        self.publish()?;
+        Ok(true)
     }
     /// Keeps retained input available and cancels the pending exit decision without activating another window.
     pub fn keep_open(&self) -> Result<Snapshot, String> {
-        self.lock()?.close_requested = false;
+        let mut state = self.lock()?;
+        if !state.close_requested || state.cleanup_failed || state.capture.events.is_empty() {
+            return Err(NO_CLOSE_REQUEST.into());
+        }
+        state.close_requested = false;
+        drop(state);
         self.publish()?;
         self.snapshot()
     }
     /// Allows explicit discard/exit only after native cleanup is complete.
     pub fn discard_exit(&self) -> Result<(), String> {
+        let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
         let mut state = self.lock()?;
-        if (state.phase != Phase::Idle && !state.save_failed) || state.starting {
+        if (state.phase != Phase::Idle && !state.save_failed)
+            || state.starting
+            || state.cleanup_failed
+        {
             return Err(ACTIVE_SESSION.into());
         }
         if !state.close_requested {
@@ -742,13 +795,41 @@ impl Session {
         state.capture = Capture::default();
         state.recording = None;
         state.reservation = None;
+        state.save_failed = false;
+        state.phase = Phase::Idle;
+        state.interruption_context = None;
+        state.message = EXIT_PENDING.into();
         Ok(())
     }
+}
+/// Invalidates idle queued starts, or cancels startup before activation; only explicit Stop retries a failed exit cleanup.
+fn idle_stop(state: &mut State, interrupted: bool) -> Result<Option<StopRequest>, String> {
+    if !interrupted && state.close_requested {
+        state.cleanup_failed = false;
+    }
+    if !state.starting {
+        state.generation = state
+            .generation
+            .checked_add(GENERATION_STEP)
+            .ok_or(STATE_ERROR)?;
+        return Ok(Some(StopRequest {
+            generation: state.generation,
+        }));
+    }
+    state.cancel.store(true, Ordering::Release);
+    state.terminal = if interrupted {
+        START_INTERRUPTED
+    } else {
+        START_CANCELLED
+    }
+    .into();
+    Ok(None)
 }
 /// Returns whether this idle generation can accept a new session intent; native availability is revalidated during preparation.
 fn start_available(state: &State) -> bool {
     state.phase == Phase::Idle
         && !state.starting
+        && !state.deleting
         && state.confirmation.is_none()
         && !state.close_requested
 }
@@ -759,12 +840,11 @@ fn remaining_milliseconds(duration: Duration) -> u64 {
 }
 /// Selects truthful terminal capture feedback without claiming persistence.
 fn recording_message(interrupted: bool, empty: bool) -> &'static str {
-    if empty {
-        EMPTY_CAPTURE
-    } else if interrupted {
-        INTERRUPTED
-    } else {
-        UNSAVED
+    match (interrupted, empty) {
+        (true, true) => EMPTY_INTERRUPTED,
+        (true, false) => INTERRUPTED,
+        (false, true) => EMPTY_CAPTURE,
+        (false, false) => UNSAVED,
     }
 }
 /// Updates conflict feedback without removing successful capture/terminal messages after availability recovery.
@@ -775,6 +855,26 @@ fn update_shortcut_message(state: &mut State, availability: Availability) {
         state.message = RECORD_UNAVAILABLE.into();
     } else if state.message == STOP_UNAVAILABLE || state.message == RECORD_UNAVAILABLE {
         state.message = state.terminal.clone();
+    }
+}
+/// Composes interruption context with current feedback and transient native errors without duplicating equal messages.
+/// Native error recovery retains any unrelated actionable feedback alongside the interruption outcome.
+fn session_message(state: &State) -> String {
+    let context = state.interruption_context.as_deref().map(|context| {
+        // Cleanup has not yet earned the completed-release outcome retained for later Idle feedback.
+        if state.phase == Phase::Stopping {
+            SUSPEND_INTERRUPTED
+        } else {
+            context
+        }
+    });
+    let message = match context {
+        Some(context) if state.message != context => format!("{context} {}", state.message),
+        _ => state.message.clone(),
+    };
+    match &state.shortcut_error {
+        Some(error) if error != &state.message => format!("{message} {error}"),
+        _ => message,
     }
 }
 /// Validates externally supplied owner IDs before they can acquire or release native operation ownership.
