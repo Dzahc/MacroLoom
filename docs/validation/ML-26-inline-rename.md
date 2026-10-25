@@ -23,9 +23,17 @@ No browser or native computer surface was connected in this session, so interact
 - `app/scripts/rename-pencil.test.ts` covers explicit selected-target activation, loading exclusion, and disabled explanations for sessions, saves, dialogs, deletion, unavailable storage, and a missing editor owner.
 - `app/scripts/library.test.ts` covers one pencil on the selected row, reserved slots across all normal rows, independent sibling buttons, preserved selection during deletion, native disabled semantics, and reason tooltips restricted to the non-focusable icon hover target.
 - Interactive Chrome access was attempted for this extension, but app access approval timed out. Hover/focus behavior, tooltip timing, and minimum-width visual layout remain manual checks. Check selected versus unselected rows, stable name/duration positions, keyboard Tab activation, and that double-clicking the pencil never starts playback. After mouse selection, moving the pointer away must hide the pencil; keyboard-visible focus must reveal it. The enabled Rename tooltip and disabled-reason tooltip belong only to the icon hover target.
-- Completion verification and the separate Standards/Spec reviews for this extension are recorded after the final gate below.
 
-## Completion gate
+### Extension completion and review
+
+Final command on 2026-10-25: `npm.cmd --prefix app run verify` — **PASS**, exit code 0, against pencil code commit `48304c9`.
+
+All maintained checks passed, including the production build, frontend/tooling tests, Rust tests, Python fixtures, and changed-file complexity: 1,098 function checks across index/worktree snapshots, zero failures at the limit of 10. Seven existing desktop-only Rust tests remain explicitly ignored. The focused library/pencil run passed all 20 tests.
+
+- **Standards:** 0 outstanding documented violations; 0 actionable smell findings on `6aeae0f...48304c9`. The missing enabled-icon tooltip was fixed with a red/green rendering regression.
+- **Spec:** 0 outstanding findings on the same pencil delta. Keyboard-visible focus replaced `:focus-within` so mouse selection alone cannot keep the pencil visible after hover ends. Interactive verification remains a manual check due to the Chrome access approval timeout.
+
+## Original implementation completion gate
 
 Final command on 2026-10-25: `npm.cmd --prefix app run verify` — **PASS**, exit code 0, against code commit `ad3429a`.
 

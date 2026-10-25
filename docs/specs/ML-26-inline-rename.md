@@ -23,7 +23,7 @@ The user confirmed this extension after the original implementation:
 - Keep the pencil in a fixed slot at the end of the name area, before duration. Reserve that width in every normal row even when the pencil is hidden, so hover and selection do not move text or durations.
 - Clicking the pencil opens the existing editor with the full name selected. It does not change selection or trigger Play. Keep existing row selection, double-click playback, F2, context-menu Rename, and editor/session rules.
 - Show a gray disabled pencil when loading, an active session, pending saves, confirmations, deletion, or unavailable writable storage prevents Rename. Disabled pencils cannot activate and are excluded from the Tab order.
-- Explain a disabled pencil with a reason tooltip only when hovering directly over its icon area. Row hover and keyboard focus reveal the pencil but do not show that tooltip.
+- Explain a disabled pencil with a reason tooltip only when hovering directly over its icon area. Row hover and keyboard focus reveal the pencil but do not show that tooltip. Enabled pencils use the standard Rename icon tooltip on the same hover target.
 
 ## Test seams
 
