@@ -40,33 +40,7 @@ export function SessionControls({
           </button>
         </>
       )}
-      {snapshot.saveFailed && (
-        <>
-          <p role="alert">{snapshot.message}</p>
-          <button
-            type="button"
-            onClick={
-              /** Retries the same retained macro; success remains backend-authoritative. */
-              () => {
-                void controller.request(SESSION_COMMAND.retryRecording);
-              }
-            }
-          >
-            {SESSION_TEXT.retryRecording}
-          </button>
-          <button
-            type="button"
-            onClick={
-              /** Explicitly abandons only this failed recording; committed files stay intact. */
-              () => {
-                void controller.request(SESSION_COMMAND.discardRecording);
-              }
-            }
-          >
-            {SESSION_TEXT.discardRecording}
-          </button>
-        </>
-      )}
+      <SaveControls snapshot={snapshot} controller={controller} />
       {idle && (!snapshot.shortcuts.record || !snapshot.shortcuts.stop) && (
         <button
           type="button"
@@ -85,6 +59,48 @@ export function SessionControls({
   );
 }
 
+/** @param props Retained native save and command owner. @returns Recovery with explicit exit intent reflected in each action. */
+function SaveControls({
+  snapshot,
+  controller,
+}: {
+  snapshot: SessionSnapshot;
+  controller: SessionController;
+}) {
+  if (!snapshot.saveFailed) return null;
+  return (
+    <>
+      <p role="alert">{snapshot.message}</p>
+      <button
+        type="button"
+        onClick={
+          /** Retries the same retained macro; pending exit is owned by the backend. */
+          () => {
+            void controller.request(SESSION_COMMAND.retryRecording);
+          }
+        }
+      >
+        {snapshot.closeRequested
+          ? SESSION_TEXT.retryExit
+          : SESSION_TEXT.retryRecording}
+      </button>
+      {!snapshot.closeRequested && (
+        <button
+          type="button"
+          onClick={
+            /** Explicitly abandons only this failed recording; committed files stay intact. */
+            () => {
+              void controller.request(SESSION_COMMAND.discardRecording);
+            }
+          }
+        >
+          {SESSION_TEXT.discardRecording}
+        </button>
+      )}
+    </>
+  );
+}
+
 /** @param props Backend close state and command owner. @returns Explicit close recovery after cleanup or a failed save. */
 function CloseControls({
   snapshot,
@@ -96,40 +112,43 @@ function CloseControls({
   const idle = snapshot.phase === PHASE.idle;
   return (
     <>
-      {snapshot.closeRequested && (idle || snapshot.saveFailed) && (
-        <>
-          <p role="alert">{SESSION_TEXT.close}</p>
-          <button
-            type="button"
-            onClick={
-              /** Cancels exit while retaining captured input. */
-              () => {
-                void controller.request(SESSION_COMMAND.keepOpen);
+      {snapshot.closeRequested &&
+        snapshot.unsaved &&
+        !snapshot.cleanupFailed &&
+        (idle || snapshot.saveFailed) && (
+          <>
+            <p role="alert">{SESSION_TEXT.close}</p>
+            <button
+              type="button"
+              onClick={
+                /** Cancels exit while retaining captured input. */
+                () => {
+                  void controller.request(SESSION_COMMAND.keepOpen);
+                }
               }
-            }
-          >
-            {SESSION_TEXT.keepOpen}
-          </button>
-          <button
-            type="button"
-            disabled={!idle && !snapshot.saveFailed}
-            onClick={
-              /** Explicitly discards unsaved capture; backend permits exit only after cleanup. */
-              () => {
-                void invoke<void>(SESSION_COMMAND.discardExit).catch(
-                  /** @param reason Failed close/cleanup. @returns Nothing; refreshes native state without claiming exit. */
-                  (reason: unknown) => {
-                    console.error(SESSION_TEXT.failure, reason);
-                    void controller.request(SESSION_COMMAND.snapshot);
-                  },
-                );
+            >
+              {SESSION_TEXT.keepOpen}
+            </button>
+            <button
+              type="button"
+              disabled={!idle && !snapshot.saveFailed}
+              onClick={
+                /** Explicitly discards unsaved capture; backend permits exit only after cleanup. */
+                () => {
+                  void invoke<void>(SESSION_COMMAND.discardExit).catch(
+                    /** @param reason Failed close/cleanup. @returns Nothing; refreshes native state without claiming exit. */
+                    (reason: unknown) => {
+                      console.error(SESSION_TEXT.failure, reason);
+                      void controller.request(SESSION_COMMAND.snapshot);
+                    },
+                  );
+                }
               }
-            }
-          >
-            {SESSION_TEXT.discard}
-          </button>
-        </>
-      )}
+            >
+              {SESSION_TEXT.discard}
+            </button>
+          </>
+        )}
     </>
   );
 }

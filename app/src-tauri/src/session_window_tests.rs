@@ -22,6 +22,7 @@ const STOP_BUTTON: &str = "document.querySelector('[data-action=stop]')";
 const RETRY_BUTTON: &str = "Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Retry shortcuts')";
 const OPEN_PREVIEW: &str = "window.__TAURI_INTERNALS__.invoke('open_presentation_preview')";
 const PREVIEW_READY: &str = "document.querySelector('.native-development [role=status]')?.textContent === 'Presentation applied to the main window.'";
+const FOCUS_READY: &str = "document.hasFocus()";
 const CHECK_PASSED: &str = "PASS: visible F9/F8 conflicts, button fallback, committed recording preservation, retry recovery, and main/development-focused hook controls";
 const TEST_LIBRARY_PREFIX: &str = "macroloom-native-session-check";
 
@@ -175,6 +176,7 @@ fn physical_key(key: u16, down: bool) -> bool {
 /// Exercises reserved controls with the selected real app window focused, while ordinary own-window keys remain excluded.
 fn focused_controls(window: &WebviewWindow, session: &Session) -> Result<(), String> {
     window.set_focus().map_err(|error| error.to_string())?;
+    wait_ui(window.as_ref(), FOCUS_READY)?;
     require(
         own_window_focused(),
         "The test app must own foreground focus",
@@ -374,5 +376,12 @@ pub(super) fn run() {
         checked.load(Ordering::Acquire),
         "All session assertions must complete before test windows close"
     );
+    assert!(
+        !hooks_running(),
+        "Main close must acknowledge hook shutdown before exit"
+    );
+    for key in [RECORD_KEY, STOP_KEY] {
+        drop(Conflict::hold(key).expect("Closed application released its shortcut"));
+    }
     eprintln!("{CHECK_PASSED}");
 }

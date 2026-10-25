@@ -18,9 +18,38 @@ const STARTUP_CANCEL_CONTROLS: [ControlRequest; 2] =
 const STARTUP_RECORD_STOP_CONTROLS: [ControlRequest; 2] =
     [ControlRequest::Record, ControlRequest::Stop];
 
+#[test]
+/// Close waits for deletion's disk result; failed deletion cancels exit and success retains the exit request.
+fn close_during_deletion_waits_and_failure_cancels_exit() {
+    for succeeds in [false, true] {
+        let session = Session::new(Arc::new(Desktop::default()));
+        session
+            .confirmation(CONFIRMATION_OWNER, true)
+            .expect("Confirm deletion");
+        let result = session.delete(Some(CONFIRMATION_OWNER), || {
+            assert!(session.request_close().expect("Defer Close"));
+            assert!(session
+                .start_request()
+                .expect("Start eligibility")
+                .is_none());
+            if succeeds {
+                Ok(())
+            } else {
+                Err(REJECTED.to_owned())
+            }
+        });
+        assert_eq!(result.is_ok(), succeeds);
+        let snapshot = session.snapshot().expect("Deletion result");
+        assert_eq!(snapshot.close_requested, succeeds);
+        assert_eq!(snapshot.can_record, !succeeds);
+    }
+}
+
 #[derive(Default)]
 /// A deterministic desktop-effect substitute; never replaces session state or lifecycle logic.
 struct Desktop {
+    shutdown_failure: AtomicBool,
+    shortcut_failure: AtomicBool,
     stop_conflict: AtomicBool,
     key_up_failure: AtomicBool,
     release_failure: AtomicBool,
@@ -37,6 +66,14 @@ struct Desktop {
     injections: std::sync::atomic::AtomicUsize,
 }
 impl Platform for Desktop {
+    /// Models an acknowledged native teardown, retaining failure until the external blocker is removed.
+    fn shutdown(&self) -> Result<(), String> {
+        if self.shutdown_failure.load(Ordering::Acquire) {
+            Err(REJECTED.into())
+        } else {
+            Ok(())
+        }
+    }
     /// Returns an owned external-operation token, with no native input effects.
     fn reserve(&self) -> Result<Box<dyn Send>, String> {
         self.operation
@@ -50,6 +87,9 @@ impl Platform for Desktop {
     }
     /// Reports a controllable native Stop conflict while retaining Record availability.
     fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String> {
+        if self.shortcut_failure.load(Ordering::Acquire) {
+            return Err(REJECTED.into());
+        }
         if !stop
             && self.registered.lock().expect("Fixture reservations").stop
             && self.unregister_failure.load(Ordering::Acquire)
@@ -136,6 +176,88 @@ impl Platform for Desktop {
             .expect("Fixture mutex must be healthy")
             .push(snapshot);
     }
+}
+
+#[test]
+/// Even idle close waits for native teardown; failures require explicit cleanup retry and cannot be bypassed by discard/Keep open.
+fn close_waits_for_acknowledged_shutdown_and_retry() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    desktop.shutdown_failure.store(true, Ordering::Release);
+    assert!(session.request_close().expect("Defer idle close"));
+    assert!(!session.finish_exit().expect("Retain teardown failure"));
+    let failed = session.snapshot().expect("Recovery snapshot");
+    assert!(failed.close_requested && failed.cleanup_failed);
+    assert!(session.keep_open().is_err());
+    assert!(session.discard_exit().is_err());
+    assert!(session.record().is_err());
+    desktop.shutdown_failure.store(false, Ordering::Release);
+    assert!(!session.finish_exit().expect("No implicit retry"));
+    session.stop().expect("Explicit Retry/F8");
+    assert!(session.finish_exit().expect("Teardown acknowledged"));
+}
+
+#[test]
+/// Automatic shortcut availability updates after wake supplement the sleep explanation instead of erasing it.
+fn wake_shortcut_conflict_preserves_the_interruption_banner() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    session.record().expect("Record");
+    session.capture(key(true));
+    let interrupted = session.suspend().expect("Interrupt recording");
+    desktop.stop_conflict.store(true, Ordering::Release);
+    let conflict = session.refresh().expect("Wake with conflict");
+    assert!(conflict.message.contains(&interrupted.message));
+    assert!(conflict
+        .message
+        .contains(crate::shortcuts::STOP_UNAVAILABLE));
+    desktop.stop_conflict.store(false, Ordering::Release);
+    assert_eq!(
+        session.refresh().expect("Availability recovers").message,
+        interrupted.message
+    );
+}
+
+#[test]
+/// A deliberate editor operation acknowledges interruption; a pending close rejects it before its reservation callback executes.
+fn editor_reservation_acknowledges_interruption_and_cannot_race_exit() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    session.record().expect("Record");
+    session.capture(key(true));
+    session.suspend().expect("Interrupt");
+    session
+        .reserve_editor(|| Ok(()))
+        .expect("Deliberate editor operation");
+    assert_eq!(
+        session
+            .snapshot()
+            .expect("Acknowledged interruption")
+            .message,
+        crate::session::READY
+    );
+    session.request_close().expect("Close requested");
+    assert!(session
+        .reserve_editor(|| panic!("Closing must reject before editor effects"))
+        .is_err());
+}
+
+#[test]
+/// Shortcut refresh failure after disk deletion must not turn the durable successful mutation into a reported deletion failure.
+fn committed_deletion_survives_shortcut_refresh_failure() {
+    let desktop = Arc::new(Desktop::default());
+    let session = Session::new(desktop.clone());
+    let result = session.delete(None, || {
+        desktop.shortcut_failure.store(true, Ordering::Release);
+        Ok(())
+    });
+    assert!(result.is_ok());
+    assert_eq!(
+        session
+            .snapshot()
+            .expect("Actionable shortcut failure")
+            .message,
+        REJECTED
+    );
 }
 /// Simulated external-operation ownership used only at the native platform boundary.
 struct DesktopReservation(Arc<AtomicBool>);

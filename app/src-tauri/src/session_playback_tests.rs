@@ -29,6 +29,7 @@ const LAST_FIRST_X: i32 = -1;
 const LAST_FIRST_Y: i32 = 1079;
 const DISPLAY_SCALES: [f64; 4] = [1.0, 1.25, 1.5, 1.75];
 const RAPID_REPEAT_RUNS: usize = 128;
+const HELD_RELEASE_COUNT: usize = 2;
 type Callback = Box<dyn FnOnce() + Send>;
 
 /// Desktop-effects substitute with an isolated real library; it never sends input to the owner's desktop.
@@ -572,7 +573,7 @@ fn session_snapshot_is_stable_and_next_start_checks_file_fingerprint() {
 }
 
 #[test]
-/// Both Stop and actual system sleep cancel an initial wait with no dispatch or overdue backlog.
+/// Stop and simulated suspend cancel an initial wait without dispatch; interruption remains identifiable after refresh.
 fn stop_and_sleep_cancel_saved_initial_wait() {
     for interrupted in [false, true] {
         let mut source = events();
@@ -587,10 +588,69 @@ fn stop_and_sleep_cancel_saved_initial_wait() {
         } else {
             session.stop().expect("Stop");
         }
-        assert_eq!(completed(&session).phase, Phase::Idle);
+        let stopped = completed(&session);
+        assert_eq!(stopped.phase, Phase::Idle);
+        if interrupted {
+            assert_eq!(stopped.message, REPLAY_INTERRUPTED);
+            assert_eq!(
+                session.refresh().expect("Wake refresh").message,
+                stopped.message
+            );
+        } else {
+            assert_eq!(stopped.message, REPLAY_CANCELLED);
+        }
         assert!(desktop.events.lock().expect("Events").is_empty());
         assert!(desktop.releases.lock().expect("Releases").is_empty());
     }
+}
+
+#[test]
+/// Close during held key/drag playback retains exit and failed holds until explicit Retry, even across refresh/repeated Close/suspend.
+fn close_during_held_playback_waits_for_explicit_cleanup_retry() {
+    let desktop = Desktop::new(events(), LONG_WAIT);
+    desktop.fail_release.store(true, Ordering::Release);
+    desktop
+        .callback_at
+        .store(THROUGH_MOVEMENT, Ordering::Release);
+    let session = Session::new(desktop.clone());
+    let weak = Arc::downgrade(&session);
+    *desktop.on_inject.lock().expect("Close fixture") = Some(Box::new(move || {
+        weak.upgrade()
+            .expect("Playback owner")
+            .request_close()
+            .expect("Close during drag");
+    }));
+    desktop.play(&session).expect("Playback starts");
+    let failed = completed(&session);
+    assert!(failed.cleanup_failed && failed.close_requested);
+    desktop.fail_release.store(false, Ordering::Release);
+    assert!(
+        session
+            .refresh()
+            .expect("Refresh is not Retry")
+            .cleanup_failed
+    );
+    session
+        .request_close()
+        .expect("Repeated Close is not Retry");
+    assert!(
+        session
+            .suspend()
+            .expect("Sleep is not Retry")
+            .cleanup_failed
+    );
+    assert!(!session.finish_exit().expect("No exit before release"));
+    let stopped = session.stop().expect("Explicit cleanup Retry");
+    assert!(stopped.close_requested && !stopped.unsaved && !stopped.cleanup_failed);
+    assert_eq!(
+        desktop.events.lock().expect("Ordinary events").len(),
+        THROUGH_MOVEMENT
+    );
+    assert_eq!(
+        desktop.releases.lock().expect("Released owned holds").len(),
+        HELD_RELEASE_COUNT
+    );
+    assert!(session.finish_exit().expect("Exit after cleanup"));
 }
 
 #[test]
@@ -640,12 +700,13 @@ fn single_run_modes_ignore_the_final_interval() {
 }
 
 #[test]
-/// Stop, suspend and layout changes during an interval cancel the next run after the previous run has released its drag.
+/// Stop, suspend, Close and layout changes during an interval cancel the next run after the previous run has released its drag.
 fn interval_cancellation_keeps_compact_ownership_until_cleanup() {
     const STOP: usize = 0;
     const SUSPEND: usize = 1;
     const ENVIRONMENT: usize = 2;
-    for reason in [STOP, SUSPEND, ENVIRONMENT] {
+    const CLOSE: usize = 3;
+    for reason in [STOP, SUSPEND, ENVIRONMENT, CLOSE] {
         let desktop = Desktop::new(events(), Duration::ZERO);
         desktop.configure(|properties| properties.interval_ms = LONG_WAIT.as_millis() as u64);
         let session = Session::new(desktop.clone());
@@ -663,6 +724,8 @@ fn interval_cancellation_keeps_compact_ownership_until_cleanup() {
         if reason == ENVIRONMENT {
             desktop.environment_changed.store(true, Ordering::Release);
             session.refresh().expect("Observe changed environment");
+        } else if reason == CLOSE {
+            session.request_close().expect("Close during interval");
         } else {
             session
                 .signal_stop(reason == SUSPEND)

@@ -70,24 +70,15 @@ pub async fn delete_macro(
     AppMode::current().require_library()?;
     let repository = service.repository()?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _reservation = deletion_reservation(&app, confirmation_owner.as_deref())?;
-        repository.delete(&macro_id, |state| {
-            if let Err(error) = app.emit(LIBRARY_EVENT, state) {
-                eprintln!("Library update delivery failed: {error}");
-            }
+        let session = app.state::<Arc<crate::session::Session>>();
+        session.delete(confirmation_owner.as_deref(), || {
+            repository.delete(&macro_id, |state| {
+                if let Err(error) = app.emit(LIBRARY_EVENT, state) {
+                    eprintln!("Library update delivery failed: {error}");
+                }
+            })
         })
     })
     .await
     .map_err(|error| error.to_string())?
-}
-/// Transfers an owned confirmation token or acquires a direct-operation token atomically before any disk work.
-fn deletion_reservation(app: &AppHandle, owner: Option<&str>) -> Result<Box<dyn Send>, String> {
-    let session = app.state::<Arc<crate::session::Session>>();
-    if let Some(reservation) = session.take_confirmation(owner)? {
-        return Ok(reservation);
-    }
-    Ok(Box::new(
-        app.state::<crate::configure::ConfigureService>()
-            .reserve_operation()?,
-    ))
 }

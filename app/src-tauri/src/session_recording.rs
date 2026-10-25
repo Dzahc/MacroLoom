@@ -145,7 +145,7 @@ impl Session {
     pub fn discard_recording(&self) -> Result<Snapshot, String> {
         let _transition = self.transition.try_lock().map_err(|_| ACTIVE_SESSION)?;
         let mut state = self.lock()?;
-        if !state.save_failed {
+        if !state.save_failed || state.close_requested {
             return Err(ACTIVE_SESSION.into());
         }
         state.recording = None;

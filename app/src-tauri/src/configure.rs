@@ -81,7 +81,8 @@ pub async fn open_configure(
     require_caller(&window, MAIN_WINDOW)?;
     AppMode::current().require_library()?;
     let repository = library.repository()?;
-    service.lock()?.reserve()?;
+    app.state::<Arc<crate::session::Session>>()
+        .reserve_editor(|| service.lock()?.reserve())?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         if repository.snapshot()?.deleting.is_some() {
             return Err(CONFIGURE_BUSY.into());

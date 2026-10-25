@@ -26,7 +26,7 @@ export const SESSION_TEXT = {
   replay: 'Replay temporary recording',
   retained: 'Recording retained in memory; not saved.',
   close:
-    'This recording is not saved. Keep MacroLoom open or discard it and exit.',
+    'This recording is not saved. Retry and exit, discard and exit, or keep MacroLoom open.',
   keepOpen: 'Keep open',
   discard: 'Discard and exit',
   starting: 'Checking global shortcuts…',
@@ -38,6 +38,7 @@ export const SESSION_TEXT = {
   playbackGuidance:
     'Playback shares the Windows cursor and keyboard focus. Record a click into the target before typing; keep its window in the recorded position. Manual input can interfere.',
   retryRecording: 'Retry save',
+  retryExit: 'Retry and exit',
   discardRecording: 'Discard recording',
 } as const;
 

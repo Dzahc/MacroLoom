@@ -43,10 +43,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId,
     KillTimer, PeekMessageW, PostThreadMessageW, SetTimer, SetWindowLongW, SetWindowPlacement,
     SetWindowPos, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE,
-    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED,
-    MA_NOACTIVATE, MSG, MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    HHOOK, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+    LLKHF_INJECTED, MA_NOACTIVATE, MSG, MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
     USER_TIMER_MINIMUM, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP, WM_CANCELMODE,
     WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCLBUTTONDBLCLK,
@@ -72,6 +72,7 @@ const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 const HOOK_FAILED: &str =
     "Native input capture is unavailable; Retry shortcuts or restart MacroLoom.";
 const UNREGISTER_FAILED: &str = "Could not release a global shortcut reservation.";
+const UNHOOK_FAILED: &str = "Could not release a native input hook.";
 const POWER_SUBCLASS: usize = 14;
 const POWER_HOOK_FAILED: &str = "Could not observe computer sleep notifications.";
 const COMPACT_COLLISION: &str =
@@ -922,6 +923,7 @@ fn clamp_window_bounds(bounds: RECT) -> Result<RECT, String> {
 struct ReservationJob {
     record: bool,
     stop: bool,
+    shutdown: bool,
     reply: mpsc::SyncSender<Result<Availability, String>>,
 }
 /// Actual thread-owned reservations plus the last explicit Stop availability check.
@@ -934,7 +936,7 @@ struct HookRuntime {
 impl HookRuntime {
     /// Reconciles physical reservations; errors retain actual ownership rather than pretending unregistration succeeded.
     fn apply(&mut self, record: bool, stop: bool) -> Result<Availability, String> {
-        if !self.hooks_ready {
+        if !self.hooks_ready && (record || stop) {
             return Err(HOOK_FAILED.into());
         }
         let result = self.apply_keys(record, stop);
@@ -983,6 +985,7 @@ pub fn configure_shortcuts(record: bool, stop: bool) -> Result<Availability, Str
     jobs.send(ReservationJob {
         record,
         stop,
+        shutdown: false,
         reply,
     })
     .map_err(|_| HOOK_FAILED)?;
@@ -990,6 +993,58 @@ pub fn configure_shortcuts(record: bool, stop: bool) -> Result<Availability, Str
     receive
         .recv_timeout(HOOK_TIMEOUT)
         .map_err(|_| HOOK_FAILED)?
+}
+/// Thread-owned installed handles; successful partial teardown clears only the released handle for safe retry.
+struct HookHandles {
+    keyboard: HHOOK,
+    mouse: HHOOK,
+}
+impl HookHandles {
+    /// Releases live installed hooks without losing ownership of any rejected native release.
+    fn release(&mut self) -> Result<(), String> {
+        // Keep the keyboard hook available for F8 if either native release is rejected.
+        release_hook(&mut self.mouse)?;
+        release_hook(&mut self.keyboard)
+    }
+}
+/// Unhooks one valid thread-owned handle and clears it only after the synchronous OS acknowledgement.
+fn release_hook(handle: &mut HHOOK) -> Result<(), String> {
+    if handle.is_null() {
+        return Ok(());
+    }
+    // SAFETY: this is the live handle returned by this thread's installation; it is retained unchanged on failure.
+    if unsafe { UnhookWindowsHookEx(*handle) } == 0 {
+        return Err(UNHOOK_FAILED.into());
+    }
+    *handle = null_mut();
+    Ok(())
+}
+/// Acknowledges complete reservation/hook teardown on its owning thread; only workers may wait here.
+/// Timeout or release failure retains the running owner and is never treated as safe exit.
+pub fn shutdown_hooks_checked() -> Result<(), String> {
+    if !hooks_running() {
+        return Ok(());
+    }
+    let (reply, receive) = mpsc::sync_channel(1);
+    HOOK_JOBS
+        .get()
+        .ok_or(HOOK_FAILED)?
+        .send(ReservationJob {
+            record: false,
+            stop: false,
+            shutdown: true,
+            reply,
+        })
+        .map_err(|_| HOOK_FAILED)?;
+    wake_hook(RESERVATION_MESSAGE)?;
+    receive
+        .recv_timeout(HOOK_TIMEOUT)
+        .map_err(|_| HOOK_FAILED)??;
+    Ok(())
+}
+/// Reports whether this application owns a session hook service, including an already acknowledged shutdown.
+pub fn has_session_hooks() -> bool {
+    ENGINE.get().is_some()
 }
 /// Posts a by-value thread message to the live hook thread; no borrowed data crosses threads.
 fn wake_hook(message: u32) -> Result<(), String> {
@@ -1039,6 +1094,7 @@ fn hook_loop(jobs: mpsc::Receiver<ReservationJob>, ready: mpsc::SyncSender<Resul
     let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), null_mut(), 0) };
     // SAFETY: the same static-lifetime callback and process-local thread hook contract applies to mouse input.
     let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), null_mut(), 0) };
+    let mut handles = HookHandles { keyboard, mouse };
     let mut runtime = HookRuntime {
         record: false,
         stop: false,
@@ -1052,21 +1108,12 @@ fn hook_loop(jobs: mpsc::Receiver<ReservationJob>, ready: mpsc::SyncSender<Resul
     let _ = ready.send(Ok(()));
     // SAFETY: message is initialized writable storage and each successful call returns a valid thread/window message.
     while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
-        pump_hook_message(&message, &jobs, &mut runtime);
+        if pump_hook_message(&message, &jobs, &mut runtime, &mut handles) {
+            return;
+        }
     }
     let _ = runtime.apply(false, false);
-    // SAFETY: only handles successfully returned by installation are unhooked, after callbacks have stopped dispatching.
-    if !keyboard.is_null() {
-        unsafe {
-            UnhookWindowsHookEx(keyboard);
-        }
-    }
-    // SAFETY: mouse is likewise an installed, thread-owned live hook handle.
-    if !mouse.is_null() {
-        unsafe {
-            UnhookWindowsHookEx(mouse);
-        }
-    }
+    let _ = handles.release();
     HOOK_THREAD.store(0, Ordering::Release);
 }
 /// Applies reservation jobs without callback work; reserved keyboard callbacks already queue control actions directly.
@@ -1074,11 +1121,28 @@ fn pump_hook_message(
     message: &MSG,
     jobs: &mpsc::Receiver<ReservationJob>,
     runtime: &mut HookRuntime,
-) {
+    handles: &mut HookHandles,
+) -> bool {
     if message.message == RESERVATION_MESSAGE {
         while let Ok(job) = jobs.try_recv() {
-            let result = runtime.apply(job.record, job.stop);
+            let result = runtime
+                .apply(job.record, job.stop)
+                .and_then(|availability| {
+                    if job.shutdown {
+                        if let Err(error) = handles.release() {
+                            let _ = runtime.apply(false, true);
+                            return Err(error);
+                        }
+                        runtime.hooks_ready = false;
+                        HOOK_THREAD.store(0, Ordering::Release);
+                    }
+                    Ok(availability)
+                });
+            let stopped = job.shutdown && result.is_ok();
             let _ = job.reply.send(result);
+            if stopped {
+                return true;
+            }
         }
     } else if message.message != WM_HOTKEY {
         // SAFETY: caller supplied an initialized message returned by GetMessageW; dispatch retains no local pointer.
@@ -1087,6 +1151,7 @@ fn pump_hook_message(
             DispatchMessageW(message);
         }
     }
+    false
 }
 /// Queues a control without waiting for a frontend callback; Stop freezes/cancels input before worker delivery.
 fn queue_control(control: ControlJob) {
@@ -1105,7 +1170,16 @@ fn queue_control(control: ControlJob) {
 }
 /// Requests worker-owned cleanup following a native close request.
 pub fn queue_stop() {
-    queue_control(ControlJob::Stop);
+    if let Some(session) = ENGINE.get() {
+        match session.close_cleanup() {
+            Ok(request) => {
+                if let Some(sender) = CONTROL_JOBS.get() {
+                    let _ = sender.send(QueuedControl::Cleanup(request));
+                }
+            }
+            Err(error) => session.report(error),
+        }
+    }
 }
 /// Stops native hook pumping when the owned main window is destroyed.
 pub fn shutdown_hooks() {
@@ -1735,6 +1809,37 @@ mod tests {
         );
         assert!(normalize_pixel(i32::MIN, VIRTUAL_ORIGIN, VIRTUAL_SPAN).is_err());
     }
+    #[test]
+    #[ignore = "Requires an interactive Windows desktop with F8/F9 initially unreserved"]
+    /// Real hooks and both shortcut reservations are acknowledged as released before another thread can acquire them.
+    fn native_hook_shutdown_acknowledges_and_releases_shortcuts() {
+        let (jobs, receive_jobs) = mpsc::channel();
+        assert!(
+            HOOK_JOBS.set(jobs).is_ok(),
+            "One hook owner per isolated test process"
+        );
+        let (ready, startup) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || hook_loop(receive_jobs, ready));
+        startup
+            .recv_timeout(HOOK_TIMEOUT)
+            .expect("Hook thread ready")
+            .expect("Hook startup");
+        let available = configure_shortcuts(true, true).expect("Reserve F9/F8");
+        let shutdown = shutdown_hooks_checked();
+        assert!(shutdown.is_ok(), "{shutdown:?}");
+        worker.join().expect("Native hook worker exits");
+        assert!(!hooks_running());
+        assert!(
+            available.record && available.stop,
+            "F9/F8 must be free before this native check"
+        );
+        for (id, key) in [(RECORD_ID, RECORD_KEY), (STOP_ID, STOP_KEY)] {
+            assert!(update_registration(false, id, key, true).expect("Native handoff"));
+            let _reservation = TestReservation(id);
+        }
+        shutdown_hooks_checked().expect("Repeated shutdown is idempotent");
+    }
+
     #[test]
     #[ignore = "Requires an interactive Windows desktop with F8 initially unreserved"]
     /// Actual OS conflict blocks required Stop, recovery acquires it, and terminal unregistration returns F8 to another owner.
