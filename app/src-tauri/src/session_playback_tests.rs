@@ -47,6 +47,7 @@ struct Desktop {
     callback_at: AtomicUsize,
     on_entry: Mutex<Option<Callback>>,
     on_inject: Mutex<Option<Callback>>,
+    on_rejection: Mutex<Option<Callback>>,
 }
 impl Desktop {
     /// Persists a known stream with nondefault speed/repeat properties for the real selected-ID command boundary.
@@ -86,6 +87,7 @@ impl Desktop {
             callback_at: AtomicUsize::new(FIRST_INJECTION),
             on_entry: Mutex::new(None),
             on_inject: Mutex::new(None),
+            on_rejection: Mutex::new(None),
         })
     }
     /// Starts the same selected-ID, arrival-bound workflow invoked by real Play and double click.
@@ -161,6 +163,15 @@ impl Platform for Desktop {
     fn inject(&self, kind: &EventKind) -> Result<(), String> {
         let mut events = self.events.lock().expect("Injected events");
         if events.len() == self.fail_injection.load(Ordering::Acquire) {
+            drop(events);
+            let callback = self
+                .on_rejection
+                .lock()
+                .expect("Injection rejection callback")
+                .take();
+            if let Some(callback) = callback {
+                callback();
+            }
             return Err(FAILURE.into());
         }
         events.push(kind.clone());
@@ -482,6 +493,65 @@ fn injection_failure_retains_owned_cleanup_for_retry() {
             false
         )]
     );
+}
+
+#[test]
+/// Suspend received inside a native injection must remain visible when that injection later rejects and cleanup finishes.
+fn suspend_during_rejected_injection_preserves_interruption_context() {
+    for failed_cleanup in [false, true] {
+        let desktop = Desktop::new(events(), END);
+        let session = Session::new(desktop.clone());
+        desktop
+            .fail_injection
+            .store(FIRST_INJECTION, Ordering::Release);
+        desktop
+            .fail_release
+            .store(failed_cleanup, Ordering::Release);
+        let weak = Arc::downgrade(&session);
+        *desktop.on_rejection.lock().expect("Suspension fixture") = Some(Box::new(
+            // Signals cancellation during the real platform injection call, before its failure reaches the playback worker.
+            move || {
+                let session = weak.upgrade().expect("Playback owner");
+                session.signal_stop(true).expect("Suspend during injection");
+                assert!(session
+                    .snapshot()
+                    .expect("Suspend received")
+                    .message
+                    .contains(SUSPEND_INTERRUPTED));
+            },
+        ));
+        desktop.play(&session).expect("Start playback");
+        let mut stopped = completed(&session);
+        if failed_cleanup {
+            assert!(stopped.cleanup_failed);
+            assert!(stopped.message.contains(SUSPEND_INTERRUPTED));
+            desktop.fail_release.store(false, Ordering::Release);
+            stopped = session.stop().expect("Retry owned-input cleanup");
+        }
+        assert_eq!(stopped.phase, Phase::Idle);
+        assert!(stopped.message.contains(FAILURE));
+        assert!(
+            stopped.message.contains(REPLAY_INTERRUPTED),
+            "Suspension context lost: {}",
+            stopped.message
+        );
+        assert_eq!(
+            session.refresh().expect("Wake refresh").message,
+            stopped.message
+        );
+        assert_eq!(
+            desktop.events.lock().expect("Accepted events").len(),
+            FIRST_INJECTION
+        );
+        assert_eq!(
+            *desktop.releases.lock().expect("Owned releases"),
+            [Held::Key(
+                test_support::TEST_KEY,
+                test_support::TEST_SCAN,
+                false
+            )]
+        );
+    }
 }
 
 #[test]

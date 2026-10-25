@@ -206,6 +206,27 @@ fn wake_shortcut_error_retains_the_saved_interruption_outcome() {
 }
 
 #[test]
+/// Explicit discard acknowledges a failed suspended capture, including the discard-and-exit path.
+fn discarding_a_suspended_recording_clears_its_interruption_context() {
+    for exit in [false, true] {
+        let desktop = Desktop::new(vec![test_support::key(true)]);
+        let session = Session::new(desktop.clone());
+        desktop.fail_save.store(true, Ordering::Release);
+        session.record().expect("Record before suspend");
+        assert!(session.suspend().expect("Retain failed save").save_failed);
+        let discarded = if exit {
+            session.request_close().expect("Close failed save");
+            session.discard_exit().expect("Explicit discard and exit");
+            session.snapshot().expect("Discarded exit state")
+        } else {
+            session.discard_recording().expect("Explicit discard")
+        };
+        assert!(!discarded.unsaved);
+        assert_eq!(discarded.message, if exit { EXIT_PENDING } else { READY });
+    }
+}
+
+#[test]
 /// Close joins an in-flight save; suspend/repeated Close cannot create another attempt or release exit before its result.
 fn close_and_suspend_join_one_pending_save() {
     let desktop = Desktop::new(vec![test_support::key(true)]);

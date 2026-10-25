@@ -121,6 +121,9 @@ impl Session {
         let outcome = recording_outcome(&recording, result, state.outcome_sequence);
         state.message = outcome.message.clone();
         state.terminal = outcome.message.clone();
+        if let Some(context) = &mut state.interruption_context {
+            *context = outcome.message.clone();
+        }
         state.save_failed = !outcome.success;
         if outcome.success {
             state.capture = Capture::default();
@@ -153,6 +156,7 @@ impl Session {
         state.save_failed = false;
         state.phase = Phase::Idle;
         state.reservation = None;
+        state.interruption_context = None;
         state.message = READY.into();
         state.terminal = READY.into();
         drop(state);

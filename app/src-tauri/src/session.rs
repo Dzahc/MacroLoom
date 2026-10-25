@@ -188,7 +188,8 @@ struct State {
     message: String,
     terminal: String,
     shortcut_error: Option<String>,
-    interrupted: bool,
+    /// Suspension feedback survives later terminal failures; recording save receipts refresh its retained outcome.
+    interruption_context: Option<String>,
     cleanup_failed: bool,
     close_requested: bool,
     confirmation: Option<Box<dyn Send>>,
@@ -224,7 +225,7 @@ impl Default for State {
             message: READY.into(),
             terminal: READY.into(),
             shortcut_error: None,
-            interrupted: false,
+            interruption_context: None,
             cleanup_failed: false,
             close_requested: false,
             confirmation: None,
@@ -310,7 +311,8 @@ impl Session {
     /// Publishes actionable command errors; idle shortcut failures supplement completed interruption feedback.
     pub fn report(&self, error: String) {
         if let Ok(mut state) = self.lock() {
-            if !state.interrupted || state.shortcut_error.as_ref() != Some(&error) {
+            if state.interruption_context.is_none() || state.shortcut_error.as_ref() != Some(&error)
+            {
                 state.message = error;
             }
         }
@@ -407,7 +409,7 @@ impl Session {
             .ok_or(STATE_ERROR)?;
         state.starting = true;
         state.shortcut_error = None;
-        state.interrupted = false;
+        state.interruption_context = None;
         state.can_record = false;
         state.cancel = Arc::new(AtomicBool::new(false));
         state.run = FIRST_RUN;
@@ -578,7 +580,7 @@ impl Session {
                 self.stop_recording(&mut state, interrupted);
             }
         }
-        state.interrupted = interrupted;
+        state.interruption_context = interrupted.then(|| state.terminal.clone());
         state.phase = Phase::Stopping;
         state.message = STOPPING.into();
         state.can_record = false;
@@ -795,6 +797,7 @@ impl Session {
         state.reservation = None;
         state.save_failed = false;
         state.phase = Phase::Idle;
+        state.interruption_context = None;
         state.message = EXIT_PENDING.into();
         Ok(())
     }
@@ -846,7 +849,7 @@ fn recording_message(interrupted: bool, empty: bool) -> &'static str {
 }
 /// Updates conflict feedback without removing successful capture/terminal messages after availability recovery.
 fn update_shortcut_message(state: &mut State, availability: Availability) {
-    if state.interrupted {
+    if state.interruption_context.is_some() {
         update_interrupted_shortcuts(state, availability);
         return;
     }
@@ -876,15 +879,17 @@ fn update_interrupted_shortcuts(state: &mut State, availability: Availability) {
 /// Composes interruption context with current feedback and transient native errors without duplicating equal messages.
 /// Native error recovery retains any unrelated actionable feedback alongside the interruption outcome.
 fn session_message(state: &State) -> String {
-    let context = if state.phase == Phase::Stopping {
-        SUSPEND_INTERRUPTED
-    } else {
-        &state.terminal
-    };
-    let message = if state.interrupted && state.message != context {
-        format!("{context} {}", state.message)
-    } else {
-        state.message.clone()
+    let context = state.interruption_context.as_deref().map(|context| {
+        // Cleanup has not yet earned the completed-release outcome retained for later Idle feedback.
+        if state.phase == Phase::Stopping {
+            SUSPEND_INTERRUPTED
+        } else {
+            context
+        }
+    });
+    let message = match context {
+        Some(context) if state.message != context => format!("{context} {}", state.message),
+        _ => state.message.clone(),
     };
     match &state.shortcut_error {
         Some(error) if error != &state.message => format!("{message} {error}"),

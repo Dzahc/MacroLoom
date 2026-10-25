@@ -89,8 +89,7 @@ impl Session {
 
 /// Clears only a prior interruption explanation when a deliberate new application operation has been accepted.
 pub(super) fn acknowledge_interruption(state: &mut State) {
-    if state.interrupted {
-        state.interrupted = false;
+    if state.interruption_context.take().is_some() {
         state.message = READY.into();
         state.terminal = READY.into();
     }
