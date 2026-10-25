@@ -38,6 +38,7 @@ import { DEV_TEXT } from './library-samples';
 import { useNativeSession } from './native-session';
 import { SessionControls } from './session-controls';
 import { SESSION_COMMAND } from './session-contract';
+import { useNativeRename } from './native-rename';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -86,6 +87,7 @@ export function LiveLibraryApp({
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  const rename = useNativeRename(controller, nativeSession.snapshot);
   const mounted = useRef(false);
   const session = useSessionPresentation();
   const { controller: windowController, view } = useCompactWindow();
@@ -102,6 +104,9 @@ export function LiveLibraryApp({
     message: snapshot.loading
       ? snapshot.message
       : nativeSession.snapshot.message,
+    renameSaving:
+      nativeSession.snapshot.renameSaving || rename.snapshot.pending,
+    deferredStart: nativeSession.snapshot.deferredStart,
     recordingAvailable: nativeSession.snapshot.canRecord,
     playbackAvailable: nativeSession.snapshot.canPlay,
   };
@@ -222,6 +227,7 @@ export function LiveLibraryApp({
         )}
         <LibraryView
           snapshot={{ ...presentation, confirmationOpen: configure.busy }}
+          rename={rename}
           onSelect={select}
           onAction={action}
           onDeleteConfirmed={confirmDelete}

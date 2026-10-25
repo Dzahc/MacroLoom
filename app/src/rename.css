@@ -1,0 +1,59 @@
+.macro-rename {
+  padding: 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.65rem;
+  background: var(--surface);
+}
+
+.macro-rename-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.macro-rename input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  font: inherit;
+}
+
+.rename-button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rename-button svg {
+  width: 100%;
+  height: 100%;
+}
+
+.rename-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rename-error {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.macro-rename :focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

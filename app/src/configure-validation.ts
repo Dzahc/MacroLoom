@@ -80,10 +80,8 @@ export function parseInterval(value: string): number | null {
 /** @param input Editable values. @returns Active field errors using backend-compatible name/count/interval rules. */
 export function configureErrors(input: ConfigureInputs): ConfigureErrors {
   const errors: ConfigureErrors = {};
-  const name = trimConfigureName(input.name);
-  const length = Array.from(name).length;
-  if (!length || length > CONFIGURE_LIMIT.name || CONTROL_CHARACTERS.test(name))
-    errors.name = CONFIGURE_ERROR.name;
+  const nameError = configureNameError(input.name);
+  if (nameError) errors.name = nameError;
   if (
     !SPEED_PRESETS.some(
       /** @param speed Preset. @returns Whether it matches the draft. */ (
@@ -129,4 +127,15 @@ export function configureDraft(
       intervalMs: parseInterval(input.interval) ?? original.playback.intervalMs,
     },
   };
+}
+
+/** @param value Raw name. @returns The shared frontend/backend-compatible name diagnostic, or an empty string. */
+export function configureNameError(value: string): string {
+  const name = trimConfigureName(value);
+  const length = Array.from(name).length;
+  return !length ||
+    length > CONFIGURE_LIMIT.name ||
+    CONTROL_CHARACTERS.test(name)
+    ? CONFIGURE_ERROR.name
+    : '';
 }

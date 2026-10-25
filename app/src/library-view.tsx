@@ -8,6 +8,9 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
+import { RenameEditor } from './rename-editor';
+import type { RenameBinding } from './rename-contract';
+import { useRenameShortcut } from './rename-shortcut';
 import { playbackKeyDown, playbackKeyUp } from './playback-activation';
 import { isCompactView, sessionBanner } from './compact-presentation';
 import { observeCompactLayout, restoreLibraryScroll } from './compact-layout';
@@ -41,6 +44,7 @@ import {
 } from './library-model';
 
 type ViewProps = LibraryCallbacks & {
+  rename?: RenameBinding;
   snapshot: LibrarySnapshot;
   notifications?: ReactNode;
   onDeleteConfirmed: DeleteConfirmed;
@@ -52,7 +56,7 @@ type ViewProps = LibraryCallbacks & {
 };
 type MenuAnchor = { macroId: string; x: number; y: number };
 const MENU_GAP = 8;
-const MENU_ACTIONS = [ACTION.configure, ACTION.delete] as const;
+const MENU_ACTIONS = [ACTION.rename, ACTION.configure, ACTION.delete] as const;
 const MENU_EVENT = {
   pointerDown: 'pointerdown',
   blur: 'blur',
@@ -257,28 +261,33 @@ function MacroRow({
   }
   return (
     <li>
-      <button
-        type="button"
-        className={`macro-row ${selected ? 'selected' : ''}`}
-        data-macro-id={macro.id}
-        aria-pressed={selected}
-        disabled={
-          props.snapshot.phase !== PHASE.idle || props.snapshot.confirmationOpen
-        }
-        onClick={select}
-        onContextMenu={
-          /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */ (
-            event,
-          ) => openMenu(event, macro.id)
-        }
-        onDoubleClick={play}
-        title={macro.name}
-      >
-        <span className="macro-name">{macro.name}</span>
-        <span className="macro-duration">
-          {formatDuration(macro.durationMs)}
-        </span>
-      </button>
+      {props.rename?.snapshot.draft?.macroId === macro.id ? (
+        <RenameEditor rename={props.rename} />
+      ) : (
+        <button
+          type="button"
+          className={`macro-row ${selected ? 'selected' : ''}`}
+          data-macro-id={macro.id}
+          aria-pressed={selected}
+          disabled={
+            props.snapshot.phase !== PHASE.idle ||
+            props.snapshot.confirmationOpen
+          }
+          onClick={select}
+          onContextMenu={
+            /** @param event Context interaction forwarded with this row's ID. @returns Nothing. */ (
+              event,
+            ) => openMenu(event, macro.id)
+          }
+          onDoubleClick={play}
+          title={macro.name}
+        >
+          <span className="macro-name">{macro.name}</span>
+          <span className="macro-duration">
+            {formatDuration(macro.durationMs)}
+          </span>
+        </button>
+      )}
     </li>
   );
 }
@@ -311,6 +320,30 @@ export function LibraryView(props: ViewProps) {
   const suppressDismissalGesture = useRef(false);
   const scrollPosition = useRef(0);
   const compact = isCompactView(props.snapshot);
+  const renameFocus = props.rename?.snapshot.focusId;
+  useLayoutEffect(
+    /** Restores explicit Save/Cancel focus only while the main window remains focused and idle. */
+    () => {
+      if (
+        !renameFocus ||
+        !document.hasFocus() ||
+        props.snapshot.phase !== PHASE.idle
+      )
+        return;
+      const rows = owner.current?.querySelectorAll<HTMLButtonElement>(
+        'button[data-macro-id]',
+      );
+      rows?.forEach(
+        /** @param row Stable-identity row; no user-controlled selector interpolation. */ (
+          row,
+        ) => {
+          if (row.dataset.macroId === renameFocus)
+            row.focus({ preventScroll: true });
+        },
+      );
+    },
+    [renameFocus, props.snapshot.phase],
+  );
   const onLayout = props.onLayout;
   useLayoutEffect(
     /** Observes external layout measurements and restores list scroll without activating controls. */
@@ -340,12 +373,22 @@ export function LibraryView(props: ViewProps) {
     },
     onAction: action,
   };
+  useRenameShortcut(viewProps.snapshot, props.rename);
 
   /** @param request Available typed request; Delete opens a frozen confirmation rather than executing an action. @returns Nothing. */
   function action(request: LibraryAction) {
     const macroId =
       'macroId' in request ? request.macroId : props.snapshot.selectedId;
     if (attempt || !canRequest(props.snapshot, request.action, macroId)) return;
+    if (request.action === ACTION.rename) {
+      const target = props.snapshot.macros.find(
+        /** @param macro Existing requested row. @returns Identity match. */ (
+          macro,
+        ) => macro.id === request.macroId,
+      );
+      if (target) props.rename?.open(target);
+      return;
+    }
     if (request.action !== ACTION.delete) {
       props.onAction(request);
       return;

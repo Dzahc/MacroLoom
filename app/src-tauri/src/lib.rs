@@ -8,6 +8,7 @@ pub mod macro_format;
 mod playback;
 mod presentation;
 mod recording;
+mod rename;
 pub mod repository;
 mod session;
 mod session_control;
@@ -63,6 +64,7 @@ fn desktop_builder_with_library(
         .device_event_filter(tauri::DeviceEventFilter::Always)
         .setup(move |app| {
             app.manage(configure::ConfigureService::default());
+            app.manage(rename::RenameService::default());
             app.manage(library);
             let window = app
                 .get_webview_window(MAIN_WINDOW_LABEL)
@@ -103,6 +105,8 @@ fn desktop_builder_with_library(
             library_commands::load_library,
             library_commands::macro_snapshot,
             library_commands::delete_macro,
+            rename::rename_macro,
+            rename::rename_status,
             configure::open_configure,
             configure::configure_snapshot,
             configure::configure_submit,

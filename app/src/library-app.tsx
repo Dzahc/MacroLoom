@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { LibraryView } from './library-view';
+import { useSampleRename } from './sample-rename';
 import {
   reconcileSelection,
   type LibraryAction,
@@ -63,8 +64,10 @@ function SampleLibraryApp() {
   );
   const nextOutcome = useRef(0);
   const sample = SCENARIOS[scenario];
+  const rename = useSampleRename(sample.macros, sample.phase);
   const snapshot = {
     ...sample,
+    macros: rename.macros,
     selectedId: reconcileSelection(sample.macros, selectedId),
   };
   useEffect(
@@ -147,6 +150,7 @@ function SampleLibraryApp() {
         )}
         <LibraryView
           snapshot={snapshot}
+          rename={rename.binding}
           onSelect={select}
           onAction={action}
           onDeleteConfirmed={confirmDelete}

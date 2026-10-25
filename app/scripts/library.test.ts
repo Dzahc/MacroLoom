@@ -1,3 +1,6 @@
+import { RenameController } from '../src/rename-controller.ts';
+import type { RenameBinding } from '../src/rename-contract.ts';
+import { RENAME_TEXT } from '../src/rename-contract.ts';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -93,10 +96,11 @@ function snapshot(overrides: Partial<LibrarySnapshot> = {}): LibrarySnapshot {
 }
 
 /** @param state Supplied library state. @returns Static markup with inert host callbacks. */
-function render(state: LibrarySnapshot): string {
+function render(state: LibrarySnapshot, rename?: RenameBinding): string {
   return renderToStaticMarkup(
     createElement(view.LibraryView, {
       snapshot: state,
+      rename,
       onSelect:
         /** Ignores selection requests during static rendering. */ () => {},
       onAction:
@@ -385,4 +389,32 @@ void test('empty and failed-load samples omit failed rows without adding a produ
     (failure) => assert.equal(markup.includes(failure), false),
   );
   assert.ok(markup.includes(SELECTED.name));
+});
+
+/** Inline rename replaces the row button with accessible independent controls and yields the duration space. */
+void test('inline rename renders a selected name and two labelled boxed controls without nested buttons', () => {
+  const rename = new RenameController({
+    /** @returns Inert status; rendering never saves. */
+    status: () =>
+      Promise.resolve({ attemptId: 0, pending: false, completion: null }),
+    /** @returns An unused successful receipt. */
+    submit: () =>
+      Promise.resolve({
+        attemptId: OUTCOME_ID.first,
+        result: { ok: true },
+        library: null,
+        discarded: false,
+      }),
+  });
+  rename.open(SELECTED);
+  const markup = render(
+    snapshot({ macros: [SELECTED], selectedId: SELECTED.id }),
+    rename,
+  );
+  assert.ok(markup.includes(`aria-label="${RENAME_TEXT.name}"`));
+  assert.ok(markup.includes(`aria-label="${RENAME_TEXT.save}"`));
+  assert.ok(markup.includes(`aria-label="${RENAME_TEXT.cancel}"`));
+  assert.doesNotMatch(markup, /class="macro-duration"/);
+  assert.doesNotMatch(markup, /maxlength/i);
+  assert.doesNotMatch(markup, /<button[^>]*class="macro-row/);
 });

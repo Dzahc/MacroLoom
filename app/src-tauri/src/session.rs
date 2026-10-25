@@ -6,7 +6,7 @@ use crate::recording::{Recording, RecordingOutcome};
 use crate::shortcuts::{Availability, RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 #[path = "session_lifecycle.rs"]
 mod lifecycle;
@@ -14,6 +14,8 @@ mod lifecycle;
 mod playback_session;
 #[path = "session_recording.rs"]
 mod recording_session;
+#[path = "session_rename.rs"]
+mod rename_session;
 use lifecycle::acknowledge_interruption;
 
 pub const SESSION_EVENT: &str = "session-state";
@@ -81,6 +83,9 @@ pub enum Phase {
 #[serde(rename_all = "camelCase")]
 /// Revisioned command/event contract; availability reflects actual native reservations and capture stays backend-owned.
 pub struct Snapshot {
+    pub rename_saving: bool,
+    pub deferred_start: bool,
+    pub start_sequence: u64,
     pub revision: u64,
     pub phase: Phase,
     pub elapsed_ms: u64,
@@ -172,6 +177,9 @@ struct State {
     generation: u64,
     starting: bool,
     deleting: bool,
+    rename_saving: bool,
+    deferred_start: bool,
+    start_sequence: u64,
     revision: u64,
     start: Option<Instant>,
     playback_stage: PlaybackStage,
@@ -209,6 +217,9 @@ impl Default for State {
             generation: 0,
             starting: false,
             deleting: false,
+            rename_saving: false,
+            deferred_start: false,
+            start_sequence: 0,
             revision: 0,
             start: None,
             playback_stage: PlaybackStage::Running,
@@ -245,6 +256,7 @@ pub struct Session {
     platform: Arc<dyn Platform>,
     state: Mutex<State>,
     transition: Mutex<()>,
+    rename_ready: Condvar,
 }
 impl Session {
     /// Binds external desktop effects to a new idle owner; starts no hooks or session.
@@ -253,6 +265,7 @@ impl Session {
             platform,
             state: Mutex::new(State::default()),
             transition: Mutex::new(()),
+            rename_ready: Condvar::new(),
         })
     }
     /// Obtains a short-lived state guard, refusing to recover conflicting ownership after panic.
@@ -263,6 +276,9 @@ impl Session {
     pub fn snapshot(&self) -> Result<Snapshot, String> {
         let state = self.lock()?;
         Ok(Snapshot {
+            rename_saving: state.rename_saving,
+            deferred_start: state.deferred_start,
+            start_sequence: state.start_sequence,
             revision: state.revision,
             phase: state.phase,
             elapsed_ms: state
@@ -279,8 +295,8 @@ impl Session {
             last_release: state.capture.last_release,
             message: session_message(&state),
             shortcuts: state.shortcuts,
-            can_record: state.can_record && state.phase == Phase::Idle && !state.starting,
-            can_play: state.can_record && state.phase == Phase::Idle && !state.starting,
+            can_record: state.can_record && command_available(&state),
+            can_play: state.can_record && command_available(&state),
             macro_name: state
                 .playback
                 .as_ref()
@@ -335,7 +351,8 @@ impl Session {
         if self.lock()?.phase != Phase::Idle {
             return Ok(());
         }
-        let available = self.platform.available() && self.idle_available()?;
+        let saving = self.lock()?.rename_saving;
+        let available = self.operation_available(saving)?;
         let result = self.refresh_idle_shortcuts(available)?;
         let mut state = self.lock()?;
         state.shortcuts = result;
@@ -345,10 +362,15 @@ impl Session {
         }
         Ok(())
     }
+    /// Keeps start commands available during a name save while preserving all session and close preconditions.
+    fn operation_available(&self, saving: bool) -> Result<bool, String> {
+        Ok((saving || self.platform.available()) && self.idle_available()?)
+    }
     /// Reconciles idle native reservations and retains their transient error independently until a successful native refresh.
     /// Propagates failure for ordinary caller reporting without losing the prior session outcome.
     fn refresh_idle_shortcuts(&self, record: bool) -> Result<Availability, String> {
-        let result = self.platform.shortcuts(record, false);
+        let waiting = self.lock()?.deferred_start;
+        let result = self.platform.shortcuts(record, waiting);
         self.lock()?.shortcut_error = result.as_ref().err().cloned();
         result
     }
@@ -386,8 +408,20 @@ impl Session {
     }
     /// Captures Record/Play eligibility without native work; a queued request cannot reinterpret a later Idle state as its original intent.
     pub(crate) fn start_request(&self) -> Result<Option<StartRequest>, String> {
-        let state = self.lock()?;
-        Ok(start_available(&state).then_some(StartRequest {
+        let mut state = self.lock()?;
+        if !start_available(&state) || state.deferred_start {
+            return Ok(None);
+        }
+        state.deferred_start = state.rename_saving;
+        // Deferred starts retain the pending draft until their receipt decides its fate.
+        // Stop/Close may cancel them before any frontend snapshot is delivered.
+        if !state.rename_saving {
+            state.start_sequence = state
+                .start_sequence
+                .checked_add(GENERATION_STEP)
+                .ok_or(STATE_ERROR)?;
+        }
+        Ok(Some(StartRequest {
             generation: state.generation,
         }))
     }
@@ -407,6 +441,7 @@ impl Session {
             .generation
             .checked_add(GENERATION_STEP)
             .ok_or(STATE_ERROR)?;
+        state.deferred_start = false;
         state.starting = true;
         state.shortcut_error = None;
         state.interruption_context = None;
@@ -428,6 +463,7 @@ impl Session {
         request: StartRequest,
         kind: StartKind,
     ) -> Result<Option<MutexGuard<'_, ()>>, String> {
+        self.wait_for_rename(request)?;
         if !self.claim_start(request, kind)? {
             return Ok(None);
         }
@@ -551,6 +587,8 @@ impl Session {
     /// Signals cancellation at arrival, including pre-activation startup; idle signals invalidate pending start requests.
     pub(crate) fn stop_request(&self, interrupted: bool) -> Result<StopRequest, String> {
         let mut state = self.lock()?;
+        state.deferred_start = false;
+        self.rename_ready.notify_all();
         let request = StopRequest {
             generation: state.generation,
         };
@@ -832,6 +870,10 @@ fn start_available(state: &State) -> bool {
         && !state.deleting
         && state.confirmation.is_none()
         && !state.close_requested
+}
+/// Combines backend lifecycle and the single deferred intent into command availability.
+fn command_available(state: &State) -> bool {
+    start_available(state) && !state.deferred_start
 }
 /// Rounds positive backend countdowns upward so submillisecond waits never appear expired in transport.
 fn remaining_milliseconds(duration: Duration) -> u64 {
