@@ -849,29 +849,10 @@ fn recording_message(interrupted: bool, empty: bool) -> &'static str {
 }
 /// Updates conflict feedback without removing successful capture/terminal messages after availability recovery.
 fn update_shortcut_message(state: &mut State, availability: Availability) {
-    if state.interruption_context.is_some() {
-        update_interrupted_shortcuts(state, availability);
-        return;
-    }
     if !availability.stop {
         state.message = STOP_UNAVAILABLE.into();
     } else if !availability.record {
         state.message = RECORD_UNAVAILABLE.into();
-    } else if state.message == STOP_UNAVAILABLE || state.message == RECORD_UNAVAILABLE {
-        state.message = state.terminal.clone();
-    }
-}
-/// Supplements the retained interruption outcome with live shortcut guidance, clearing only that guidance on recovery.
-fn update_interrupted_shortcuts(state: &mut State, availability: Availability) {
-    let conflict = if !availability.stop {
-        Some(STOP_UNAVAILABLE)
-    } else if !availability.record {
-        Some(RECORD_UNAVAILABLE)
-    } else {
-        None
-    };
-    if let Some(conflict) = conflict {
-        state.message = conflict.into();
     } else if state.message == STOP_UNAVAILABLE || state.message == RECORD_UNAVAILABLE {
         state.message = state.terminal.clone();
     }
