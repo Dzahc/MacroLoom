@@ -29,6 +29,8 @@ export type LibraryTransport = {
   load: () => Promise<BackendLibraryState>;
   read: (id: string) => Promise<MacroDocument>;
   delete: (id: string) => Promise<BackendLibraryState>;
+  /** @param id Selected loaded identity or null. @returns Nothing; reports selection to an adapter that owns asynchronous failure feedback. */
+  select?: (id: string | null) => void;
 };
 export type PreparedAction = Readonly<{
   request: LibraryAction;
@@ -62,6 +64,7 @@ export class LibraryController {
   private generation = 0;
   private pendingDelete: MacroSummary | null = null;
   private latestBackend: BackendLibraryState | null = null;
+  private notifiedSelection: string | null | undefined;
   private state: LibrarySnapshot = {
     macros: [],
     selectedId: null,
@@ -131,6 +134,7 @@ export class LibraryController {
   select(change: SelectionChange): void {
     if (this.state.phase !== PHASE.idle) return;
     if (reconcileSelection(this.state.macros, change.macroId) === null) return;
+    this.notifiedSelection = undefined;
     this.state = { ...this.state, selectedId: change.macroId };
     this.notify();
   }
@@ -321,8 +325,12 @@ export class LibraryController {
       message,
     });
   }
-  /** Notifies current store subscribers synchronously; subscribers own their cleanup. */
+  /** Signals changed selection to its native adapter before notifying local subscribers; subscribers own cleanup. */
   private notify(): void {
+    if (this.state.selectedId !== this.notifiedSelection) {
+      this.notifiedSelection = this.state.selectedId;
+      if (this.transport.select) this.transport.select(this.state.selectedId);
+    }
     this.listeners.forEach(
       /** @param listener Store subscriber to invoke. */ (listener) =>
         listener(),

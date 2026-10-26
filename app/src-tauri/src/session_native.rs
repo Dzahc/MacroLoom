@@ -21,6 +21,7 @@ const CONTENT_WIDTH: f64 = crate::window_view::MIN_CONTENT_WIDTH;
 const CONTENT_HEIGHT: f64 = 156.0;
 const NATIVE_UNAVAILABLE: &str = "Native session window is unavailable";
 const LIBRARY_UNAVAILABLE: &str = "Wait for library loading or the current operation to finish";
+const INVALID_SELECTION: &str = "Select a loaded saved macro";
 const WRONG_CALLER: &str = "Session command is unavailable in this window";
 const DEVELOPMENT_ONLY: &str = "Temporary replay is available only in development controls";
 const TEMPORARY_NAME: &str = "Temporary recording";
@@ -172,7 +173,7 @@ impl Platform for NativePlatform {
                 .require_operation()
                 .is_ok()
     }
-    /// Performs reservation updates on the native hook message thread.
+    /// Updates F9/F10 together and F8 independently on the native hook message thread, returning actual key availability.
     fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String> {
         windows::configure_shortcuts(record, stop)
     }
@@ -379,6 +380,27 @@ pub async fn play(
     tauri::async_runtime::spawn_blocking(move || session.play_requested(request))
         .await
         .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+/// Stores only a loaded selected identity for global Play; only the main library may change it and no file is read here.
+pub fn select_macro(
+    macro_id: Option<String>,
+    window: WebviewWindow,
+    library: State<'_, LibraryService>,
+    session: State<'_, Arc<Session>>,
+) -> Result<Snapshot, String> {
+    if window.label() != MAIN {
+        return Err(WRONG_CALLER.into());
+    }
+    AppMode::current().require_library()?;
+    if let Some(id) = &macro_id {
+        let loaded = library.repository()?.snapshot()?;
+        if !loaded.macros.iter().any(|entry| &entry.id == id) {
+            return Err(INVALID_SELECTION.into());
+        }
+    }
+    session.select_macro(macro_id)?;
+    session.snapshot()
 }
 #[tauri::command]
 /// Starts the selected saved macro on a worker; only the main library can invoke this command.

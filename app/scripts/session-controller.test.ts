@@ -13,6 +13,9 @@ import { PHASE, ACTION, canRequest } from '../src/library-model.ts';
 const EARLY_REVISION = 1;
 const LATER_REVISION = 2;
 const FAILED_COMMAND = 'Native control unavailable';
+const SELECT_TO_PLAY = 'Select a macro to play';
+const FIRST_MACRO = '68833c94-3d18-4fb2-8a59-0cc72382b616';
+const SECOND_MACRO = '78833c94-3d18-4fb2-8a59-0cc72382b616';
 const LIBRARY = {
   macros: [],
   selectedId: null,
@@ -20,6 +23,67 @@ const LIBRARY = {
   message: '',
   writable: true,
 } as const;
+
+/** A native no-selection receipt produces a timed toast once without replacing idle status. */
+void test('global Play without selection announces one timed toast', () => {
+  const controller = new SessionController({
+    /** @returns An inert native subscription. */
+    listen: () =>
+      Promise.resolve(/** No resources are owned by this fixture. */ () => {}),
+    /** @returns The ordinary initial native state. */
+    invoke: () => Promise.resolve(INITIAL_SESSION),
+  });
+  const notice = { sequence: EARLY_REVISION, message: SELECT_TO_PLAY };
+  controller.receive({ ...snapshot(EARLY_REVISION), notice });
+  controller.receive({ ...snapshot(LATER_REVISION), notice });
+  assert.deepEqual(
+    controller.queue
+      .getSnapshot()
+      .map(
+        /** @param outcome Visible toast. @returns Its text. */ (outcome) =>
+          outcome.message,
+      ),
+    [SELECT_TO_PLAY],
+  );
+  assert.equal(controller.queue.getSnapshot()[0]?.persistent, undefined);
+  controller.queue.dispose();
+});
+
+/** Selection is displayed from confirmed native receipts, and pending IPC preserves the user's selection order. */
+void test('native selection receipts preserve the last selected macro', async () => {
+  let confirmFirst: ((snapshot: SessionSnapshot) => void) | undefined;
+  const selected: (string | null)[] = [];
+  const controller = new SessionController({
+    /** @returns An inert listener registration. */
+    listen: () => Promise.resolve(/** Owns no native listener. */ () => {}),
+    /** @returns Initial status with no selected macro. */
+    invoke: () => Promise.resolve(INITIAL_SESSION),
+    /** @param macroId User-selected native identity. @returns One delayed first receipt and a later confirmed selection. */
+    select: (macroId) => {
+      selected.push(macroId);
+      if (macroId === FIRST_MACRO)
+        return new Promise(
+          /** @param resolve Delayed native acknowledgement. */ (resolve) => {
+            confirmFirst = resolve;
+          },
+        );
+      return Promise.resolve({
+        ...snapshot(LATER_REVISION),
+        selectedMacroId: SECOND_MACRO,
+      });
+    },
+  });
+  controller.select(FIRST_MACRO);
+  controller.select(SECOND_MACRO);
+  await settle();
+  assert.equal(controller.getSnapshot().selectedMacroId, null);
+  assert.deepEqual(selected, [FIRST_MACRO]);
+  assert.ok(confirmFirst);
+  confirmFirst({ ...snapshot(EARLY_REVISION), selectedMacroId: FIRST_MACRO });
+  await settle();
+  assert.deepEqual(selected, [FIRST_MACRO, SECOND_MACRO]);
+  assert.equal(controller.getSnapshot().selectedMacroId, SECOND_MACRO);
+});
 
 /** @param revision Known backend revision. @param phase Observable lifecycle phase. @returns One contract-valid test snapshot. */
 function snapshot(

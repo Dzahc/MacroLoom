@@ -1,11 +1,13 @@
 use crate::session::Session;
 use crate::session_control::{ControlRequest as ControlJob, QueuedControl};
 use crate::shortcuts::{
-    Availability, Control, KeySequences, RECORD_ID, RECORD_KEY, STOP_ID, STOP_KEY,
+    Availability, Control, KeySequences, PLAY_ID, PLAY_KEY, RECORD_ID, RECORD_KEY, STOP_ID,
+    STOP_KEY,
 };
 use crate::window_view::{ContentSize, Position, WindowAdapter};
 use crate::{EventKind, Held, MouseButton};
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
@@ -57,6 +59,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
 static HOOK_JOBS: OnceLock<mpsc::Sender<ReservationJob>> = OnceLock::new();
 static CONTROL_JOBS: OnceLock<mpsc::Sender<QueuedControl>> = OnceLock::new();
+static PENDING_CONTROLS: LazyLock<Mutex<VecDeque<QueuedControl>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
 static HOOK_THREAD: AtomicU32 = AtomicU32::new(0);
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
 static RESERVED: LazyLock<Mutex<Availability>> =
@@ -68,6 +72,7 @@ static OWN_KEY_SEQUENCES: LazyLock<Mutex<OwnKeySequences>> =
 static OWN_MOUSE_SEQUENCES: LazyLock<Mutex<OwnMouseSequences>> =
     LazyLock::new(|| Mutex::new(OwnMouseSequences::default()));
 const RESERVATION_MESSAGE: u32 = WM_APP + 1;
+const CONTROL_MESSAGE: u32 = WM_APP + 2;
 const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 const HOOK_FAILED: &str =
     "Native input capture is unavailable; Retry shortcuts or restart MacroLoom.";
@@ -87,7 +92,8 @@ const CONFLICT_HELPER_FAILED: &str = "The requested key is already reserved. Clo
 const CONFLICT_HELPER_DISABLED: &str = "Shortcut conflict helper is development-only.";
 const CONFLICT_RECORD: &str = "record";
 const CONFLICT_STOP: &str = "stop";
-const CONFLICT_USAGE: &str = "Use: shortcut-conflict-check record|stop";
+const CONFLICT_PLAY: &str = "play";
+const CONFLICT_USAGE: &str = "Use: shortcut-conflict-check record|play|stop";
 const EXTRA_INFO: usize = 0x4D4C_3038;
 const BASE_DPI: u32 = 96;
 const FULL_MIN_WIDTH: f64 = 360.0;
@@ -601,6 +607,9 @@ fn initial_key_excluded(key: u16, own_focus: bool) -> bool {
     if RESERVED_CAPTURE_KEYS.contains(&key) {
         return true;
     }
+    if key == PLAY_KEY && consumed_play_key() {
+        return true;
+    }
     own_focus && SNAPSHOT_CONTROL_KEYS.contains(&key)
 }
 /// Reports the actual down state without changing the user's keyboard or mouse state.
@@ -932,6 +941,7 @@ struct ReservationJob {
 /// Actual thread-owned reservations plus the last explicit Stop availability check.
 struct HookRuntime {
     record: bool,
+    play: bool,
     stop: bool,
     stop_available: bool,
     hooks_ready: bool,
@@ -943,6 +953,7 @@ impl HookRuntime {
         self.stop_available = self.stop;
         *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
             record: self.record,
+            play: self.play,
             stop: self.stop,
         };
         Ok(self.stop)
@@ -955,17 +966,20 @@ impl HookRuntime {
         let result = self.apply_keys(record, stop);
         *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
             record: self.record,
+            play: self.play,
             stop: self.stop,
         };
         result?;
         Ok(Availability {
             record: self.record,
+            play: self.play,
             stop: self.stop_available,
         })
     }
     /// Updates individual physical reservations; the caller publishes actual ownership even after partial failure.
     fn apply_keys(&mut self, record: bool, stop: bool) -> Result<(), String> {
         self.record = update_registration(self.record, RECORD_ID, RECORD_KEY, record)?;
+        self.play = update_registration(self.play, PLAY_ID, PLAY_KEY, record)?;
         self.stop = update_registration(self.stop, STOP_ID, STOP_KEY, stop)?;
         if stop {
             self.stop_available = self.stop;
@@ -1110,6 +1124,7 @@ fn hook_loop(jobs: mpsc::Receiver<ReservationJob>, ready: mpsc::SyncSender<Resul
     let mut handles = HookHandles { keyboard, mouse };
     let mut runtime = HookRuntime {
         record: false,
+        play: false,
         stop: false,
         stop_available: false,
         hooks_ready: !keyboard.is_null() && !mouse.is_null(),
@@ -1136,6 +1151,10 @@ fn pump_hook_message(
     runtime: &mut HookRuntime,
     handles: &mut HookHandles,
 ) -> bool {
+    if message.message == CONTROL_MESSAGE {
+        dispatch_controls();
+        return false;
+    }
     if message.message == RESERVATION_MESSAGE {
         while let Ok(job) = jobs.try_recv() {
             let result = runtime
@@ -1182,13 +1201,44 @@ fn queue_control(control: ControlJob) {
     };
     match control.receive(session) {
         Ok(Some(job)) => {
-            if let Some(sender) = CONTROL_JOBS.get() {
-                let _ = sender.send(job);
+            if let Err(error) = defer_control(job) {
+                let _ = session.signal_stop(false);
+                session.report(error);
             }
         }
         Ok(None) => {}
         Err(error) => session.report(error),
     }
+}
+/// Defers native controls in arrival order until the callback returns, so physical F10 is up before Play preflight.
+fn defer_control(job: QueuedControl) -> Result<(), String> {
+    PENDING_CONTROLS
+        .lock()
+        .map_err(|_| HOOK_FAILED)?
+        .push_back(job);
+    wake_hook(CONTROL_MESSAGE)
+}
+/// Forwards captured controls FIFO after Windows returns from callbacks; later F9 cannot overtake a released F10.
+fn dispatch_controls() {
+    let Ok(mut jobs) = PENDING_CONTROLS.lock() else {
+        return;
+    };
+    while let Some(job) = jobs.pop_front() {
+        let delivered = CONTROL_JOBS
+            .get()
+            .is_some_and(|sender| sender.send(job).is_ok());
+        if !delivered {
+            if let Some(session) = ENGINE.get() {
+                let _ = session.signal_stop(false);
+            }
+        }
+    }
+}
+/// Reads consumed F10 ownership for initial recording capture; passed/unreserved F10 remains ordinary input.
+fn consumed_play_key() -> bool {
+    SEQUENCES
+        .lock()
+        .map_or(true, |sequences| sequences.play_consumed())
 }
 /// Requests worker-owned cleanup following a native close request.
 pub fn queue_stop() {
@@ -1227,6 +1277,8 @@ fn own_window_focused() -> bool {
 
 #[cfg(feature = "native-checks")]
 static CHECK_KEY_DELIVERY: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "native-checks")]
+static CHECK_EXPECTED_KEY: AtomicU32 = AtomicU32::new(RECORD_KEY as u32);
 #[cfg(feature = "native-checks")]
 const CHECK_KEY_DOWN: u32 = 1;
 #[cfg(feature = "native-checks")]
@@ -1271,12 +1323,14 @@ impl Drop for DeliveryObserver {
     }
 }
 #[cfg(feature = "native-checks")]
-/// Observes OS-delivered tagged F9 down/up without consuming them; negative codes and unrelated input always chain normally.
+/// Observes OS-delivered tagged control down/up without consuming them; negative codes and unrelated input chain normally.
 unsafe extern "system" fn delivery_observer(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     if code >= 0 {
         // SAFETY: Windows provides live callback storage for a nonnegative code; nothing is retained beyond this call.
         let input = unsafe { &*(data as *const KBDLLHOOKSTRUCT) };
-        if input.dwExtraInfo == EXTRA_INFO && input.vkCode == u32::from(RECORD_KEY) {
+        if input.dwExtraInfo == EXTRA_INFO
+            && input.vkCode == CHECK_EXPECTED_KEY.load(Ordering::Acquire)
+        {
             let bit = match message as u32 {
                 WM_KEYDOWN => CHECK_KEY_DOWN,
                 WM_KEYUP => CHECK_KEY_UP,
@@ -1319,23 +1373,125 @@ fn delivery_observer_loop(ready: mpsc::SyncSender<Result<u32, String>>) {
 }
 #[cfg(feature = "native-checks")]
 /// Checks actual Windows-to-hook delivery while a test app window is focused, rather than directly calling our handler.
-/// Sends only a tagged F9 release, avoiding injected holds even if dispatch fails; requires an interactive quiet desktop.
+/// Sends only tagged F9/F10 releases, avoiding injected holds even if dispatch fails; requires an interactive quiet desktop.
 pub(crate) fn check_focused_key_delivery() -> Result<(), String> {
     if !own_window_focused() {
         return Err("The isolated check must own foreground focus before sending F9".into());
     }
+    for key in [RECORD_KEY, PLAY_KEY] {
+        check_key_delivery(key)?;
+    }
+    if !own_window_focused() {
+        return Err("The isolated check lost foreground focus during shortcut delivery".into());
+    }
+    Ok(())
+}
+#[cfg(feature = "native-checks")]
+/// Requires one tagged release to traverse the real Windows hook chain; this probe never activates controls or records input.
+fn check_key_delivery(key: u16) -> Result<(), String> {
+    CHECK_EXPECTED_KEY.store(u32::from(key), Ordering::Release);
     let _observer = DeliveryObserver::start()?;
     CHECK_KEY_DELIVERY.store(0, Ordering::Release);
-    send(&[keyboard(RECORD_KEY, 0, false, false)])?;
+    send(&[keyboard(key, 0, false, false)])?;
     let deadline = std::time::Instant::now() + HOOK_TIMEOUT;
     while CHECK_KEY_DELIVERY.load(Ordering::Acquire) != CHECK_KEY_COMPLETE {
         if std::time::Instant::now() >= deadline {
-            return Err(format!("F9 hook delivery missing with test app focused: observed mask={}, expected mask={CHECK_KEY_COMPLETE}", CHECK_KEY_DELIVERY.load(Ordering::Acquire)));
+            return Err(format!("Control {key} hook delivery missing: observed mask={}, expected mask={CHECK_KEY_COMPLETE}", CHECK_KEY_DELIVERY.load(Ordering::Acquire)));
         }
         std::thread::sleep(CHECK_KEY_POLL);
     }
-    if !own_window_focused() {
-        return Err("The isolated check lost foreground focus during F9 delivery".into());
+    Ok(())
+}
+#[cfg(feature = "native-checks")]
+const EXTERNAL_TITLE_ENV: &str = "MACROLOOM_DELIVERY_TITLE";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_WINDOW_SCRIPT: &str = "Add-Type -AssemblyName System.Windows.Forms; $deliveryForm = New-Object System.Windows.Forms.Form; $deliveryForm.Text = $env:MACROLOOM_DELIVERY_TITLE; [void]$deliveryForm.ShowDialog()";
+#[cfg(feature = "native-checks")]
+/// Owns only the newly spawned empty external test process; no existing user application is reused or closed.
+struct ExternalDeliveryTarget(std::process::Child);
+#[cfg(feature = "native-checks")]
+impl Drop for ExternalDeliveryTarget {
+    /// Terminates and waits for only this test-owned process, including on probe/activation failure.
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+#[cfg(feature = "native-checks")]
+/// Opens an empty external WinForms window with a hidden PowerShell host; returns only its verified process-owned HWND.
+fn external_delivery_target() -> Result<(ExternalDeliveryTarget, HWND), String> {
+    use std::os::windows::process::CommandExt;
+    let title = format!("MacroLoom delivery check {}", uuid::Uuid::new_v4());
+    let child = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            EXTERNAL_WINDOW_SCRIPT,
+        ])
+        .env(EXTERNAL_TITLE_ENV, &title)
+        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let mut target = ExternalDeliveryTarget(child);
+    let hwnd = wait_external_window(&mut target, &title)?;
+    // SAFETY: the HWND was verified against the still-owned child's process; it is used synchronously before target is dropped.
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd) } == 0 {
+        return Err("Could not focus the external test window".into());
+    }
+    Ok((target, hwnd))
+}
+#[cfg(feature = "native-checks")]
+/// Waits boundedly for the unique child window and verifies its process identity before returning its OS-owned handle.
+fn wait_external_window(target: &mut ExternalDeliveryTarget, title: &str) -> Result<HWND, String> {
+    let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+    let deadline = std::time::Instant::now() + HOOK_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        if target
+            .0
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err("External test window exited before readiness".into());
+        }
+        // SAFETY: the title is NUL-terminated UTF-16 borrowed only by this synchronous lookup; process output is initialized.
+        let hwnd = unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(null_mut(), title.as_ptr())
+        };
+        let mut process = 0;
+        if !hwnd.is_null() {
+            unsafe {
+                GetWindowThreadProcessId(hwnd, &mut process);
+            }
+        }
+        if process == target.0.id() {
+            return Ok(hwnd);
+        }
+        std::thread::sleep(CHECK_KEY_POLL);
+    }
+    Err("External test window did not become ready".into())
+}
+#[cfg(feature = "native-checks")]
+/// Probes real OS key delivery and runs native controls with an isolated external application focused, retaining that focus.
+fn check_external_delivery(operation: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    let (_target, hwnd) = external_delivery_target()?;
+    // SAFETY: target retains the child window for this entire probe; this getter retains no borrowed handle.
+    if unsafe { GetForegroundWindow() } != hwnd {
+        return Err("External target did not acquire focus".into());
+    }
+    for key in [RECORD_KEY, PLAY_KEY] {
+        check_key_delivery(key)?;
+    }
+    operation()?;
+    // SAFETY: the same live child owns hwnd until _target is dropped after this invariant check.
+    if unsafe { GetForegroundWindow() } != hwnd {
+        return Err("MacroLoom changed external target focus".into());
     }
     Ok(())
 }
@@ -1368,16 +1524,31 @@ fn control_key(input: &KBDLLHOOKSTRUCT, down: bool) -> bool {
     let Ok(mut sequences) = SEQUENCES.lock() else {
         return false;
     };
-    let (consumed, control) = sequences.key(input.vkCode as u16, down, *reserved);
+    let modified = input.vkCode as u16 == PLAY_KEY && SNAPSHOT_MODIFIERS.into_iter().any(key_held);
+    let (consumed, control) =
+        sequences.physical_key(input.vkCode as u16, down, modified, *reserved);
     drop(sequences);
     drop(reserved);
+    observe_unreserved_stop(input.vkCode as u16, down, consumed);
     if let Some(control) = control {
         queue_control(match control {
             Control::Record => ControlJob::Record,
+            Control::PlayPress => ControlJob::PlayPress,
+            Control::PlayRelease => ControlJob::PlayRelease,
             Control::Stop => ControlJob::Stop,
         });
     }
     consumed
+}
+/// Invalidates queued starts or unfinished F10 before its worker arms Stop; unreserved F8 still passes through completely.
+fn observe_unreserved_stop(key: u16, down: bool, consumed: bool) {
+    if !consumed && down && key == STOP_KEY {
+        if let Some(session) = ENGINE.get() {
+            if session.pending_start().unwrap_or(false) {
+                queue_control(ControlJob::Stop);
+            }
+        }
+    }
 }
 /// Copies valid native key data into capture, or consumes reserved controls; negative hook codes always chain.
 unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
@@ -1713,6 +1884,7 @@ pub fn hold_conflict_shortcut() -> Result<(), String> {
     let (id, key) = match requested.as_str() {
         CONFLICT_RECORD => (RECORD_ID, RECORD_KEY),
         CONFLICT_STOP => (STOP_ID, STOP_KEY),
+        CONFLICT_PLAY => (PLAY_ID, PLAY_KEY),
         _ => return Err(CONFLICT_USAGE.into()),
     };
     if !update_registration(false, id, key, true)? {
@@ -1837,6 +2009,7 @@ mod tests {
     fn native_shutdown_reservation_failure_restores_stop() {
         let mut runtime = HookRuntime {
             record: false,
+            play: false,
             stop: false,
             stop_available: false,
             hooks_ready: true,
@@ -1912,10 +2085,14 @@ mod tests {
         worker.join().expect("Native hook worker exits");
         assert!(!hooks_running());
         assert!(
-            available.record && available.stop,
-            "F9/F8 must be free before this native check"
+            available.record && available.play && available.stop,
+            "F9/F10/F8 must be free before this native check"
         );
-        for (id, key) in [(RECORD_ID, RECORD_KEY), (STOP_ID, STOP_KEY)] {
+        for (id, key) in [
+            (RECORD_ID, RECORD_KEY),
+            (PLAY_ID, PLAY_KEY),
+            (STOP_ID, STOP_KEY),
+        ] {
             assert!(update_registration(false, id, key, true).expect("Native handoff"));
             let _reservation = TestReservation(id);
         }
@@ -1949,6 +2126,7 @@ mod tests {
         }
         let mut runtime = HookRuntime {
             record: false,
+            play: false,
             stop: false,
             stop_available: false,
             hooks_ready: true,

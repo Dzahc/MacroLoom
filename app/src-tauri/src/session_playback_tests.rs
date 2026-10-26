@@ -19,6 +19,7 @@ const REJECTED_BUTTON: usize = 2;
 const THROUGH_MOVEMENT: usize = 4;
 const MOVE_OFFSET: i32 = -50;
 const FILE_CHANGE: &[u8] = b"external file modification";
+const OTHER_MACRO_NAME: &str = "Selection changed before release";
 const OUTSIDE_DISPLAY_X: i32 = 0;
 const GAP_X: i32 = 50;
 const SECOND_DISPLAY_X: i32 = 100;
@@ -31,6 +32,195 @@ const DISPLAY_SCALES: [f64; 4] = [1.0, 1.25, 1.5, 1.75];
 const RAPID_REPEAT_RUNS: usize = 128;
 const HELD_RELEASE_COUNT: usize = 2;
 type Callback = Box<dyn FnOnce() + Send>;
+
+#[test]
+/// A missing initial selection may be supplied while F10 is held; playback still begins only on release.
+fn global_play_accepts_selection_created_while_held() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle");
+    ControlRequest::PlayPress
+        .receive(&session)
+        .expect("No selection on press");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Selection before release");
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release")
+        .expect("Play")
+        .execute(&session)
+        .expect("Playback starts");
+    completed(&session);
+    assert_eq!(
+        *desktop.events.lock().expect("Events"),
+        repeated_kinds(&events())
+    );
+}
+
+#[test]
+/// Another physical hold still rejects global Play immediately; releasing that input cannot create a delayed run.
+fn global_play_preserves_physical_hold_preconditions() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Select");
+    ControlRequest::PlayPress.receive(&session).expect("Press");
+    desktop.physical_hold.store(true, Ordering::Release);
+    let result = ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release")
+        .expect("Play request")
+        .execute(&session);
+    assert_eq!(result.err().as_deref(), Some(crate::playback::INPUT_HELD));
+    desktop.physical_hold.store(false, Ordering::Release);
+    session.refresh().expect("No automatic retry");
+    assert!(desktop.events.lock().expect("No injections").is_empty());
+}
+
+#[test]
+/// Global Play binds selection on release and uses the same saved playback workflow as GUI Play.
+fn global_play_uses_selection_at_release() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle shortcuts");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Initial selection");
+    let arm = ControlRequest::PlayPress
+        .receive(&session)
+        .expect("F10 down");
+    assert_eq!(
+        session.snapshot().expect("Before release").phase,
+        Phase::Idle
+    );
+    if let Some(arm) = arm {
+        arm.execute(&session).expect("Arm Stop");
+    }
+    let selected_id = desktop.another_macro();
+    session
+        .select_macro(Some(selected_id))
+        .expect("Select before release");
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("F10 release")
+        .expect("Accepted Play")
+        .execute(&session)
+        .expect("Start playback");
+    completed(&session);
+    assert!(desktop
+        .snapshots
+        .lock()
+        .expect("Played selection")
+        .iter()
+        .any(|snapshot| snapshot.macro_name.as_deref() == Some(OTHER_MACRO_NAME)));
+    assert_eq!(
+        *desktop.events.lock().expect("Dispatched events"),
+        repeated_kinds(&events())
+    );
+}
+
+#[test]
+/// An intervening Configure operation cancels the held gesture even if idle returns before key-up.
+fn global_play_does_not_survive_an_intervening_editor() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle shortcuts");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Select macro");
+    ControlRequest::PlayPress
+        .receive(&session)
+        .expect("F10 down");
+    session
+        .editor_operation(|| Ok::<_, String>(()))
+        .expect("Editor allowed")
+        .expect("Editor opened");
+    session.refresh().expect("Editor closed and idle restored");
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("F10 up")
+        .expect("Refresh feedback")
+        .execute(&session)
+        .expect("No playback");
+    assert_eq!(session.snapshot().expect("Idle").phase, Phase::Idle);
+    assert!(desktop.events.lock().expect("No injections").is_empty());
+}
+
+#[test]
+/// A pending name Save retains the release-selected identity even when selection changes before the worker runs.
+fn global_play_rename_wait_freezes_release_selection() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle");
+    let mut save = session.begin_rename().expect("Submitted Save");
+    session
+        .select_macro(Some(desktop.another_macro()))
+        .expect("Release selection");
+    ControlRequest::PlayPress.receive(&session).expect("Press");
+    let job = ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release")
+        .expect("Deferred start");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Later selection");
+    assert!(session.snapshot().expect("Waiting").deferred_start);
+    assert!(ControlRequest::PlayPress
+        .receive(&session)
+        .expect("Repeated start")
+        .is_none());
+    assert!(save.finish(false).expect("Failed Save yields to playback"));
+    job.execute(&session).expect("Deferred playback");
+    completed(&session);
+    assert!(desktop
+        .snapshots
+        .lock()
+        .expect("Published names")
+        .iter()
+        .any(|snapshot| snapshot.macro_name.as_deref() == Some(OTHER_MACRO_NAME)));
+}
+
+#[test]
+/// F8 cancels the unfinished F10 gesture and a release-accepted rename wait without aborting the submitted Save.
+fn global_play_stop_cancels_gesture_and_deferred_start() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Selected macro");
+    ControlRequest::PlayPress.receive(&session).expect("Press");
+    session.stop().expect("Stop gesture");
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release after Stop")
+        .expect("Refresh")
+        .execute(&session)
+        .expect("No start");
+    let mut save = session.begin_rename().expect("Submitted Save");
+    ControlRequest::PlayPress
+        .receive(&session)
+        .expect("Fresh press");
+    let job = ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release")
+        .expect("Deferred start");
+    session.signal_stop(false).expect("Stop waiting playback");
+    assert!(!save.finish(true).expect("Save still finishes"));
+    job.execute(&session).expect("Cancelled request resolves");
+    assert_eq!(session.snapshot().expect("Idle").phase, Phase::Idle);
+    assert!(desktop.events.lock().expect("No injections").is_empty());
+    assert!(session.snapshot().expect("No false toast").notice.is_none());
+}
 
 /// Desktop-effects substitute with an isolated real library; it never sends input to the owner's desktop.
 struct Desktop {
@@ -50,6 +240,23 @@ struct Desktop {
     on_rejection: Mutex<Option<Callback>>,
 }
 impl Desktop {
+    /// Commits a second distinguishable saved macro for release-time and deferred selection tests.
+    fn another_macro(&self) -> String {
+        let mut recording = Recording::new(test_support::environment()).expect("Second recording");
+        recording.document.name = OTHER_MACRO_NAME.into();
+        let mut capture = Capture::default();
+        capture.events = events();
+        capture.duration = END;
+        recording.freeze(&capture);
+        recording.document.playback.speed = NONDEFAULT_SPEED;
+        recording.document.playback.repeat_mode = crate::macro_format::RepeatMode::Fixed;
+        recording.document.playback.total_runs = NONDEFAULT_RUNS;
+        self.folder
+            .repository
+            .save_recording(&mut recording)
+            .expect("Second commit");
+        recording.document.id
+    }
     /// Persists a known stream with nondefault speed/repeat properties for the real selected-ID command boundary.
     fn new(events: Vec<Event>, duration: Duration) -> Arc<Self> {
         Self::with_environment(events, duration, test_support::environment())
@@ -141,6 +348,7 @@ impl Platform for Desktop {
     fn shortcuts(&self, _: bool, _: bool) -> Result<Availability, String> {
         Ok(Availability {
             record: true,
+            play: true,
             stop: true,
         })
     }

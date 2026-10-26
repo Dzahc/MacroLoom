@@ -41,19 +41,22 @@ export function SessionControls({
         </>
       )}
       <SaveControls snapshot={snapshot} controller={controller} />
-      {idle && (!snapshot.shortcuts.record || !snapshot.shortcuts.stop) && (
-        <button
-          type="button"
-          onClick={
-            /** Rechecks OS shortcut ownership without starting recording or playback. */
-            () => {
-              void controller.request(SESSION_COMMAND.retry);
+      {idle &&
+        (!snapshot.shortcuts.record ||
+          !snapshot.shortcuts.play ||
+          !snapshot.shortcuts.stop) && (
+          <button
+            type="button"
+            onClick={
+              /** Rechecks OS shortcut ownership without starting recording or playback. */
+              () => {
+                void controller.request(SESSION_COMMAND.retry);
+              }
             }
-          }
-        >
-          {SESSION_TEXT.retry}
-        </button>
-      )}
+          >
+            {SESSION_TEXT.retry}
+          </button>
+        )}
       <CloseControls snapshot={snapshot} controller={controller} />
     </div>
   );

@@ -13,6 +13,7 @@ export const SESSION_COMMAND = {
   stop: 'stop',
   replay: 'play',
   playMacro: 'play_macro',
+  select: 'select_macro',
   retry: 'retry_shortcuts',
   confirmation: 'session_confirmation',
   keepOpen: 'session_keep_open',
@@ -33,6 +34,7 @@ export const SESSION_TEXT = {
   failure: 'Session control failed',
   f9Conflict:
     'F9 Record is unavailable; use the Record button or Retry shortcuts.',
+  selectToPlay: 'Select a macro to play',
   f8Conflict:
     'F8 Stop is unavailable. Close the application using it, then Retry shortcuts.',
   playbackGuidance: 'Playback uses your cursor and keyboard',
@@ -43,6 +45,9 @@ export const SESSION_TEXT = {
 
 /** Native command/event contract; capture data and injected held-input ownership never enter React state. */
 export type SessionSnapshot = Readonly<{
+  playGesture: boolean;
+  selectedMacroId: string | null;
+  notice: Readonly<{ sequence: number; message: string }> | null;
   revision: number;
   renameSaving: boolean;
   deferredStart: boolean;
@@ -60,7 +65,7 @@ export type SessionSnapshot = Readonly<{
   dragMoveCount: number;
   lastRelease: readonly [number, number] | null;
   message: string;
-  shortcuts: Readonly<{ record: boolean; stop: boolean }>;
+  shortcuts: Readonly<{ record: boolean; play: boolean; stop: boolean }>;
   canRecord: boolean;
   canPlay: boolean;
   macroName: string | null;
@@ -84,6 +89,9 @@ export type RecordingOutcome = Readonly<{
   library: BackendLibraryState | null;
 }>;
 export const INITIAL_SESSION: SessionSnapshot = {
+  playGesture: false,
+  selectedMacroId: null,
+  notice: null,
   revision: -1,
   renameSaving: false,
   deferredStart: false,
@@ -95,7 +103,7 @@ export const INITIAL_SESSION: SessionSnapshot = {
   dragMoveCount: 0,
   lastRelease: null,
   message: SESSION_TEXT.starting,
-  shortcuts: { record: false, stop: false },
+  shortcuts: { record: false, play: false, stop: false },
   canRecord: false,
   canPlay: false,
   macroName: null,
@@ -115,6 +123,7 @@ export type SnapshotCommand = Exclude<
   | typeof SESSION_COMMAND.confirmation
   | typeof SESSION_COMMAND.discardExit
   | typeof SESSION_COMMAND.playMacro
+  | typeof SESSION_COMMAND.select
 >;
 /** Validated native confirmation claim/release; each mounted owner uses a distinct identity. */
 export type ConfirmationRequest = Readonly<{ owner: string; blocked: boolean }>;
@@ -124,5 +133,6 @@ export type SessionTransport = {
   listen: (receive: (snapshot: SessionSnapshot) => void) => Promise<() => void>;
   invoke: (command: SnapshotCommand) => Promise<SessionSnapshot>;
   play?: (macroId: string) => Promise<SessionSnapshot>;
+  select?: (macroId: string | null) => Promise<SessionSnapshot>;
   confirmation?: (request: ConfirmationRequest) => Promise<SessionSnapshot>;
 };

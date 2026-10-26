@@ -160,6 +160,7 @@ impl Platform for Desktop {
         }
         Ok(Availability {
             record: true,
+            play: true,
             stop: true,
         })
     }
@@ -332,6 +333,10 @@ fn held_snapshot_and_observed_events_are_saved_without_synthetic_releases() {
     assert_eq!(stopped.phase, Phase::Idle);
     assert!(!stopped.unsaved);
     let outcome = stopped.recording_outcome.expect("Commit receipt");
+    assert_eq!(
+        stopped.selected_macro_id.as_deref(),
+        Some(outcome.id.as_str())
+    );
     assert!(outcome.success);
     let document = desktop
         .folder

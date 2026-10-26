@@ -39,6 +39,7 @@ export const LABEL = {
   loading: 'Loading macros…',
   saving: 'Saving…',
   recordShortcut: 'Record: F9',
+  playShortcut: 'Play: F10',
   stopShortcut: 'Stop: F8',
   dismiss: 'Dismiss notification',
   record: 'Record',
@@ -50,11 +51,16 @@ export const LABEL = {
 } as const;
 export const TOOLTIP = {
   record: 'Record (F9)',
-  play: 'Play',
+  play: 'Play (F10)',
   stop: 'Stop (F8)',
   configure: 'Configure',
   rename: 'Rename',
   delete: 'Delete',
+} as const;
+const UNAVAILABLE_TOOLTIP = {
+  record: 'Record (F9 unavailable)',
+  play: 'Play (F10 unavailable)',
+  stop: 'Stop (F8 unavailable)',
 } as const;
 export const TIME = {
   millisecond: 1000,
@@ -96,6 +102,8 @@ export type LibrarySnapshot = Readonly<{
   loading?: boolean;
   renameSaving?: boolean;
   deferredStart?: boolean;
+  playGesture?: boolean;
+  shortcuts?: Readonly<{ record: boolean; play: boolean; stop: boolean }>;
   writable?: boolean;
   /** Native session availability includes the required global Stop reservation check. */
   recordingAvailable?: boolean;
@@ -172,6 +180,7 @@ function requiresWritableLibrary(action: ActionName): boolean {
 function canStop(snapshot: LibrarySnapshot): boolean {
   return (
     snapshot.deferredStart === true ||
+    snapshot.playGesture === true ||
     [PHASE.recording, PHASE.playing, PHASE.interval, PHASE.stopping].some(
       /** @param phase Stop-capable phase. @returns Phase match. */ (phase) =>
         phase === snapshot.phase,
@@ -195,9 +204,23 @@ function blockedByRename(
 function canStartOperation(snapshot: LibrarySnapshot): boolean {
   return (
     snapshot.phase === PHASE.idle &&
+    !snapshot.loading &&
     !snapshot.deleting &&
     !snapshot.confirmationOpen
   );
+}
+
+/** @param snapshot Current native availability. @param action Toolbar operation. @returns Its shortcut-aware accessible name without claiming a failed reservation works. */
+export function actionTooltip(
+  snapshot: LibrarySnapshot,
+  action: ActionName,
+): string {
+  const shortcuts = snapshot.shortcuts;
+  if (shortcuts && action in UNAVAILABLE_TOOLTIP) {
+    const key = action as keyof typeof UNAVAILABLE_TOOLTIP;
+    if (!shortcuts[key]) return UNAVAILABLE_TOOLTIP[key];
+  }
+  return TOOLTIP[action];
 }
 
 /**

@@ -314,9 +314,10 @@ void test('loading uses progress text and read-only storage preserves selection,
   const loading = snapshot({ macros: [], loading: true, writable: READ_ONLY });
   assert.ok(render(loading).includes(LABEL.loading));
   assert.equal(render(loading).includes(LABEL.empty), false);
+  assert.equal(canRequest(loading, ACTION.play), false);
   const readable = snapshot({
     selectedId: SELECTED.id,
-    loading: true,
+    loading: false,
     writable: READ_ONLY,
   });
   assert.equal(canRequest(readable, ACTION.record), false);

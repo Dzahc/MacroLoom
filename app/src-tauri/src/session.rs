@@ -3,11 +3,13 @@ use crate::input::{track_held, Capture, EventKind, Held};
 use crate::macro_format::{MacroDocument, RecordingEnvironment};
 use crate::playback::{PlaybackStage, RepeatPlan, FIRST_RUN};
 use crate::recording::{Recording, RecordingOutcome};
-use crate::shortcuts::{Availability, RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
+use crate::shortcuts::{Availability, STOP_UNAVAILABLE};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+#[path = "session_global_play.rs"]
+mod global_play;
 #[path = "session_lifecycle.rs"]
 mod lifecycle;
 #[path = "session_playback.rs"]
@@ -83,6 +85,9 @@ pub enum Phase {
 #[serde(rename_all = "camelCase")]
 /// Revisioned command/event contract; availability reflects actual native reservations and capture stays backend-owned.
 pub struct Snapshot {
+    pub selected_macro_id: Option<String>,
+    pub play_gesture: bool,
+    pub notice: Option<SessionNotice>,
     pub rename_saving: bool,
     pub deferred_start: bool,
     pub start_sequence: u64,
@@ -107,6 +112,14 @@ pub struct Snapshot {
     pub unsaved: bool,
     pub save_failed: bool,
     pub recording_outcome: Option<RecordingOutcome>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Once-per-gesture feedback, delivered as a timed toast without replacing session status.
+pub struct SessionNotice {
+    pub sequence: u64,
+    pub message: String,
 }
 
 /// Native system boundaries; deterministic tests substitute desktop effects, never session internals.
@@ -157,7 +170,7 @@ pub trait Platform: Send + Sync {
     fn reserve(&self) -> Result<Box<dyn Send>, String>;
     /// Returns whether library initialization, editor, deletion, or external interlocks prevent a start.
     fn available(&self) -> bool;
-    /// Reconciles desired reservations on their owning OS message thread; returns actual availability.
+    /// Reconciles F9/F10 together using record and F8 independently using stop on the OS owner thread; returns actual availability.
     fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String>;
     /// Enters/restores the actual owned compact view without activation; failures retain restoration state.
     fn view(&self, compact: bool) -> Result<(), String>;
@@ -173,6 +186,10 @@ pub trait Platform: Send + Sync {
 
 /// Short-lived capture/session ownership; persistence and window transitions always run outside this lock.
 struct State {
+    selected_macro_id: Option<String>,
+    play_gesture: bool,
+    notice: Option<SessionNotice>,
+    notice_sequence: u64,
     phase: Phase,
     generation: u64,
     starting: bool,
@@ -197,6 +214,7 @@ struct State {
     message: String,
     terminal: String,
     shortcut_error: Option<String>,
+    shortcut_conflict: Option<String>,
     /// Suspension feedback survives later terminal failures; recording save receipts refresh its retained outcome.
     interruption_context: Option<String>,
     cleanup_failed: bool,
@@ -214,6 +232,10 @@ impl Default for State {
     /// Initializes an idle owner with no input, cancellation, or reservations.
     fn default() -> Self {
         Self {
+            selected_macro_id: None,
+            play_gesture: false,
+            notice: None,
+            notice_sequence: 0,
             phase: Phase::Idle,
             generation: 0,
             starting: false,
@@ -238,6 +260,7 @@ impl Default for State {
             message: READY.into(),
             terminal: READY.into(),
             shortcut_error: None,
+            shortcut_conflict: None,
             interruption_context: None,
             cleanup_failed: false,
             close_requested: false,
@@ -278,6 +301,9 @@ impl Session {
     pub fn snapshot(&self) -> Result<Snapshot, String> {
         let state = self.lock()?;
         Ok(Snapshot {
+            selected_macro_id: state.selected_macro_id.clone(),
+            play_gesture: state.play_gesture,
+            notice: state.notice.clone(),
             rename_saving: state.rename_saving,
             deferred_start: state.deferred_start,
             start_sequence: state.start_sequence,
@@ -348,7 +374,7 @@ impl Session {
         self.publish()?;
         self.snapshot()
     }
-    /// Acquires idle Record and probes Stop without retaining its reservation in inactive states.
+    /// Acquires idle Record/Play and probes Stop, retaining Stop only for unfinished or deferred starts.
     fn idle_shortcuts(&self) -> Result<(), String> {
         if self.lock()?.phase != Phase::Idle {
             return Ok(());
@@ -358,6 +384,9 @@ impl Session {
         let result = self.refresh_idle_shortcuts(available)?;
         let mut state = self.lock()?;
         state.shortcuts = result;
+        if !available {
+            state.play_gesture = false;
+        }
         state.can_record = available && result.stop;
         if available {
             update_shortcut_message(&mut state, result);
@@ -372,7 +401,10 @@ impl Session {
     /// Propagates failure for ordinary caller reporting without losing the prior session outcome.
     fn refresh_idle_shortcuts(&self, record: bool) -> Result<Availability, String> {
         let state = self.lock()?;
-        let waiting = state.rename_saving || state.deferred_start;
+        let waiting = state.rename_saving
+            || state.deferred_start
+            || state.play_gesture
+            || state.start_requested;
         drop(state);
         let result = self.platform.shortcuts(record, waiting);
         self.lock()?.shortcut_error = result.as_ref().err().cloned();
@@ -413,26 +445,34 @@ impl Session {
     /// Captures Record/Play eligibility without native work; a queued request cannot reinterpret a later Idle state as its original intent.
     pub(crate) fn start_request(&self) -> Result<Option<StartRequest>, String> {
         let mut state = self.lock()?;
-        if !start_available(&state) || state.deferred_start {
-            return Ok(None);
-        }
-        if state.rename_saving && !state.shortcuts.stop {
-            return Err(STOP_UNAVAILABLE.into());
-        }
-        state.deferred_start = state.rename_saving;
-        state.start_requested = true;
-        // Deferred starts retain the pending draft until their receipt decides its fate.
-        // Stop/Close may cancel them before any frontend snapshot is delivered.
-        if !state.rename_saving {
-            state.start_sequence = state
-                .start_sequence
-                .checked_add(GENERATION_STEP)
-                .ok_or(STATE_ERROR)?;
-        }
-        Ok(Some(StartRequest {
-            generation: state.generation,
-        }))
+        accept_start(&mut state)
     }
+}
+
+/// Captures one arrival-bound intent under the caller's state guard, invalidating unfinished F10 gestures.
+fn accept_start(state: &mut State) -> Result<Option<StartRequest>, String> {
+    state.play_gesture = false;
+    if !start_available(state) || state.deferred_start {
+        return Ok(None);
+    }
+    if state.rename_saving && !state.shortcuts.stop {
+        return Err(STOP_UNAVAILABLE.into());
+    }
+    state.deferred_start = state.rename_saving;
+    state.start_requested = true;
+    // Deferred starts retain the pending draft until their receipt decides its fate.
+    // Stop/Close may cancel them before any frontend snapshot is delivered.
+    if !state.rename_saving {
+        state.start_sequence = state
+            .start_sequence
+            .checked_add(GENERATION_STEP)
+            .ok_or(STATE_ERROR)?;
+    }
+    Ok(Some(StartRequest {
+        generation: state.generation,
+    }))
+}
+impl Session {
     /// Claims cancellation ownership before any wait or native reservation, ignoring requests superseded by another start or idle Stop.
     fn claim_start(&self, request: StartRequest, kind: StartKind) -> Result<bool, String> {
         let mut state = self.lock()?;
@@ -596,6 +636,7 @@ impl Session {
     /// Signals cancellation at arrival, including pre-activation startup; idle signals invalidate pending start requests.
     pub(crate) fn stop_request(&self, interrupted: bool) -> Result<StopRequest, String> {
         let mut state = self.lock()?;
+        state.play_gesture = false;
         state.deferred_start = false;
         state.start_requested = false;
         self.rename_ready.notify_all();
@@ -679,7 +720,14 @@ impl Session {
         if !self.cleanup_pending(request)? {
             return Ok(());
         }
+        self.cleanup_resources()
+    }
+    /// Releases input before start-key reservations, retaining Stop and failed cleanup ownership until explicit Retry succeeds.
+    fn cleanup_resources(&self) -> Result<(), String> {
         self.release_outstanding()?;
+        if !self.cleanup_shortcuts()? {
+            return Ok(());
+        }
         if !self.lock()?.held.is_empty() {
             return self.cleanup_error(CLEANUP_FAILED.into());
         }
@@ -687,6 +735,19 @@ impl Session {
             return self.cleanup_error(format!("{CLEANUP_FAILED} {error}"));
         }
         self.complete_cleanup()
+    }
+    /// Releases F9/F10 while retaining global Stop through cleanup; rejected unregistration preserves recoverable ownership.
+    fn cleanup_shortcuts(&self) -> Result<bool, String> {
+        match self.platform.shortcuts(false, true) {
+            Ok(shortcuts) => {
+                self.lock()?.shortcuts = shortcuts;
+                Ok(true)
+            }
+            Err(error) => {
+                self.cleanup_error(format!("{CLEANUP_FAILED} {error}"))?;
+                Ok(false)
+            }
+        }
     }
     /// Makes resource-release failure actionable while allowing idle Record conflicts to remain ordinary availability errors.
     fn complete_cleanup(&self) -> Result<(), String> {
@@ -883,7 +944,7 @@ fn start_available(state: &State) -> bool {
 }
 /// Combines backend lifecycle and the single deferred intent into command availability.
 fn command_available(state: &State) -> bool {
-    start_available(state) && !state.deferred_start
+    start_available(state) && !state.deferred_start && !state.start_requested
 }
 /// Rounds positive backend countdowns upward so submillisecond waits never appear expired in transport.
 fn remaining_milliseconds(duration: Duration) -> u64 {
@@ -901,11 +962,10 @@ fn recording_message(interrupted: bool, empty: bool) -> &'static str {
 }
 /// Updates conflict feedback without removing successful capture/terminal messages after availability recovery.
 fn update_shortcut_message(state: &mut State, availability: Availability) {
-    if !availability.stop {
-        state.message = STOP_UNAVAILABLE.into();
-    } else if !availability.record {
-        state.message = RECORD_UNAVAILABLE.into();
-    } else if state.message == STOP_UNAVAILABLE || state.message == RECORD_UNAVAILABLE {
+    if let Some(conflict) = availability.conflict() {
+        state.message = conflict.clone();
+        state.shortcut_conflict = Some(conflict);
+    } else if state.shortcut_conflict.take().as_ref() == Some(&state.message) {
         state.message = state.terminal.clone();
     }
 }

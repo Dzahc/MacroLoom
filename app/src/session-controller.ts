@@ -20,6 +20,9 @@ type ConfirmationClaim = {
 export class SessionController {
   readonly queue = new OutcomeQueue();
   private outcomeSequence = 0;
+  private noticeSequence = 0;
+  private toastSequence = 0;
+  private selection = Promise.resolve();
   private state: SessionSnapshot = INITIAL_SESSION;
   private listeners = new Set<() => void>();
   private generation = 0;
@@ -82,6 +85,7 @@ export class SessionController {
     if (snapshot.revision <= this.state.revision) return;
     this.state = snapshot;
     this.receiveOutcome(snapshot);
+    this.receiveNotice(snapshot);
     this.notify();
   }
   /** @param snapshot Native receipt. @returns Nothing; queues one timed outcome per completed save attempt. */
@@ -89,12 +93,41 @@ export class SessionController {
     const outcome = snapshot.recordingOutcome;
     if (!outcome || outcome.sequence <= this.outcomeSequence) return;
     this.outcomeSequence = outcome.sequence;
+    this.toastSequence++;
     this.queue.enqueue({
-      id: outcome.sequence,
+      id: this.toastSequence,
       kind: outcome.success ? 'success' : 'failure',
       message: outcome.message,
     });
   }
+  /** @param snapshot Native gesture feedback. @returns Nothing; revisioned repeats cannot duplicate a timed notification. */
+  private receiveNotice(snapshot: SessionSnapshot): void {
+    const notice = snapshot.notice;
+    if (!notice || notice.sequence <= this.noticeSequence) return;
+    this.noticeSequence = notice.sequence;
+    this.toastSequence++;
+    this.queue.enqueue({
+      id: this.toastSequence,
+      kind: 'failure',
+      message: notice.message,
+    });
+  }
+  /** @param macroId Desired loaded identity or cleared selection. @returns Nothing; serial IPC preserves selection order and failures retain authoritative native selection. */
+  select = (macroId: string | null): void => {
+    const generation = this.generation;
+    this.selection = this.selection.then(
+      /** Sends only a still-mounted selection intent, then reconciles its authoritative receipt. */
+      async () => {
+        if (generation !== this.generation || !this.transport.select) return;
+        try {
+          const snapshot = await this.transport.select(macroId);
+          if (generation === this.generation) this.receive(snapshot);
+        } catch (reason) {
+          if (generation === this.generation) this.fail(reason);
+        }
+      },
+    );
+  };
   /** @param command Native command with empty input and a snapshot result. @returns Completion after applying current native state or reporting failure. */
   async request(command: SnapshotCommand): Promise<void> {
     const generation = this.generation;

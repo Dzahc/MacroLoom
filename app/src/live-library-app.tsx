@@ -22,6 +22,7 @@ import {
 } from './macro-contract';
 import {
   ACTION,
+  reconcileSelection,
   type LibraryAction,
   type SelectionChange,
 } from './library-model';
@@ -74,6 +75,7 @@ export function LiveLibraryApp({
     /** @returns One controller for this mounted application. */ () =>
       new LibraryController({
         ...NATIVE_TRANSPORT,
+        select: nativeSession.controller.select,
         /** @param id Explicitly confirmed macro. @returns Deletion result with native confirmation ownership transferred atomically. */
         delete: (id) =>
           invoke<BackendLibraryState>(LIBRARY_COMMAND.delete, {
@@ -101,6 +103,12 @@ export function LiveLibraryApp({
   const desiredCompact = isCompactPhase(session.phase);
   const presentation = {
     ...presentedLibrary(snapshot, session, view),
+    selectedId: reconcileSelection(
+      snapshot.macros,
+      nativeSession.snapshot.selectedMacroId,
+    ),
+    shortcuts: nativeSession.snapshot.shortcuts,
+    playGesture: nativeSession.snapshot.playGesture,
     message: snapshot.loading
       ? snapshot.message
       : nativeSession.snapshot.message,

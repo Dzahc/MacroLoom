@@ -44,6 +44,18 @@ npm.cmd run tauri -- build --no-bundle
 
 The executable is written to `app/src-tauri/target/release/macroloom.exe`, relative to the repository root.
 
+## Global controls (ML-48)
+
+Current global controls are **F9 Record**, **F10 Play**, and **F8 Stop**. Select a
+saved macro, focus the target application, then press and release bare F10. Play
+uses the selection at release and the saved speed/repeat settings, without a
+countdown or focus change by MacroLoom. Include any target-focus click in the
+recording. Holding F10 never starts additional sessions; modified F10 passes
+through. No selection produces `Select a macro to play`. Conflicts appear with
+**Retry shortcuts**; toolbar Play still works when global Stop is available.
+See the [ML-48 behavior specification](docs/specs/ML-48-global-play.md) and
+[validation checklist](docs/validation/ML-48-global-play.md).
+
 ## Saved macro library (ML-13)
 
 The desktop window loads version-one JSON macros from `macros` beside the running

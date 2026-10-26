@@ -72,11 +72,13 @@ pub async fn delete_macro(
     tauri::async_runtime::spawn_blocking(move || {
         let session = app.state::<Arc<crate::session::Session>>();
         session.delete(confirmation_owner.as_deref(), || {
-            repository.delete(&macro_id, |state| {
+            let result = repository.delete(&macro_id, |state| {
                 if let Err(error) = app.emit(LIBRARY_EVENT, state) {
                     eprintln!("Library update delivery failed: {error}");
                 }
-            })
+            })?;
+            session.forget_macro(&macro_id)?;
+            Ok(result)
         })
     })
     .await
