@@ -33,7 +33,7 @@ import {
   PHASE,
   SOURCE,
   TOOLBAR,
-  TOOLTIP,
+  actionTooltip,
   canRequest,
   formatDuration,
   requestAction,
@@ -98,8 +98,8 @@ function Toolbar(props: ViewProps) {
             key={action}
             className={`icon-button action-${action}`}
             data-action={action}
-            aria-label={TOOLTIP[action]}
-            title={TOOLTIP[action]}
+            aria-label={actionTooltip(props.snapshot, action)}
+            title={actionTooltip(props.snapshot, action)}
             disabled={!canRequest(props.snapshot, action)}
             onKeyDown={action === ACTION.play ? playbackKeyDown : undefined}
             onKeyUp={

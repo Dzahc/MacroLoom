@@ -26,6 +26,9 @@ export function useNativeSession() {
         /** @param macroId Selected library identity. @returns Backend-owned playback startup or rejection. */
         play: (macroId) =>
           invoke<SessionSnapshot>(SESSION_COMMAND.playMacro, { macroId }),
+        /** @param macroId Loaded selected identity, or null. @returns Backend-confirmed selection for global Play. */
+        select: (macroId) =>
+          invoke<SessionSnapshot>(SESSION_COMMAND.select, { macroId }),
         /** @param request Owner-bound native confirmation claim/release. @returns Authoritative lifecycle status. */
         confirmation: (request) =>
           invoke<SessionSnapshot>(SESSION_COMMAND.confirmation, request),

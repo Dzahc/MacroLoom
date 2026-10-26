@@ -6,13 +6,17 @@ use std::sync::Arc;
 /// Native control observed now; Stop and suspend signal cancellation before worker delivery.
 pub(crate) enum ControlRequest {
     Record,
+    PlayPress,
+    PlayRelease,
     Stop,
     Suspend,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 /// Control awaiting serialized backend execution rather than frontend event delivery.
 pub(crate) enum QueuedControl {
     Record(StartRequest),
+    Play(StartRequest, String),
+    Refresh,
     Cleanup(StopRequest),
 }
 impl ControlRequest {
@@ -22,6 +26,15 @@ impl ControlRequest {
             Self::Record => session
                 .start_request()
                 .map(|request| request.map(QueuedControl::Record)),
+            Self::PlayPress => session
+                .press_play()
+                .map(|armed| armed.then_some(QueuedControl::Refresh)),
+            Self::PlayRelease => session.release_play().map(|request| {
+                Some(match request {
+                    Some((request, id)) => QueuedControl::Play(request, id),
+                    None => QueuedControl::Refresh,
+                })
+            }),
             control => session
                 .stop_request(matches!(control, Self::Suspend))
                 .map(QueuedControl::Cleanup)
@@ -34,6 +47,8 @@ impl QueuedControl {
     pub(crate) fn execute(self, session: &Arc<Session>) -> Result<Snapshot, String> {
         match self {
             Self::Record(request) => session.record_requested(request),
+            Self::Play(request, id) => session.play_macro_requested(request, &id),
+            Self::Refresh => session.refresh(),
             Self::Cleanup(request) => session.complete_stop(request),
         }
     }

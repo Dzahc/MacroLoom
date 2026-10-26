@@ -126,6 +126,7 @@ impl Session {
         }
         state.save_failed = !outcome.success;
         if outcome.success {
+            state.selected_macro_id = Some(outcome.id.clone());
             state.capture = Capture::default();
             state.phase = Phase::Idle;
             state.reservation = None;

@@ -5,6 +5,8 @@ import {
 } from './compact-contract.ts';
 import {
   LABEL,
+  ACTION,
+  canRequest,
   PHASE,
   formatDuration,
   type LibraryPhase,
@@ -112,13 +114,45 @@ export function sessionBanner(snapshot: LibrarySnapshot): {
     default:
       return {
         title: snapshot.message,
-        detail: `${LABEL.recordShortcut} · ${LABEL.stopShortcut}`,
+        detail: idleHints(snapshot),
         indicator:
           snapshot.phase !== PHASE.idle || snapshot.deleting
             ? SESSION_TEXT.busy
             : '',
       };
   }
+}
+
+/** @param snapshot Current operations and actual key availability. @returns Only actionable idle hints, with Stop taking priority for pending starts. */
+function idleHints(snapshot: LibrarySnapshot): string {
+  if (snapshot.phase !== PHASE.idle || snapshot.loading) return '';
+  if (snapshot.deferredStart || snapshot.playGesture) return LABEL.stopShortcut;
+  return [
+    shortcutHint(
+      snapshot,
+      ACTION.record,
+      LABEL.recordShortcut,
+      snapshot.shortcuts?.record,
+    ),
+    shortcutHint(
+      snapshot,
+      ACTION.play,
+      LABEL.playShortcut,
+      snapshot.shortcuts?.play,
+    ),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** @param snapshot Backend-driven operation state. @param action Start action. @param label Shortcut text. @param reserved Actual reservation, omitted for controlled samples. @returns A usable shortcut hint or empty text. */
+function shortcutHint(
+  snapshot: LibrarySnapshot,
+  action: typeof ACTION.record | typeof ACTION.play,
+  label: string,
+  reserved: boolean | undefined,
+): string {
+  return canRequest(snapshot, action) && reserved !== false ? label : '';
 }
 
 /** @param session Authoritative playback progress. @param elapsed Formatted total session time. @param runs Current run label. @returns Distinct preparation/release/input feedback without frontend scheduling. */

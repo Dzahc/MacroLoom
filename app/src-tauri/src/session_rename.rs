@@ -22,6 +22,7 @@ impl Session {
             return Err(ACTIVE_SESSION.into());
         }
         state.rename_saving = true;
+        state.play_gesture = false;
         state.shortcuts = shortcuts;
         state.can_record = shortcuts.stop;
         drop(state);

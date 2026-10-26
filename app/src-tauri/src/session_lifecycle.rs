@@ -87,8 +87,9 @@ impl Session {
     }
 }
 
-/// Clears only a prior interruption explanation when a deliberate new application operation has been accepted.
+/// Invalidates unfinished Play and clears prior interruption feedback when a deliberate application operation is accepted.
 pub(super) fn acknowledge_interruption(state: &mut State) {
+    state.play_gesture = false;
     if state.interruption_context.take().is_some() {
         state.message = READY.into();
         state.terminal = READY.into();

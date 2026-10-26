@@ -3,25 +3,58 @@ use serde::Serialize;
 
 pub const RECORD_KEY: u16 = 0x78;
 pub const STOP_KEY: u16 = 0x77;
+pub const PLAY_KEY: u16 = 0x79;
 pub const RECORD_ID: i32 = 1;
 pub const STOP_ID: i32 = 2;
+pub const PLAY_ID: i32 = 3;
 pub const STOP_UNAVAILABLE: &str =
     "F8 Stop is unavailable. Close the application using it, then Retry shortcuts.";
 pub const RECORD_UNAVAILABLE: &str =
     "F9 Record is unavailable; use the Record button or Retry shortcuts.";
+pub const PLAY_UNAVAILABLE: &str =
+    "F10 Play is unavailable; use the Play button or Retry shortcuts.";
+const STARTS_UNAVAILABLE: &str =
+    "F9 Record and F10 Play are unavailable; use toolbar buttons or Retry shortcuts.";
+const RECORD_LABEL: &str = "F9 Record";
+const PLAY_LABEL: &str = "F10 Play";
+const BOTH_START_LABELS: &str = "F9 Record and F10 Play";
 
 #[derive(Clone, Copy, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 /// Actual OS reservation availability, never inferred from enabled UI controls.
 pub struct Availability {
     pub record: bool,
+    pub play: bool,
     pub stop: bool,
 }
 
+impl Availability {
+    /// Explains every failed reservation, prioritizing required Stop and preserving button fallback for start-key conflicts.
+    pub fn conflict(self) -> Option<String> {
+        if !self.stop {
+            let start = match (self.record, self.play) {
+                (true, true) => return Some(STOP_UNAVAILABLE.into()),
+                (false, true) => RECORD_LABEL,
+                (true, false) => PLAY_LABEL,
+                (false, false) => BOTH_START_LABELS,
+            };
+            return Some(format!("{STOP_UNAVAILABLE} {start} also unavailable."));
+        }
+        match (self.record, self.play) {
+            (true, true) => None,
+            (false, true) => Some(RECORD_UNAVAILABLE.into()),
+            (true, false) => Some(PLAY_UNAVAILABLE.into()),
+            (false, false) => Some(STARTS_UNAVAILABLE.into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
-/// Backend control emitted exactly once for a consumed physical press.
+/// Backend transition emitted once at the corresponding boundary of a consumed physical gesture.
 pub enum Control {
     Record,
+    PlayPress,
+    PlayRelease,
     Stop,
 }
 
@@ -29,6 +62,7 @@ pub enum Control {
 /// Per-key consumed sequence state survives reservation changes through the matching release.
 pub struct KeySequences {
     record: KeyState,
+    play: KeyState,
     stop: KeyState,
 }
 #[derive(Default)]
@@ -40,6 +74,52 @@ enum KeyState {
     Consumed,
 }
 impl KeySequences {
+    /// Seeds controls already physically held before hook startup as passed; returns a tracker that cannot reinterpret their repeats.
+    pub fn with_held(held: impl Fn(u16) -> bool) -> Self {
+        let mut sequences = Self::default();
+        for key in [RECORD_KEY, PLAY_KEY, STOP_KEY] {
+            if held(key) {
+                sequences.physical_key(key, true, false, Availability::default());
+            }
+        }
+        sequences
+    }
+    /// Processes native input with first-down modifier ownership; only bare reserved F10 may activate Play.
+    pub fn physical_key(
+        &mut self,
+        key: u16,
+        down: bool,
+        modified: bool,
+        reserved: Availability,
+    ) -> (bool, Option<Control>) {
+        if key != PLAY_KEY {
+            return self.key(key, down, reserved);
+        }
+        let releasing = !down && matches!(self.play, KeyState::Consumed);
+        let (consumed, control) = Self::sequence(
+            &mut self.play,
+            down,
+            reserved.play && !modified,
+            Control::PlayPress,
+        );
+        (
+            consumed,
+            if releasing {
+                Some(Control::PlayRelease)
+            } else {
+                control
+            },
+        )
+    }
+
+    /// Reports whether a held F10 belongs to an already consumed gesture, including after reservations change.
+    pub fn play_consumed(&self) -> bool {
+        matches!(self.play, KeyState::Consumed)
+    }
+    /// Reports a fresh physical F8 down before processing it; startup-held and repeated downs cannot cancel pending starts.
+    pub fn fresh_stop(&self, key: u16, down: bool) -> bool {
+        key == STOP_KEY && down && matches!(self.stop, KeyState::Up)
+    }
     /// Returns suppression and an optional first-press control; unreserved sequences remain untouched.
     pub fn key(&mut self, key: u16, down: bool, reserved: Availability) -> (bool, Option<Control>) {
         match key {
@@ -77,12 +157,84 @@ impl KeySequences {
 mod tests {
     use super::*;
     #[test]
+    /// Startup-held and later passed F8 holds cannot cancel starts via repeats; only a new down after release is fresh.
+    fn startup_held_stop_requires_release_before_fresh_cancellation() {
+        let mut keys = KeySequences::with_held(|key| key == STOP_KEY);
+        let idle = Availability::default();
+        assert!(!keys.fresh_stop(STOP_KEY, true));
+        assert!(!keys.physical_key(STOP_KEY, true, false, idle).0);
+        assert!(!keys.fresh_stop(STOP_KEY, false));
+        assert!(!keys.physical_key(STOP_KEY, false, false, idle).0);
+        assert!(keys.fresh_stop(STOP_KEY, true));
+        assert!(!keys.physical_key(STOP_KEY, true, false, idle).0);
+        assert!(!keys.fresh_stop(STOP_KEY, true));
+        assert!(!keys.physical_key(STOP_KEY, true, false, idle).0);
+    }
+    #[test]
+    /// A control held before hook startup remains passed across registration, repeats, and release until a fresh gesture.
+    fn startup_held_play_cannot_become_a_fresh_control() {
+        let mut keys = KeySequences::with_held(
+            // Substitutes only the native physical-held snapshot at hook startup.
+            |key| key == PLAY_KEY,
+        );
+        let idle = Availability {
+            play: true,
+            ..Availability::default()
+        };
+        assert!(!keys.physical_key(PLAY_KEY, true, false, idle).0);
+        let release = keys.physical_key(PLAY_KEY, false, false, idle);
+        assert!(!release.0 && release.1.is_none());
+        assert!(keys.physical_key(PLAY_KEY, true, false, idle).0);
+        assert!(matches!(
+            keys.physical_key(PLAY_KEY, false, false, idle).1,
+            Some(Control::PlayRelease)
+        ));
+    }
+    #[test]
+    /// Becoming reserved during an already held unreserved F10 cannot consume it or start playback.
+    fn unreserved_play_gesture_stays_passed_after_registration() {
+        let mut keys = KeySequences::default();
+        let idle = Availability {
+            play: true,
+            ..Availability::default()
+        };
+        assert!(
+            !keys
+                .physical_key(PLAY_KEY, true, false, Availability::default())
+                .0
+        );
+        assert!(!keys.physical_key(PLAY_KEY, true, false, idle).0);
+        assert!(!keys.physical_key(PLAY_KEY, false, false, idle).0);
+        assert!(!keys.play_consumed());
+    }
+    #[test]
+    /// Bare F10 emits one release-bound Play, while modified gestures stay passed after modifiers change.
+    fn play_gestures_bind_ownership_on_first_down() {
+        let mut keys = KeySequences::default();
+        let idle = Availability {
+            play: true,
+            ..Availability::default()
+        };
+        let press = keys.physical_key(PLAY_KEY, true, false, idle);
+        assert!(press.0);
+        assert!(matches!(press.1, Some(Control::PlayPress)));
+        assert!(keys.physical_key(PLAY_KEY, true, false, idle).1.is_none());
+        let release = keys.physical_key(PLAY_KEY, false, false, Availability::default());
+        assert!(release.0);
+        assert!(matches!(release.1, Some(Control::PlayRelease)));
+        assert!(keys.physical_key(PLAY_KEY, false, false, idle).1.is_none());
+        assert!(!keys.physical_key(PLAY_KEY, true, true, idle).0);
+        assert!(!keys.physical_key(PLAY_KEY, true, false, idle).0);
+        assert!(!keys.physical_key(PLAY_KEY, false, false, idle).0);
+    }
+    #[test]
     /// Holding an unreserved F8 before a session starts must not turn its repeats into a new Stop gesture.
     fn reservation_mid_press_does_not_consume_existing_sequence() {
         let mut keys = KeySequences::default();
         let idle = Availability::default();
         let active = Availability {
             record: false,
+            play: false,
             stop: true,
         };
         assert!(!keys.key(STOP_KEY, true, idle).0);
@@ -96,6 +248,7 @@ mod tests {
         let mut keys = KeySequences::default();
         let recording = Availability {
             record: true,
+            play: true,
             stop: true,
         };
         let first = keys.key(RECORD_KEY, true, recording);

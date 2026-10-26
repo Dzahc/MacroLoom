@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { INITIAL_SESSION, SESSION_TEXT } from '../src/session-contract.ts';
 import { SessionController } from '../src/session-controller.ts';
-import { PHASE } from '../src/library-model.ts';
+import { PHASE, LABEL } from '../src/library-model.ts';
 
 const OUTPUT_DIRECTORY = '.quality-output/session-render';
 const FAILURE = 'Injected release failed; Retry cleanup.';
@@ -17,14 +17,47 @@ const BANNER_CLOSE = '</section>';
 const CONTROLS_ENTRY = 'src/session-controls.tsx';
 const VIEW_ENTRY = 'src/library-view.tsx';
 const EXPECTED_PLAYBACK_GUIDANCE = 'Playback uses your cursor and keyboard';
+const SELECTED_MACRO = {
+  id: '68833c94-3d18-4fb2-8a59-0cc72382b616',
+  name: 'Selected macro',
+  durationMs: 1000,
+  createdAt: '2026-10-25T00:00:00Z',
+};
+const PLAY_CONFLICT_TOOLTIP = 'Play (F10 unavailable)';
 let controls: typeof import('../src/session-controls.tsx');
 let view: typeof import('../src/library-view.tsx');
+
+/** Play remains a usable button during an F10 conflict, but its tooltip and idle hint tell the truth. */
+void test('Play-only conflict hides the F10 hint and explains the button shortcut', () => {
+  const markup = renderToStaticMarkup(
+    createElement(view.LibraryView, {
+      snapshot: {
+        macros: [SELECTED_MACRO],
+        selectedId: SELECTED_MACRO.id,
+        phase: PHASE.idle,
+        message: LABEL.ready,
+        shortcuts: { record: true, play: false, stop: true },
+      },
+      /** Rendering has no native selection side effects. */ onSelect: () => {},
+      /** Rendering starts no input session. */ onAction: () => {},
+      /** Rendering deletes no data. */ onDeleteConfirmed: () => {},
+    }),
+  );
+  const banner = markup.slice(
+    markup.indexOf(BANNER_OPEN),
+    markup.indexOf(BANNER_CLOSE),
+  );
+  assert.match(banner, /Record: F9/);
+  assert.doesNotMatch(banner, /Play: F10|Stop: F8/);
+  assert.ok(markup.includes(`title="${PLAY_CONFLICT_TOOLTIP}"`));
+  assert.doesNotMatch(markup, /data-action="play"[^>]*disabled/);
+});
 
 /** Idle presents the owner's brief shared-input reminder without the former paragraph of recording advice. */
 void test('idle playback guidance contains only the brief shared-input reminder', () => {
   const snapshot = {
     ...INITIAL_SESSION,
-    shortcuts: { record: true, stop: true },
+    shortcuts: { record: true, play: true, stop: true },
   };
   const controller = new SessionController({
     /** @returns An inert listener cleanup; rendering owns no native resources. */

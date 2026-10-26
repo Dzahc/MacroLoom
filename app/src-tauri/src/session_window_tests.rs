@@ -3,7 +3,7 @@
 use super::*;
 use crate::presentation::PREVIEW_WINDOW;
 use crate::session::{Phase, Snapshot};
-use crate::shortcuts::{RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
+use crate::shortcuts::{PLAY_UNAVAILABLE, RECORD_UNAVAILABLE, STOP_UNAVAILABLE};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -19,12 +19,24 @@ const TEST_SCAN: u16 = 0x1e;
 const RETRY: &str = "Retry shortcuts";
 const RECORD_BUTTON: &str = "document.querySelector('[data-action=record]')";
 const STOP_BUTTON: &str = "document.querySelector('[data-action=stop]')";
+const PLAY_BUTTON: &str = "document.querySelector('[data-action=play]')";
+const SELECTED_READY: &str = "!!document.querySelector('[data-macro-id][aria-pressed=true]')";
+const INITIAL_WAIT: Duration = Duration::from_secs(3);
+const SELECT_TO_PLAY: &str = "Select a macro to play";
 const RETRY_BUTTON: &str = "Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Retry shortcuts')";
 const OPEN_PREVIEW: &str = "window.__TAURI_INTERNALS__.invoke('open_presentation_preview')";
 const PREVIEW_READY: &str = "document.querySelector('.native-development [role=status]')?.textContent === 'Presentation applied to the main window.'";
 const FOCUS_READY: &str = "document.hasFocus()";
-const CHECK_PASSED: &str = "PASS: visible F9/F8 conflicts, button fallback, committed recording preservation, retry recovery, and main/development-focused hook controls";
+const CHECK_PASSED: &str = "PASS: F9/F10/F8 conflicts, GUI fallback, recording exclusion, toast, Play/Stop, real owned/external F9/F10 delivery, focus preservation, retry and shutdown";
 const TEST_LIBRARY_PREFIX: &str = "macroloom-native-session-check";
+const PLAY_DOWN_CONSUMED: &str = "F10 down must be consumed";
+const PLAY_RELEASE_CONSUMED: &str = "F10 release must be consumed";
+const STARTUP_STOP_REPEAT_PASSED: &str = "Startup-held F8 repeat must pass";
+const STARTUP_STOP_RELEASE_PASSED: &str = "Startup-held F8 release must pass";
+const STARTUP_STOP_CANCELLED_PLAY: &str = "Startup-held F8 repeat cancelled valid Play intent";
+const FRESH_STOP_CANCELS_PLAY: &str = "Fresh F8 must cancel early Play intent";
+const STARTUP_STOP_CHECK_PASSED: &str =
+    "PASS: startup-held F8 repeats preserve Play; fresh F8 still cancels";
 
 /// Owns only a unique temporary native-check library, never the executable's ordinary macros folder.
 struct CheckLibrary(PathBuf);
@@ -181,6 +193,7 @@ fn focused_controls(window: &WebviewWindow, session: &Session) -> Result<(), Str
         own_window_focused(),
         "The test app must own foreground focus",
     )?;
+    check_focused_key_delivery()?;
     control_press(RECORD_KEY)?;
     phase(session, Phase::Recording)?;
     exclude_own_keys(session)?;
@@ -197,6 +210,7 @@ fn control_press(key: u16) -> Result<(), String> {
 }
 /// Verifies that ordinary typing into the focused test app remains outside its active recording.
 fn exclude_own_keys(session: &Session) -> Result<(), String> {
+    control_press(PLAY_KEY)?;
     require(
         !physical_key(TEST_KEY, true),
         "Own-window ordinary input must pass through",
@@ -255,6 +269,7 @@ fn stop_conflict(webview: &Webview, session: &Session) -> Result<(), String> {
 /// Commits one nonempty capture through the real backend into the isolated library, without sending text to another app.
 fn retained_capture(session: &Session) -> Result<Snapshot, String> {
     session.record()?;
+    std::thread::sleep(INITIAL_WAIT);
     session.capture(EventKind::Key {
         vk: TEST_KEY,
         scan: TEST_SCAN,
@@ -306,12 +321,107 @@ fn check(webview: Webview, conflict: Conflict, checked: Arc<AtomicBool>) -> Resu
         .ok_or("Main test window missing")?;
     record_conflict(&webview, &session, conflict)?;
     focused_controls(&main, &session)?;
+    no_selection_play(&main)?;
     let development = focused_development(&webview, &app, &session)?;
     stop_conflict(&webview, &session)?;
+    check_playback(&main, &session)?;
     checked.store(true, Ordering::Release);
     development.close().map_err(|error| error.to_string())?;
     main.close().map_err(|error| error.to_string())?;
     Ok(())
+}
+/// Checks selected playback through both the conflicted GUI fallback and the recovered native F10 route.
+fn check_playback(window: &WebviewWindow, session: &Session) -> Result<(), String> {
+    play_conflict(window, session)?;
+    startup_held_stop_preserves_play(session)?;
+    fresh_stop_cancels_play(session)?;
+    println!("{STARTUP_STOP_CHECK_PASSED}");
+    global_play(window, session)?;
+    check_external_delivery(|| release_playback(session))
+}
+/// Startup-held F8 repeats/releases pass without cancelling F10; release of the valid Play gesture starts playback.
+fn startup_held_stop_preserves_play(session: &Session) -> Result<(), String> {
+    *SEQUENCES.lock().map_err(|_| HOOK_FAILED)? = KeySequences::with_held(
+        // Substitutes the physical-held snapshot taken before hook registration/pumping.
+        |key| key == STOP_KEY,
+    );
+    require(physical_key(PLAY_KEY, true), PLAY_DOWN_CONSUMED)?;
+    require(!physical_key(STOP_KEY, true), STARTUP_STOP_REPEAT_PASSED)?;
+    require(session.pending_start()?, STARTUP_STOP_CANCELLED_PLAY)?;
+    require(!physical_key(STOP_KEY, false), STARTUP_STOP_RELEASE_PASSED)?;
+    require(physical_key(PLAY_KEY, false), PLAY_RELEASE_CONSUMED)?;
+    phase(session, Phase::Playing)?;
+    stop_starting_playback();
+    phase(session, Phase::Idle)?;
+    Ok(())
+}
+/// A new F8 press still cancels early Play intent after the startup-held gesture has ended.
+fn fresh_stop_cancels_play(session: &Session) -> Result<(), String> {
+    require(physical_key(PLAY_KEY, true), PLAY_DOWN_CONSUMED)?;
+    stop_starting_playback();
+    require(!session.pending_start()?, FRESH_STOP_CANCELS_PLAY)?;
+    require(physical_key(PLAY_KEY, false), PLAY_RELEASE_CONSUMED)?;
+    Ok(())
+}
+/// Drives no-selection F10 through the native handler and real toast rendering without changing focus.
+fn no_selection_play(window: &WebviewWindow) -> Result<(), String> {
+    control_press(PLAY_KEY)?;
+    let message = serde_json::to_string(SELECT_TO_PLAY).map_err(|error| error.to_string())?;
+    wait_ui(
+        window.as_ref(),
+        &format!("document.body.textContent.includes({message})"),
+    )
+}
+/// Proves actual F10 registration failure, usable GUI Play/Stop during an initial wait, and retry after release.
+fn play_conflict(window: &WebviewWindow, session: &Session) -> Result<(), String> {
+    let conflict = session.preview(|| {
+        configure_shortcuts(false, false)?;
+        Conflict::hold(PLAY_KEY)
+    })?;
+    session.refresh()?;
+    conflict_visible(window.as_ref(), PLAY_UNAVAILABLE)?;
+    gui_playback(window, session)?;
+    drop(conflict);
+    click(window.as_ref(), RETRY_BUTTON)?;
+    wait_ui(window.as_ref(), &format!("!({RETRY_BUTTON})"))?;
+    require(session.snapshot()?.shortcuts.play, "Retry must acquire F10")
+}
+/// Waits for authoritative selected/available GUI state, then cancels real playback before any fixture input is due.
+fn gui_playback(window: &WebviewWindow, session: &Session) -> Result<(), String> {
+    wait_ui(window.as_ref(), SELECTED_READY)?;
+    wait_ui(
+        window.as_ref(),
+        &format!("({PLAY_BUTTON})?.disabled === false"),
+    )?;
+    click(window.as_ref(), PLAY_BUTTON)?;
+    phase(session, Phase::Playing)?;
+    stop_starting_playback();
+    phase(session, Phase::Idle)?;
+    Ok(())
+}
+/// Exercises release-origin Play and F8 cancellation through real hooks/workers, before any fixture macro input is due.
+fn global_play(window: &WebviewWindow, session: &Session) -> Result<(), String> {
+    window.set_focus().map_err(|error| error.to_string())?;
+    wait_ui(window.as_ref(), FOCUS_READY)?;
+    wait_ui(window.as_ref(), SELECTED_READY)?;
+    release_playback(session)?;
+    require(
+        own_window_focused(),
+        "Play/Stop transitions preserve test focus",
+    )
+}
+/// Starts the selected fixture through F10 and stops before its initial input deadline, without activating any window.
+fn release_playback(session: &Session) -> Result<(), String> {
+    control_press(PLAY_KEY)?;
+    phase(session, Phase::Playing)?;
+    stop_starting_playback();
+    phase(session, Phase::Idle)?;
+    Ok(())
+}
+/// Exercises the earliest physical F8 arrival, which may precede startup reservation and must still cancel backend intent.
+fn stop_starting_playback() {
+    physical_key(STOP_KEY, true);
+    physical_key(STOP_KEY, false);
 }
 /// Opens the real development pane and verifies its focused shortcut path after presentation setup settles.
 fn focused_development(
@@ -380,7 +490,7 @@ pub(super) fn run() {
         !hooks_running(),
         "Main close must acknowledge hook shutdown before exit"
     );
-    for key in [RECORD_KEY, STOP_KEY] {
+    for key in [RECORD_KEY, PLAY_KEY, STOP_KEY] {
         drop(Conflict::hold(key).expect("Closed application released its shortcut"));
     }
     eprintln!("{CHECK_PASSED}");

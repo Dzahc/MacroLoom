@@ -13,6 +13,7 @@ const TEST_SCAN: u16 = 0x1e;
 const REJECTED: &str = "Injected native failure";
 const EXPECTED_IDLE_MESSAGE: &str = "Ready";
 const OTHER_FAILURE: &str = "Different command failure";
+const EXPECTED_PLAY_CONFLICT: &str = "F10 Play";
 const TEST_DEADLINE: Duration = Duration::from_secs(2);
 const TEST_POLL: Duration = Duration::from_millis(1);
 const STARTUP_CANCEL_CONTROLS: [ControlRequest; 2] =
@@ -60,6 +61,7 @@ fn close_during_deletion_waits_and_failure_cancels_exit() {
 #[derive(Default)]
 /// A deterministic desktop-effect substitute; never replaces session state or lifecycle logic.
 struct Desktop {
+    play_conflict: AtomicBool,
     shutdown_failure: AtomicBool,
     shortcut_failure: AtomicBool,
     stop_conflict: AtomicBool,
@@ -98,7 +100,7 @@ impl Platform for Desktop {
         !self.operation.load(Ordering::Acquire)
     }
     /// Reports a controllable native Stop conflict while retaining Record availability.
-    fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String> {
+    fn shortcuts(&self, start_keys: bool, stop: bool) -> Result<Availability, String> {
         if self.shortcut_failure.load(Ordering::Acquire) {
             return Err(REJECTED.into());
         }
@@ -109,7 +111,8 @@ impl Platform for Desktop {
             return Err(REJECTED.into());
         }
         *self.registered.lock().expect("Fixture reservation mutex") = Availability {
-            record,
+            record: start_keys,
+            play: start_keys && !self.play_conflict.load(Ordering::Acquire),
             stop: stop && !self.stop_conflict.load(Ordering::Acquire),
         };
         if stop {
@@ -123,7 +126,8 @@ impl Platform for Desktop {
             }
         }
         Ok(Availability {
-            record,
+            record: start_keys,
+            play: start_keys && !self.play_conflict.load(Ordering::Acquire),
             stop: !self.stop_conflict.load(Ordering::Acquire),
         })
     }
@@ -188,6 +192,80 @@ impl Platform for Desktop {
             .expect("Fixture mutex must be healthy")
             .push(snapshot);
     }
+}
+
+#[test]
+/// Play-only reservation failure explains F10 while retaining button availability and recovers through Retry.
+fn global_play_conflict_keeps_gui_available_and_retry_recovers() {
+    let desktop = Arc::new(Desktop::default());
+    desktop.play_conflict.store(true, Ordering::Release);
+    let session = Session::new(desktop.clone());
+    let conflict = session.refresh().expect("Conflict snapshot");
+    assert!(conflict.can_play);
+    assert!(!conflict.shortcuts.play);
+    assert!(conflict.message.contains(EXPECTED_PLAY_CONFLICT));
+    desktop.play_conflict.store(false, Ordering::Release);
+    let recovered = session.retry_shortcuts().expect("Retry");
+    assert!(recovered.shortcuts.play);
+    assert_eq!(recovered.message, EXPECTED_IDLE_MESSAGE);
+}
+
+#[test]
+/// An idle no-selection release announces once; recording ignores the same control without changing feedback or capture.
+fn global_play_without_selection_notifies_once_and_busy_is_silent() {
+    let session = Session::new(Arc::new(Desktop::default()));
+    session.refresh().expect("Idle");
+    ControlRequest::PlayPress.receive(&session).expect("Press");
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release")
+        .expect("Feedback")
+        .execute(&session)
+        .expect("Toast");
+    let notice = session
+        .snapshot()
+        .expect("Notice")
+        .notice
+        .expect("No-selection toast");
+    assert_eq!(notice.message, super::global_play::SELECT_TO_PLAY);
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Extra release")
+        .expect("Refresh")
+        .execute(&session)
+        .expect("No extra toast");
+    session.record().expect("Recording");
+    assert!(ControlRequest::PlayPress
+        .receive(&session)
+        .expect("Busy F10")
+        .is_none());
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Busy release")
+        .expect("Refresh")
+        .execute(&session)
+        .expect("No Play");
+    let recording = session.snapshot().expect("Still recording");
+    assert_eq!(recording.phase, Phase::Recording);
+    assert_eq!(
+        recording.notice.expect("Same prior receipt").sequence,
+        notice.sequence
+    );
+    session.stop().expect("Cleanup");
+}
+
+#[test]
+/// Combined failure names Play as well as required Stop, with Stop first and all session starts unavailable.
+fn global_play_and_stop_conflicts_are_reported_together() {
+    let desktop = Arc::new(Desktop::default());
+    desktop.stop_conflict.store(true, Ordering::Release);
+    desktop.play_conflict.store(true, Ordering::Release);
+    let snapshot = Session::new(desktop).refresh().expect("Combined conflicts");
+    assert!(snapshot
+        .message
+        .starts_with(crate::shortcuts::STOP_UNAVAILABLE));
+    assert!(snapshot.message.contains(EXPECTED_PLAY_CONFLICT));
+    assert!(!snapshot.can_play && !snapshot.can_record);
 }
 
 #[test]
@@ -600,7 +678,7 @@ fn cancel_during_reservation(desktop: &Desktop, session: &Arc<Session>, control:
             ControlRequest::Suspend => {
                 session.suspend().expect("Sleep during reservation");
             }
-            ControlRequest::Record => {
+            ControlRequest::Record | ControlRequest::PlayPress | ControlRequest::PlayRelease => {
                 unreachable!("Cancellation fixtures use Stop or suspend only")
             }
         }
@@ -722,6 +800,13 @@ fn native_restoration_failure_keeps_session_owned_until_retry() {
     let failed = session.stop().expect("Stop records recoverable failure");
     assert_eq!(failed.phase, Phase::Stopping);
     assert!(failed.cleanup_failed);
+    assert!(
+        !desktop
+            .registered
+            .lock()
+            .expect("Cleanup releases Play")
+            .play
+    );
     assert!(session.record().is_err());
     desktop.restore_failure.store(false, Ordering::Release);
     assert_eq!(
