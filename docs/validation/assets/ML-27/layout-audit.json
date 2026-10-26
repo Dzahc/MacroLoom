@@ -1,0 +1,857 @@
+{
+  "method": "Static production-component renders; theme media condition forced per fixture; Chromium device scale 1/1.25/1.5; root font 100%/200%; includes footer progress-text range intersections with button bounds; not Windows DPI observations.",
+  "reports": [
+    {
+      "theme": "light",
+      "renderScale": 1,
+      "results": [
+        {
+          "label": "idle-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "idle-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 257,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "selected-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "selected-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 257,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "recording-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.953125,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "recording-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.90625,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.953125,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.90625,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.953125,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.90625,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "error-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 168,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "error-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 813,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "configure-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 227,
+          "errors": []
+        },
+        {
+          "label": "configure-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 155,
+          "errors": []
+        },
+        {
+          "label": "pending-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 198,
+          "errors": []
+        },
+        {
+          "label": "pending-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 96,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "renderScale": 1.25,
+      "results": [
+        {
+          "label": "idle-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 54,
+          "errors": []
+        },
+        {
+          "label": "idle-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 255.1999969482422,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "selected-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 54,
+          "errors": []
+        },
+        {
+          "label": "selected-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 255.1999969482422,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "recording-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.54999923706055,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "recording-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.51250457763672,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.54999923706055,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.51250457763672,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.54999923706055,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.51250457763672,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "error-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 167.1999969482422,
+          "listHeight": 54,
+          "errors": []
+        },
+        {
+          "label": "error-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 808.7999877929688,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "configure-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 227,
+          "errors": []
+        },
+        {
+          "label": "configure-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 155,
+          "errors": []
+        },
+        {
+          "label": "pending-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 198,
+          "errors": []
+        },
+        {
+          "label": "pending-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 97,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "renderScale": 1.5,
+      "results": [
+        {
+          "label": "idle-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 106.66667175292969,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "idle-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 256,
+          "listHeight": 109,
+          "errors": []
+        },
+        {
+          "label": "selected-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 106.66667175292969,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "selected-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 256,
+          "listHeight": 109,
+          "errors": []
+        },
+        {
+          "label": "recording-100",
+          "width": 360,
+          "height": 130,
+          "toolbar": 36,
+          "banner": 58.270835876464844,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "recording-200",
+          "width": 468,
+          "height": 259,
+          "toolbar": 72,
+          "banner": 115.25,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-100",
+          "width": 360,
+          "height": 130,
+          "toolbar": 36,
+          "banner": 58.270835876464844,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-200",
+          "width": 468,
+          "height": 259,
+          "toolbar": 72,
+          "banner": 115.25,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-100",
+          "width": 360,
+          "height": 130,
+          "toolbar": 36,
+          "banner": 58.270835876464844,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-200",
+          "width": 468,
+          "height": 259,
+          "toolbar": 72,
+          "banner": 115.25,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "error-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 165.33334350585938,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "error-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 812,
+          "listHeight": 109,
+          "errors": []
+        },
+        {
+          "label": "configure-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 227,
+          "errors": []
+        },
+        {
+          "label": "configure-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 155,
+          "errors": []
+        },
+        {
+          "label": "pending-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 198,
+          "errors": []
+        },
+        {
+          "label": "pending-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 97,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "renderScale": 1,
+      "results": [
+        {
+          "label": "idle-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "idle-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 257,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "selected-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "selected-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 257,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "recording-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.953125,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "recording-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.90625,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.953125,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.90625,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.953125,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.90625,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "error-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 168,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "error-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 813,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "configure-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 227,
+          "errors": []
+        },
+        {
+          "label": "configure-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 155,
+          "errors": []
+        },
+        {
+          "label": "pending-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 198,
+          "errors": []
+        },
+        {
+          "label": "pending-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 96,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "renderScale": 1.25,
+      "results": [
+        {
+          "label": "idle-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 54,
+          "errors": []
+        },
+        {
+          "label": "idle-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 255.1999969482422,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "selected-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 108,
+          "listHeight": 54,
+          "errors": []
+        },
+        {
+          "label": "selected-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 255.1999969482422,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "recording-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.54999923706055,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "recording-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.51250457763672,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.54999923706055,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.51250457763672,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-100",
+          "width": 360,
+          "height": 131,
+          "toolbar": 36,
+          "banner": 58.54999923706055,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-200",
+          "width": 468,
+          "height": 260,
+          "toolbar": 72,
+          "banner": 115.51250457763672,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "error-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 167.1999969482422,
+          "listHeight": 54,
+          "errors": []
+        },
+        {
+          "label": "error-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 808.7999877929688,
+          "listHeight": 108,
+          "errors": []
+        },
+        {
+          "label": "configure-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 227,
+          "errors": []
+        },
+        {
+          "label": "configure-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 155,
+          "errors": []
+        },
+        {
+          "label": "pending-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 198,
+          "errors": []
+        },
+        {
+          "label": "pending-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 97,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "renderScale": 1.5,
+      "results": [
+        {
+          "label": "idle-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 106.66667175292969,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "idle-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 256,
+          "listHeight": 109,
+          "errors": []
+        },
+        {
+          "label": "selected-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 106.66667175292969,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "selected-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 256,
+          "listHeight": 109,
+          "errors": []
+        },
+        {
+          "label": "recording-100",
+          "width": 360,
+          "height": 130,
+          "toolbar": 36,
+          "banner": 58.270835876464844,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "recording-200",
+          "width": 468,
+          "height": 259,
+          "toolbar": 72,
+          "banner": 115.25,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-100",
+          "width": 360,
+          "height": 130,
+          "toolbar": 36,
+          "banner": 58.270835876464844,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "playing-200",
+          "width": 468,
+          "height": 259,
+          "toolbar": 72,
+          "banner": 115.25,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-100",
+          "width": 360,
+          "height": 130,
+          "toolbar": 36,
+          "banner": 58.270835876464844,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "interval-200",
+          "width": 468,
+          "height": 259,
+          "toolbar": 72,
+          "banner": 115.25,
+          "listHeight": 0,
+          "errors": []
+        },
+        {
+          "label": "error-100",
+          "width": 360,
+          "height": 230,
+          "toolbar": 36,
+          "banner": 165.33334350585938,
+          "listHeight": 53,
+          "errors": []
+        },
+        {
+          "label": "error-200",
+          "width": 360,
+          "height": 230,
+          "toolbar": 156,
+          "banner": 812,
+          "listHeight": 109,
+          "errors": []
+        },
+        {
+          "label": "configure-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 227,
+          "errors": []
+        },
+        {
+          "label": "configure-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 155,
+          "errors": []
+        },
+        {
+          "label": "pending-100",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 198,
+          "errors": []
+        },
+        {
+          "label": "pending-200",
+          "width": 360,
+          "height": 300,
+          "fieldsHeight": 97,
+          "errors": []
+        }
+      ]
+    }
+  ]
+}

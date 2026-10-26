@@ -2,12 +2,12 @@
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: 1rem 1.25rem 0;
+  padding: var(--space-panel) var(--space-panel) 0;
   background: var(--surface);
 }
 .configure-window h1 {
   font-size: 1.25rem;
-  margin: 0 0 1rem;
+  margin: 0 0 var(--space-panel);
 }
 .configure-window form {
   flex: 1;
@@ -19,20 +19,21 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0.25rem 0.35rem 1rem;
+  padding: var(--space-label);
 }
 .configure-field {
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-panel);
 }
 .configure-field label {
   display: block;
   font-weight: 600;
-  margin-bottom: 0.35rem;
+  margin-bottom: var(--space-label);
 }
 .configure-field input,
 .configure-field select {
   width: 100%;
-  padding: 0.55rem 0.65rem;
+  min-height: var(--control-size);
+  padding: var(--space-control) var(--space-inline);
   font: inherit;
   color: inherit;
   background: var(--surface);
@@ -54,7 +55,7 @@
 .configure-error {
   font-size: 0.875rem;
   line-height: 1.5;
-  margin: 0.4rem 0 0;
+  margin: var(--space-label) 0 0;
   overflow-wrap: anywhere;
 }
 .configure-hint {
@@ -69,18 +70,24 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.65rem;
+  gap: var(--space-inline);
   border-top: 1px solid var(--border);
-  padding: 0.85rem 0.15rem;
+  padding: var(--space-panel) var(--space-label);
 }
 .configure-window footer p {
   flex: 1;
   margin: 0;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+.configure-window footer p:not(:empty) {
+  /* Progress text gets its own row so enlarged text cannot paint over actions. */
+  flex-basis: 100%;
 }
 .configure-window footer button,
 .configure-sample button {
-  padding: 0.55rem 0.9rem;
+  min-height: var(--control-size);
+  padding: var(--space-control) var(--space-inline);
   border: 1px solid var(--border);
   border-radius: 0.3rem;
   background: var(--surface);
@@ -91,11 +98,11 @@
   border-color: var(--accent);
 }
 .configure-sample {
-  padding: 1.25rem;
+  padding: var(--space-panel);
 }
 .configure-sample label {
   display: block;
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-panel);
 }
 .configure-sample p {
   overflow-wrap: anywhere;

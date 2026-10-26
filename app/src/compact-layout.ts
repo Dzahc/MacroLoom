@@ -1,9 +1,15 @@
-import { COMPACT, type WindowViewRequest } from './compact-contract';
+import { COMPACT, type WindowViewRequest } from './compact-contract.ts';
 
 const TOOLBAR_SELECTOR = '.library-toolbar';
 const BANNER_SELECTOR = '.library-banner';
 const LIST_SELECTOR = '.macro-list';
 const TOOLBAR_BOTTOM = '--compact-toolbar-bottom';
+
+/** The mutable scroll surfaces needed for restoration; accepts a mounted element without owning focus or layout. */
+type LibraryScrollOwner = {
+  scrollTop: number;
+  querySelector: (selector: string) => { scrollTop: number } | null;
+};
 
 /** @param element CSS length string. @returns Its finite pixel value, or zero for nonnumeric computed values. */
 function pixels(element: string): number {
@@ -57,11 +63,13 @@ export function observeCompactLayout(
   return () => observer.disconnect();
 }
 
-/** @param owner Mounted library root. @param position Preserved list scroll offset. @returns Nothing; restoration changes no keyboard/native focus. */
+/** @param owner Mounted library root. @param position Preserved list scroll offset. @param panelPosition Preserved outer-panel offset for small windows or enlarged text. @returns Nothing; restoration changes no keyboard/native focus. */
 export function restoreLibraryScroll(
-  owner: HTMLElement,
+  owner: LibraryScrollOwner,
   position: number,
+  panelPosition = 0,
 ): void {
-  const list = owner.querySelector<HTMLElement>(LIST_SELECTOR);
+  const list = owner.querySelector(LIST_SELECTOR);
   if (list) list.scrollTop = position;
+  owner.scrollTop = panelPosition;
 }

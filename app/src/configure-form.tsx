@@ -167,7 +167,6 @@ export function ConfigureForm({
   );
   return (
     <main className="configure-window" aria-labelledby={TITLE_ID}>
-      <h1 id={TITLE_ID}>{CONFIGURE_TEXT.title}</h1>
       <form
         ref={form}
         noValidate
@@ -186,6 +185,7 @@ export function ConfigureForm({
         }
       >
         <div className="configure-fields">
+          <h1 id={TITLE_ID}>{CONFIGURE_TEXT.title}</h1>
           <Field
             field={CONFIGURE_FIELD_KEY.name}
             label={CONFIGURE_TEXT.name}

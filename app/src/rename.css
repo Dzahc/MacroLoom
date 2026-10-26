@@ -1,5 +1,5 @@
 .macro-rename {
-  padding: 0.6rem;
+  padding: var(--space-inline);
   border: 1px solid var(--accent);
   border-radius: 0.65rem;
   background: var(--surface);
@@ -8,13 +8,14 @@
 .macro-rename-controls {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-control);
 }
 
 .macro-rename input {
   flex: 1;
   min-width: 0;
-  padding: 0.45rem;
+  min-height: var(--control-size);
+  padding: var(--space-control) var(--space-inline);
   color: inherit;
   background: transparent;
   border: 1px solid currentColor;
@@ -26,9 +27,9 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 2rem;
-  height: 2rem;
-  padding: 0.35rem;
+  width: var(--control-size);
+  height: var(--control-size);
+  padding: var(--space-inline);
   border: 1px solid currentColor;
   border-radius: 0.25rem;
   color: inherit;
@@ -48,7 +49,7 @@
 
 .rename-error {
   display: block;
-  margin-top: 0.4rem;
+  margin-top: var(--space-label);
   color: var(--danger);
   overflow-wrap: anywhere;
 }
