@@ -26,19 +26,21 @@ Tokens live in `app/src/style.css` and are reused by `configure.css` and
 `rename.css`. Values below assume the default 16px root. Rem units scale with text;
 font sizes, theme colors, and focus indicators are retained.
 
-| Token                  | Value                 | Use                                      |
-| ---------------------- | --------------------- | ---------------------------------------- |
-| `--space-label`        | 0.25rem / 4px         | Label/field and hint spacing             |
-| `--space-control`      | 0.375rem / 6px        | Toolbar gaps, vertical control padding   |
-| `--space-inline`       | 0.5rem / 8px          | Horizontal input padding, inline gaps    |
-| `--space-panel`        | 0.75rem / 12px        | Panel padding and field-group spacing    |
-| `--control-size`       | 2.25rem / 36px        | Toolbar buttons and minimum field height |
-| `--toolbar-icon-size`  | 1.125rem / 18px       | Toolbar glyphs only                      |
-| `--library-min-height` | Control + 3rem / 84px | One library row, heading, and padding    |
+| Token                      | Value                 | Use                                      |
+| -------------------------- | --------------------- | ---------------------------------------- |
+| `--space-label`            | 0.25rem / 4px         | Label/field and hint spacing             |
+| `--space-control`          | 0.375rem / 6px        | Toolbar gaps, vertical control padding   |
+| `--space-inline`           | 0.5rem / 8px          | Horizontal input padding, inline gaps    |
+| `--space-panel`            | 0.75rem / 12px        | Panel padding and field-group spacing    |
+| `--control-size`           | 2.25rem / 36px        | Toolbar buttons and minimum field height |
+| `--macro-row-control-size` | 1.875rem / 30px       | Compact library rows and rename targets  |
+| `--toolbar-icon-size`      | 1.125rem / 18px       | Toolbar glyphs only                      |
+| `--library-min-height`     | Control + 3rem / 84px | One library row, heading, and padding    |
 
 The extra Configure toolbar separator is also 6px. Library rows retain stable-ID
-selection and ellipsis/full accessible names. Their rename target is 36px; row
-height includes its border. Inline rename Save/Cancel controls are also 36px.
+selection and ellipsis/full accessible names. Their rename target is 30px, giving
+32px rows including the normal border, reduced from 38px at the owner's request.
+Inline rename editing fields and Save/Cancel controls remain 36px.
 Recovery, context-menu, and delete-dialog controls share the same spacing scale.
 Toast glyphs and dismiss-button padding explicitly retain their earlier sizes.
 
@@ -146,6 +148,21 @@ across index/worktree snapshots with zero failures. Standards and Spec follow-up
 reviews have no remaining new findings; native acceptance evidence remains open.
 The follow-up result is recorded in the
 [issue validation comment](https://github.com/Dzahc/MacroLoom/issues/46#issuecomment-6404495243).
+
+## Shorter library rows follow-up
+
+The owner requested a further reduction in macro-list item height. A dedicated
+30px row-control token reduces the ordinary bordered row from 38px to 32px;
+the name text remains 14px and the rename glyph remains 16px. Toolbar, form,
+and inline editing controls keep their 36px minimum.
+
+Nine visible rows rendered with production components/CSS measured 38px before
+and 32px afterward. The refreshed after image above and all 96 audit cases pass.
+The button-size audit permits 30px only for row-selection and rename-pencil
+targets; other controls retain the 36px minimum. Standards and Spec reviews have
+no findings for this adjustment. `npm.cmd --prefix app run verify` passed with
+exit code 0 and all 14 checks passing, including 105 frontend/tooling tests and
+the Rust/Python suites; no TS/Rust functions changed relative to refreshed develop.
 
 ## Native observations still required
 
