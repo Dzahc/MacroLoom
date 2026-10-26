@@ -116,6 +116,10 @@ impl KeySequences {
     pub fn play_consumed(&self) -> bool {
         matches!(self.play, KeyState::Consumed)
     }
+    /// Reports a fresh physical F8 down before processing it; startup-held and repeated downs cannot cancel pending starts.
+    pub fn fresh_stop(&self, key: u16, down: bool) -> bool {
+        key == STOP_KEY && down && matches!(self.stop, KeyState::Up)
+    }
     /// Returns suppression and an optional first-press control; unreserved sequences remain untouched.
     pub fn key(&mut self, key: u16, down: bool, reserved: Availability) -> (bool, Option<Control>) {
         match key {
@@ -152,6 +156,20 @@ impl KeySequences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    /// Startup-held and later passed F8 holds cannot cancel starts via repeats; only a new down after release is fresh.
+    fn startup_held_stop_requires_release_before_fresh_cancellation() {
+        let mut keys = KeySequences::with_held(|key| key == STOP_KEY);
+        let idle = Availability::default();
+        assert!(!keys.fresh_stop(STOP_KEY, true));
+        assert!(!keys.physical_key(STOP_KEY, true, false, idle).0);
+        assert!(!keys.fresh_stop(STOP_KEY, false));
+        assert!(!keys.physical_key(STOP_KEY, false, false, idle).0);
+        assert!(keys.fresh_stop(STOP_KEY, true));
+        assert!(!keys.physical_key(STOP_KEY, true, false, idle).0);
+        assert!(!keys.fresh_stop(STOP_KEY, true));
+        assert!(!keys.physical_key(STOP_KEY, true, false, idle).0);
+    }
     #[test]
     /// A control held before hook startup remains passed across registration, repeats, and release until a fresh gesture.
     fn startup_held_play_cannot_become_a_fresh_control() {

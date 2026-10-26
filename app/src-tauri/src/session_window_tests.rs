@@ -29,6 +29,14 @@ const PREVIEW_READY: &str = "document.querySelector('.native-development [role=s
 const FOCUS_READY: &str = "document.hasFocus()";
 const CHECK_PASSED: &str = "PASS: F9/F10/F8 conflicts, GUI fallback, recording exclusion, toast, Play/Stop, real owned/external F9/F10 delivery, focus preservation, retry and shutdown";
 const TEST_LIBRARY_PREFIX: &str = "macroloom-native-session-check";
+const PLAY_DOWN_CONSUMED: &str = "F10 down must be consumed";
+const PLAY_RELEASE_CONSUMED: &str = "F10 release must be consumed";
+const STARTUP_STOP_REPEAT_PASSED: &str = "Startup-held F8 repeat must pass";
+const STARTUP_STOP_RELEASE_PASSED: &str = "Startup-held F8 release must pass";
+const STARTUP_STOP_CANCELLED_PLAY: &str = "Startup-held F8 repeat cancelled valid Play intent";
+const FRESH_STOP_CANCELS_PLAY: &str = "Fresh F8 must cancel early Play intent";
+const STARTUP_STOP_CHECK_PASSED: &str =
+    "PASS: startup-held F8 repeats preserve Play; fresh F8 still cancels";
 
 /// Owns only a unique temporary native-check library, never the executable's ordinary macros folder.
 struct CheckLibrary(PathBuf);
@@ -325,8 +333,35 @@ fn check(webview: Webview, conflict: Conflict, checked: Arc<AtomicBool>) -> Resu
 /// Checks selected playback through both the conflicted GUI fallback and the recovered native F10 route.
 fn check_playback(window: &WebviewWindow, session: &Session) -> Result<(), String> {
     play_conflict(window, session)?;
+    startup_held_stop_preserves_play(session)?;
+    fresh_stop_cancels_play(session)?;
+    println!("{STARTUP_STOP_CHECK_PASSED}");
     global_play(window, session)?;
     check_external_delivery(|| release_playback(session))
+}
+/// Startup-held F8 repeats/releases pass without cancelling F10; release of the valid Play gesture starts playback.
+fn startup_held_stop_preserves_play(session: &Session) -> Result<(), String> {
+    *SEQUENCES.lock().map_err(|_| HOOK_FAILED)? = KeySequences::with_held(
+        // Substitutes the physical-held snapshot taken before hook registration/pumping.
+        |key| key == STOP_KEY,
+    );
+    require(physical_key(PLAY_KEY, true), PLAY_DOWN_CONSUMED)?;
+    require(!physical_key(STOP_KEY, true), STARTUP_STOP_REPEAT_PASSED)?;
+    require(session.pending_start()?, STARTUP_STOP_CANCELLED_PLAY)?;
+    require(!physical_key(STOP_KEY, false), STARTUP_STOP_RELEASE_PASSED)?;
+    require(physical_key(PLAY_KEY, false), PLAY_RELEASE_CONSUMED)?;
+    phase(session, Phase::Playing)?;
+    stop_starting_playback();
+    phase(session, Phase::Idle)?;
+    Ok(())
+}
+/// A new F8 press still cancels early Play intent after the startup-held gesture has ended.
+fn fresh_stop_cancels_play(session: &Session) -> Result<(), String> {
+    require(physical_key(PLAY_KEY, true), PLAY_DOWN_CONSUMED)?;
+    stop_starting_playback();
+    require(!session.pending_start()?, FRESH_STOP_CANCELS_PLAY)?;
+    require(physical_key(PLAY_KEY, false), PLAY_RELEASE_CONSUMED)?;
+    Ok(())
 }
 /// Drives no-selection F10 through the native handler and real toast rendering without changing focus.
 fn no_selection_play(window: &WebviewWindow) -> Result<(), String> {

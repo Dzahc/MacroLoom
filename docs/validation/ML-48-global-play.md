@@ -14,6 +14,10 @@ rejection, no-selection toast deduplication, busy exclusion, conflicts/retry,
 recording-save selection, cleanup reservations, and truthful tooltip/banner
 rendering. Reserved, modified, unreserved, repeated, and trailing-release key
 sequences are checked independently, including controls held across hook startup.
+The startup-held F8 regression checks fresh-down eligibility deterministically
+and exercises the real native handler: hold F8 across startup, press F10, repeat
+and release F8, then release F10. Playback must start; a later fresh F8 still
+cancels pending Play. Only the startup physical-held snapshot is substituted.
 
 The real-WebView `session-control-check` additionally exercises competing Windows
 F9/F10/F8 registrations, visible conflict/retry and GUI fallback, F10 recording
@@ -44,6 +48,28 @@ October 25, 2026:
   startup-held gesture fix at `d13b927`.
 - `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
   also passed, covering the opt-in native fixture code.
+
+October 26, 2026 — startup-held F8 follow-up:
+
+- Reproduced the reported cancellation through the native handler before fixing
+  it: `session-control-check` failed with `Startup-held F8 repeat cancelled valid
+Play intent`. The early-Stop fallback now requires a fresh physical F8 down,
+  checked under the sequence lock before advancing its state. Startup-held and
+  subsequent passed-gesture repeats cannot cancel a later Play gesture.
+- Added deterministic fresh-down coverage and a native callback regression for
+  F8 held at startup, F10 down, F8 repeat/release, F10 release, playback, and a
+  subsequent fresh F8 cancellation. On fixed code the new scenario completed
+  before the broader checker failed to focus its external target; a later run
+  failed its own-window focus check. These runs do **not** establish a complete
+  native-suite pass. Logs: `app/.quality-output/ML-48-startup-f8-red.log`,
+  `app/.quality-output/ML-48-startup-f8-green.log`, and
+  `app/.quality-output/ML-48-startup-f8-native.log`.
+- `npm.cmd --prefix app run verify` — **PASS**, exit 0 against refreshed
+  `origin/develop` at `7a013f3`: 108 frontend/tooling tests, 159 Rust tests (seven
+  interactive tests ignored), 33 Python fixtures, and 1,837 function/closure
+  checks; no exceptions. Log: `app/.quality-output/ML-48-startup-f8-verify.log`.
+- `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
+  — **PASS**, exit 0 on the final fixture code.
 
 Physical-keyboard acceptance in Notepad/the intended target and numerical Stop
 timing remain pending owner observations.

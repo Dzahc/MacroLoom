@@ -1559,11 +1559,12 @@ fn control_key(input: &KBDLLHOOKSTRUCT, down: bool) -> bool {
         return false;
     };
     let modified = input.vkCode as u16 == PLAY_KEY && SNAPSHOT_MODIFIERS.into_iter().any(key_held);
+    let fresh_stop = sequences.fresh_stop(input.vkCode as u16, down);
     let (consumed, control) =
         sequences.physical_key(input.vkCode as u16, down, modified, *reserved);
     drop(sequences);
     drop(reserved);
-    observe_unreserved_stop(input.vkCode as u16, down, consumed);
+    observe_unreserved_stop(fresh_stop, consumed);
     if let Some(control) = control {
         queue_control(match control {
             Control::Record => ControlJob::Record,
@@ -1574,9 +1575,9 @@ fn control_key(input: &KBDLLHOOKSTRUCT, down: bool) -> bool {
     }
     consumed
 }
-/// Invalidates queued starts or unfinished F10 before its worker arms Stop; unreserved F8 still passes through completely.
-fn observe_unreserved_stop(key: u16, down: bool, consumed: bool) {
-    if !consumed && down && key == STOP_KEY {
+/// A fresh unreserved F8 invalidates queued starts or unfinished F10 before its worker arms Stop; the whole gesture still passes.
+fn observe_unreserved_stop(fresh_stop: bool, consumed: bool) {
+    if !consumed && fresh_stop {
         if let Some(session) = ENGINE.get() {
             if session.pending_start().unwrap_or(false) {
                 queue_control(ControlJob::Stop);
