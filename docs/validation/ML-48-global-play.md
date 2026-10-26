@@ -13,7 +13,7 @@ rename Save, Stop cancellation, intervening Configure, physical-held startup
 rejection, no-selection toast deduplication, busy exclusion, conflicts/retry,
 recording-save selection, cleanup reservations, and truthful tooltip/banner
 rendering. Reserved, modified, unreserved, repeated, and trailing-release key
-sequences are checked independently.
+sequences are checked independently, including controls held across hook startup.
 
 The real-WebView `session-control-check` additionally exercises competing Windows
 F9/F10/F8 registrations, visible conflict/retry and GUI fallback, F10 recording
@@ -37,16 +37,34 @@ October 25, 2026:
   unregistration diagnostic after successful fixture assertions and normal exit.
 - `npm.cmd --prefix app run verify` — **PASS**, exit 0 against refreshed
   `origin/develop` at `7a013f3`. Formatting, strict TypeScript, ESLint, production
-  build, rustfmt, Clippy, 108 frontend/tooling tests, 156 Rust tests (seven
-  interactive tests ignored), 33 Python fixtures, and 909 function/closure
-  complexity checks passed with no exceptions. Log:
-  `app/.quality-output/ML-48-verify.log`.
+  build, rustfmt, Clippy, 108 frontend/tooling tests, 158 Rust tests (seven
+  interactive tests ignored), 33 Python fixtures, and 1,830 function/closure
+  complexity checks across index/worktree passed with no exceptions. Final log:
+  `app/.quality-output/ML-48-verify-final.log`. This rerun covers the reviewed
+  startup-held gesture fix at `d13b927`.
 - `cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --offline --features native-checks --all-targets -- -D warnings`
   also passed, covering the opt-in native fixture code.
 
 Physical-keyboard acceptance in Notepad/the intended target and numerical Stop
-timing remain pending owner observations. Standards/Spec review is recorded after
-review completion.
+timing remain pending owner observations.
+
+## Standards
+
+Review against `7a013f3` through `d13b927`: no remaining actionable findings.
+Named constants now cover native-check process arguments/errors and the render
+fixture status. The grouped F9/F10 reservation parameter is named `start_keys`.
+The follow-up review found no additional baseline smells.
+
+## Spec
+
+Review against the confirmed ML-48 specification: no remaining findings.
+The startup-held F10 finding is resolved: physical controls already held when
+hooks start are seeded as passed before registration/pumping. Their repeats and
+release cannot activate Play. A fresh press can. A new regression covers this
+case. The clarified distinction between an already-pending rename Save and a
+newly submitted Save during a held gesture also has regression coverage.
+
+Remaining review findings: Standards **0**, Spec **0**.
 
 ## Owner target-application checklist
 
