@@ -170,8 +170,8 @@ pub trait Platform: Send + Sync {
     fn reserve(&self) -> Result<Box<dyn Send>, String>;
     /// Returns whether library initialization, editor, deletion, or external interlocks prevent a start.
     fn available(&self) -> bool;
-    /// Reconciles F9/F10 together using record and F8 independently using stop on the OS owner thread; returns actual availability.
-    fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String>;
+    /// Reconciles F9/F10 together using start_keys and F8 independently using stop on the OS owner thread; returns actual availability.
+    fn shortcuts(&self, start_keys: bool, stop: bool) -> Result<Availability, String>;
     /// Enters/restores the actual owned compact view without activation; failures retain restoration state.
     fn view(&self, compact: bool) -> Result<(), String>;
     /// Reads current signed physical cursor coordinates for a recording boundary.
@@ -399,14 +399,14 @@ impl Session {
     }
     /// Reconciles idle native reservations and retains their transient error independently until a successful native refresh.
     /// Propagates failure for ordinary caller reporting without losing the prior session outcome.
-    fn refresh_idle_shortcuts(&self, record: bool) -> Result<Availability, String> {
+    fn refresh_idle_shortcuts(&self, start_keys: bool) -> Result<Availability, String> {
         let state = self.lock()?;
         let waiting = state.rename_saving
             || state.deferred_start
             || state.play_gesture
             || state.start_requested;
         drop(state);
-        let result = self.platform.shortcuts(record, waiting);
+        let result = self.platform.shortcuts(start_keys, waiting);
         self.lock()?.shortcut_error = result.as_ref().err().cloned();
         result
     }

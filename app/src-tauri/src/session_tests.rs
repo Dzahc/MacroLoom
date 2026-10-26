@@ -100,7 +100,7 @@ impl Platform for Desktop {
         !self.operation.load(Ordering::Acquire)
     }
     /// Reports a controllable native Stop conflict while retaining Record availability.
-    fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String> {
+    fn shortcuts(&self, start_keys: bool, stop: bool) -> Result<Availability, String> {
         if self.shortcut_failure.load(Ordering::Acquire) {
             return Err(REJECTED.into());
         }
@@ -111,8 +111,8 @@ impl Platform for Desktop {
             return Err(REJECTED.into());
         }
         *self.registered.lock().expect("Fixture reservation mutex") = Availability {
-            record,
-            play: record && !self.play_conflict.load(Ordering::Acquire),
+            record: start_keys,
+            play: start_keys && !self.play_conflict.load(Ordering::Acquire),
             stop: stop && !self.stop_conflict.load(Ordering::Acquire),
         };
         if stop {
@@ -126,8 +126,8 @@ impl Platform for Desktop {
             }
         }
         Ok(Availability {
-            record,
-            play: record && !self.play_conflict.load(Ordering::Acquire),
+            record: start_keys,
+            play: start_keys && !self.play_conflict.load(Ordering::Acquire),
             stop: !self.stop_conflict.load(Ordering::Acquire),
         })
     }

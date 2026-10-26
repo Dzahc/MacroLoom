@@ -174,8 +174,8 @@ impl Platform for NativePlatform {
                 .is_ok()
     }
     /// Updates F9/F10 together and F8 independently on the native hook message thread, returning actual key availability.
-    fn shortcuts(&self, record: bool, stop: bool) -> Result<Availability, String> {
-        windows::configure_shortcuts(record, stop)
+    fn shortcuts(&self, start_keys: bool, stop: bool) -> Result<Availability, String> {
+        windows::configure_shortcuts(start_keys, stop)
     }
     /// Serializes native placement on the main event thread, waiting only on the calling worker.
     fn view(&self, compact: bool) -> Result<(), String> {

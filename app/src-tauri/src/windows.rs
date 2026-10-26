@@ -933,7 +933,7 @@ fn clamp_window_bounds(bounds: RECT) -> Result<RECT, String> {
 
 /// Owns native registration requests on the same message thread that installed the hooks.
 struct ReservationJob {
-    record: bool,
+    start_keys: bool,
     stop: bool,
     shutdown: bool,
     reply: mpsc::SyncSender<Result<Availability, String>>,
@@ -959,11 +959,11 @@ impl HookRuntime {
         Ok(self.stop)
     }
     /// Reconciles physical reservations; errors retain actual ownership rather than pretending unregistration succeeded.
-    fn apply(&mut self, record: bool, stop: bool) -> Result<Availability, String> {
-        if !self.hooks_ready && (record || stop) {
+    fn apply(&mut self, start_keys: bool, stop: bool) -> Result<Availability, String> {
+        if !self.hooks_ready && (start_keys || stop) {
             return Err(HOOK_FAILED.into());
         }
-        let result = self.apply_keys(record, stop);
+        let result = self.apply_keys(start_keys, stop);
         *RESERVED.lock().map_err(|_| HOOK_FAILED)? = Availability {
             record: self.record,
             play: self.play,
@@ -977,9 +977,9 @@ impl HookRuntime {
         })
     }
     /// Updates individual physical reservations; the caller publishes actual ownership even after partial failure.
-    fn apply_keys(&mut self, record: bool, stop: bool) -> Result<(), String> {
-        self.record = update_registration(self.record, RECORD_ID, RECORD_KEY, record)?;
-        self.play = update_registration(self.play, PLAY_ID, PLAY_KEY, record)?;
+    fn apply_keys(&mut self, start_keys: bool, stop: bool) -> Result<(), String> {
+        self.record = update_registration(self.record, RECORD_ID, RECORD_KEY, start_keys)?;
+        self.play = update_registration(self.play, PLAY_ID, PLAY_KEY, start_keys)?;
         self.stop = update_registration(self.stop, STOP_ID, STOP_KEY, stop)?;
         if stop {
             self.stop_available = self.stop;
@@ -1003,14 +1003,14 @@ fn update_registration(current: bool, id: i32, key: u16, wanted: bool) -> Result
     Ok(false)
 }
 /// Updates native reservations and waits for acknowledgement only from a worker, never a hook/UI callback.
-pub fn configure_shortcuts(record: bool, stop: bool) -> Result<Availability, String> {
-    if !hooks_running() && !record && !stop {
+pub fn configure_shortcuts(start_keys: bool, stop: bool) -> Result<Availability, String> {
+    if !hooks_running() && !start_keys && !stop {
         return Ok(Availability::default());
     }
     let jobs = HOOK_JOBS.get().ok_or(HOOK_FAILED)?;
     let (reply, receive) = mpsc::sync_channel(1);
     jobs.send(ReservationJob {
-        record,
+        start_keys,
         stop,
         shutdown: false,
         reply,
@@ -1057,7 +1057,7 @@ pub fn shutdown_hooks_checked() -> Result<(), String> {
         .get()
         .ok_or(SHUTDOWN_UNAVAILABLE)?
         .send(ReservationJob {
-            record: false,
+            start_keys: false,
             stop: false,
             shutdown: true,
             reply,
@@ -1122,6 +1122,12 @@ fn hook_loop(jobs: mpsc::Receiver<ReservationJob>, ready: mpsc::SyncSender<Resul
     // SAFETY: the same static-lifetime callback and process-local thread hook contract applies to mouse input.
     let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), null_mut(), 0) };
     let mut handles = HookHandles { keyboard, mouse };
+    if let Err(error) = seed_control_sequences() {
+        let _ = handles.release();
+        HOOK_THREAD.store(0, Ordering::Release);
+        let _ = ready.send(Err(error));
+        return;
+    }
     let mut runtime = HookRuntime {
         record: false,
         play: false,
@@ -1144,6 +1150,11 @@ fn hook_loop(jobs: mpsc::Receiver<ReservationJob>, ready: mpsc::SyncSender<Resul
     let _ = handles.release();
     HOOK_THREAD.store(0, Ordering::Release);
 }
+/// Seeds already-held controls after hook installation but before reservation and pumping; poison fails startup without claiming keys.
+fn seed_control_sequences() -> Result<(), String> {
+    *SEQUENCES.lock().map_err(|_| HOOK_FAILED)? = KeySequences::with_held(key_held);
+    Ok(())
+}
 /// Applies reservation jobs without callback work; reserved keyboard callbacks already queue control actions directly.
 fn pump_hook_message(
     message: &MSG,
@@ -1158,7 +1169,7 @@ fn pump_hook_message(
     if message.message == RESERVATION_MESSAGE {
         while let Ok(job) = jobs.try_recv() {
             let result = runtime
-                .apply(job.record, job.stop)
+                .apply(job.start_keys, job.stop)
                 .and_then(|availability| {
                     if job.shutdown {
                         handles.release()?;
@@ -1287,6 +1298,13 @@ const CHECK_KEY_UP: u32 = 2;
 const CHECK_KEY_COMPLETE: u32 = CHECK_KEY_UP;
 #[cfg(feature = "native-checks")]
 const CHECK_KEY_POLL: Duration = Duration::from_millis(10);
+#[cfg(feature = "native-checks")]
+const KEY_FOCUS_REQUIRED: &str =
+    "The isolated check must own foreground focus before sending control releases";
+#[cfg(feature = "native-checks")]
+const KEY_FOCUS_LOST: &str = "The isolated check lost foreground focus during shortcut delivery";
+#[cfg(feature = "native-checks")]
+const KEY_DELIVERY_FAILED: &str = "Control hook delivery missing";
 
 #[cfg(feature = "native-checks")]
 /// Owns one isolated observation thread; dropping it stops the pump and releases its test hook before returning.
@@ -1376,13 +1394,13 @@ fn delivery_observer_loop(ready: mpsc::SyncSender<Result<u32, String>>) {
 /// Sends only tagged F9/F10 releases, avoiding injected holds even if dispatch fails; requires an interactive quiet desktop.
 pub(crate) fn check_focused_key_delivery() -> Result<(), String> {
     if !own_window_focused() {
-        return Err("The isolated check must own foreground focus before sending F9".into());
+        return Err(KEY_FOCUS_REQUIRED.into());
     }
     for key in [RECORD_KEY, PLAY_KEY] {
         check_key_delivery(key)?;
     }
     if !own_window_focused() {
-        return Err("The isolated check lost foreground focus during shortcut delivery".into());
+        return Err(KEY_FOCUS_LOST.into());
     }
     Ok(())
 }
@@ -1396,7 +1414,7 @@ fn check_key_delivery(key: u16) -> Result<(), String> {
     let deadline = std::time::Instant::now() + HOOK_TIMEOUT;
     while CHECK_KEY_DELIVERY.load(Ordering::Acquire) != CHECK_KEY_COMPLETE {
         if std::time::Instant::now() >= deadline {
-            return Err(format!("Control {key} hook delivery missing: observed mask={}, expected mask={CHECK_KEY_COMPLETE}", CHECK_KEY_DELIVERY.load(Ordering::Acquire)));
+            return Err(format!("{KEY_DELIVERY_FAILED}: key={key}, observed mask={}, expected mask={CHECK_KEY_COMPLETE}", CHECK_KEY_DELIVERY.load(Ordering::Acquire)));
         }
         std::thread::sleep(CHECK_KEY_POLL);
     }
@@ -1405,7 +1423,30 @@ fn check_key_delivery(key: u16) -> Result<(), String> {
 #[cfg(feature = "native-checks")]
 const EXTERNAL_TITLE_ENV: &str = "MACROLOOM_DELIVERY_TITLE";
 #[cfg(feature = "native-checks")]
+const EXTERNAL_PROCESS: &str = "powershell.exe";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_TITLE_PREFIX: &str = "MacroLoom delivery check";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_FOCUS_FAILED: &str = "Could not focus the external test window";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_EARLY_EXIT: &str = "External test window exited before readiness";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_NOT_READY: &str = "External test window did not become ready";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_NOT_FOCUSED: &str = "External target did not acquire focus";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_FOCUS_LOST: &str = "MacroLoom changed external target focus";
+#[cfg(feature = "native-checks")]
 const EXTERNAL_WINDOW_SCRIPT: &str = "Add-Type -AssemblyName System.Windows.Forms; $deliveryForm = New-Object System.Windows.Forms.Form; $deliveryForm.Text = $env:MACROLOOM_DELIVERY_TITLE; [void]$deliveryForm.ShowDialog()";
+#[cfg(feature = "native-checks")]
+const EXTERNAL_ARGUMENTS: [&str; 6] = [
+    "-NoProfile",
+    "-STA",
+    "-WindowStyle",
+    "Hidden",
+    "-Command",
+    EXTERNAL_WINDOW_SCRIPT,
+];
 #[cfg(feature = "native-checks")]
 /// Owns only the newly spawned empty external test process; no existing user application is reused or closed.
 struct ExternalDeliveryTarget(std::process::Child);
@@ -1421,16 +1462,9 @@ impl Drop for ExternalDeliveryTarget {
 /// Opens an empty external WinForms window with a hidden PowerShell host; returns only its verified process-owned HWND.
 fn external_delivery_target() -> Result<(ExternalDeliveryTarget, HWND), String> {
     use std::os::windows::process::CommandExt;
-    let title = format!("MacroLoom delivery check {}", uuid::Uuid::new_v4());
-    let child = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-STA",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            EXTERNAL_WINDOW_SCRIPT,
-        ])
+    let title = format!("{EXTERNAL_TITLE_PREFIX} {}", uuid::Uuid::new_v4());
+    let child = std::process::Command::new(EXTERNAL_PROCESS)
+        .args(EXTERNAL_ARGUMENTS)
         .env(EXTERNAL_TITLE_ENV, &title)
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
         .stdin(std::process::Stdio::null())
@@ -1442,7 +1476,7 @@ fn external_delivery_target() -> Result<(ExternalDeliveryTarget, HWND), String> 
     let hwnd = wait_external_window(&mut target, &title)?;
     // SAFETY: the HWND was verified against the still-owned child's process; it is used synchronously before target is dropped.
     if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd) } == 0 {
-        return Err("Could not focus the external test window".into());
+        return Err(EXTERNAL_FOCUS_FAILED.into());
     }
     Ok((target, hwnd))
 }
@@ -1458,7 +1492,7 @@ fn wait_external_window(target: &mut ExternalDeliveryTarget, title: &str) -> Res
             .map_err(|error| error.to_string())?
             .is_some()
         {
-            return Err("External test window exited before readiness".into());
+            return Err(EXTERNAL_EARLY_EXIT.into());
         }
         // SAFETY: the title is NUL-terminated UTF-16 borrowed only by this synchronous lookup; process output is initialized.
         let hwnd = unsafe {
@@ -1475,7 +1509,7 @@ fn wait_external_window(target: &mut ExternalDeliveryTarget, title: &str) -> Res
         }
         std::thread::sleep(CHECK_KEY_POLL);
     }
-    Err("External test window did not become ready".into())
+    Err(EXTERNAL_NOT_READY.into())
 }
 #[cfg(feature = "native-checks")]
 /// Probes real OS key delivery and runs native controls with an isolated external application focused, retaining that focus.
@@ -1483,7 +1517,7 @@ fn check_external_delivery(operation: impl FnOnce() -> Result<(), String>) -> Re
     let (_target, hwnd) = external_delivery_target()?;
     // SAFETY: target retains the child window for this entire probe; this getter retains no borrowed handle.
     if unsafe { GetForegroundWindow() } != hwnd {
-        return Err("External target did not acquire focus".into());
+        return Err(EXTERNAL_NOT_FOCUSED.into());
     }
     for key in [RECORD_KEY, PLAY_KEY] {
         check_key_delivery(key)?;
@@ -1491,7 +1525,7 @@ fn check_external_delivery(operation: impl FnOnce() -> Result<(), String>) -> Re
     operation()?;
     // SAFETY: the same live child owns hwnd until _target is dropped after this invariant check.
     if unsafe { GetForegroundWindow() } != hwnd {
-        return Err("MacroLoom changed external target focus".into());
+        return Err(EXTERNAL_FOCUS_LOST.into());
     }
     Ok(())
 }
@@ -2026,7 +2060,7 @@ mod tests {
         let (jobs, receive_jobs) = mpsc::channel();
         let (reply, receive_reply) = mpsc::sync_channel(1);
         jobs.send(ReservationJob {
-            record: false,
+            start_keys: false,
             stop: false,
             shutdown: true,
             reply,

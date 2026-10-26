@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { INITIAL_SESSION, SESSION_TEXT } from '../src/session-contract.ts';
 import { SessionController } from '../src/session-controller.ts';
-import { PHASE } from '../src/library-model.ts';
+import { PHASE, LABEL } from '../src/library-model.ts';
 
 const OUTPUT_DIRECTORY = '.quality-output/session-render';
 const FAILURE = 'Injected release failed; Retry cleanup.';
@@ -35,7 +35,7 @@ void test('Play-only conflict hides the F10 hint and explains the button shortcu
         macros: [SELECTED_MACRO],
         selectedId: SELECTED_MACRO.id,
         phase: PHASE.idle,
-        message: 'Ready',
+        message: LABEL.ready,
         shortcuts: { record: true, play: false, stop: true },
       },
       /** Rendering has no native selection side effects. */ onSelect: () => {},

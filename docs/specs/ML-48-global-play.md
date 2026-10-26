@@ -17,8 +17,9 @@ these interview decisions on October 25, 2026 and authorized implementation.
   completely; dropping modifiers while F10 remains held never activates Play.
   Injected input never activates controls.
 - An unfinished gesture does not block other operations. F8, suspend/close,
-  another accepted start, Configure, deletion, or an intervening blocked state
+  another accepted start, a newly submitted name Save, Configure, deletion, or an intervening blocked state
   invalidates it. Returning to idle or repeating the held key cannot revive it.
+  A name Save already pending before F10 down remains an eligible deferred-start state.
 - Use existing backend Play guards and session ownership, held-input validation,
   absolute physical coordinates, playback properties, cancellation, and cleanup.
   Preserve external focus; add no countdown or automatic target activation.

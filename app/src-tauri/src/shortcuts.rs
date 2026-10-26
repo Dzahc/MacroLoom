@@ -74,6 +74,16 @@ enum KeyState {
     Consumed,
 }
 impl KeySequences {
+    /// Seeds controls already physically held before hook startup as passed; returns a tracker that cannot reinterpret their repeats.
+    pub fn with_held(held: impl Fn(u16) -> bool) -> Self {
+        let mut sequences = Self::default();
+        for key in [RECORD_KEY, PLAY_KEY, STOP_KEY] {
+            if held(key) {
+                sequences.physical_key(key, true, false, Availability::default());
+            }
+        }
+        sequences
+    }
     /// Processes native input with first-down modifier ownership; only bare reserved F10 may activate Play.
     pub fn physical_key(
         &mut self,
@@ -142,6 +152,26 @@ impl KeySequences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    /// A control held before hook startup remains passed across registration, repeats, and release until a fresh gesture.
+    fn startup_held_play_cannot_become_a_fresh_control() {
+        let mut keys = KeySequences::with_held(
+            // Substitutes only the native physical-held snapshot at hook startup.
+            |key| key == PLAY_KEY,
+        );
+        let idle = Availability {
+            play: true,
+            ..Availability::default()
+        };
+        assert!(!keys.physical_key(PLAY_KEY, true, false, idle).0);
+        let release = keys.physical_key(PLAY_KEY, false, false, idle);
+        assert!(!release.0 && release.1.is_none());
+        assert!(keys.physical_key(PLAY_KEY, true, false, idle).0);
+        assert!(matches!(
+            keys.physical_key(PLAY_KEY, false, false, idle).1,
+            Some(Control::PlayRelease)
+        ));
+    }
     #[test]
     /// Becoming reserved during an already held unreserved F10 cannot consume it or start playback.
     fn unreserved_play_gesture_stays_passed_after_registration() {

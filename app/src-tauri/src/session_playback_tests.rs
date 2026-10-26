@@ -154,6 +154,33 @@ fn global_play_does_not_survive_an_intervening_editor() {
 }
 
 #[test]
+/// Submitting a new Save while F10 is held invalidates the gesture, even if Save finishes before release.
+fn global_play_new_name_save_invalidates_hold() {
+    use crate::session_control::ControlRequest;
+    let desktop = Desktop::new(events(), END);
+    let session = Session::new(desktop.clone());
+    session.refresh().expect("Idle");
+    session
+        .select_macro(Some(desktop.id.clone()))
+        .expect("Select");
+    ControlRequest::PlayPress
+        .receive(&session)
+        .expect("Press before Save");
+    let mut save = session.begin_rename().expect("Intervening Save");
+    assert!(!save
+        .finish(true)
+        .expect("Save finishes without deferred playback"));
+    ControlRequest::PlayRelease
+        .receive(&session)
+        .expect("Release after Save")
+        .expect("Refresh")
+        .execute(&session)
+        .expect("No playback");
+    assert_eq!(session.snapshot().expect("Idle").phase, Phase::Idle);
+    assert!(desktop.events.lock().expect("No injections").is_empty());
+}
+
+#[test]
 /// A pending name Save retains the release-selected identity even when selection changes before the worker runs.
 fn global_play_rename_wait_freezes_release_selection() {
     use crate::session_control::ControlRequest;
