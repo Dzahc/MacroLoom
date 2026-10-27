@@ -33,6 +33,7 @@ const INVALID_MODE: &str = "Choose Once, Fixed count, or Indefinitely";
 const INVALID_INTEGER: &str = "Must be a whole number in the supported safe integer range";
 const RETAINED_GUIDANCE: &str =
     "Your edits are retained. Correct the problem and Retry, or Cancel.";
+const RECEIPT_REQUIRED: &str = "Check the Save outcome before discarding the Configure draft";
 const NONNEGATIVE_MINIMUM: f64 = 0.0;
 const POSITIVE_MINIMUM: f64 = 1.0;
 
@@ -229,9 +230,38 @@ pub struct ConfigureState {
     pub exit_requested: bool,
     pub save_succeeded: bool,
     pub completion: Option<ConfigureCompletion>,
+    pub recovery_error: Option<String>,
+    pub discard_requested: bool,
 }
 
 impl ConfigureState {
+    /// Allows explicit main-window Discard only for failed placement after authoritative Save ownership has settled.
+    /// A native status failure remains a rejection; querying/Retry never submits another Save.
+    pub fn require_recovery_discard(&self, observed_attempt: Option<u64>) -> Result<(), String> {
+        if !self.occupied || self.recovery_error.is_none() || self.original.is_none() {
+            return Err(CONFIGURE_MISSING.into());
+        }
+        if self.pending.is_some() {
+            return Err(CONFIGURE_PENDING.into());
+        }
+        let expected = self
+            .completion
+            .as_ref()
+            .map(|completion| completion.attempt_id);
+        if observed_attempt != expected {
+            return Err(RECEIPT_REQUIRED.into());
+        }
+        Ok(())
+    }
+    /// Atomically reserves explicit draft dismissal so a concurrently queued Save cannot begin before native destruction.
+    pub fn reserve_recovery_discard(
+        &mut self,
+        observed_attempt: Option<u64>,
+    ) -> Result<(), String> {
+        self.require_recovery_discard(observed_attempt)?;
+        self.discard_requested = true;
+        Ok(())
+    }
     /// Defers main close only during editor creation or Save; completion owns whether that queued exit proceeds.
     /// Returns false for an idle draft, which ordinary application close may discard.
     pub fn defer_exit(&mut self) -> bool {
@@ -249,6 +279,8 @@ impl ConfigureState {
         self.occupied = true;
         self.completion = None;
         self.save_succeeded = false;
+        self.recovery_error = None;
+        self.discard_requested = false;
         Ok(())
     }
     /// Creates one submission guard after native validation; reentrant or repeated Save cannot replace active worker data.
@@ -256,6 +288,9 @@ impl ConfigureState {
         &mut self,
         mut draft: ConfigureDraft,
     ) -> Result<ConfigureSubmission, ValidationError> {
+        if self.discard_requested {
+            return Err(ValidationError::new(CONFIGURE_FIELD, CONFIGURE_MISSING));
+        }
         if self.pending.is_some() {
             return Err(ValidationError::new(CONFIGURE_FIELD, CONFIGURE_PENDING));
         }
@@ -543,5 +578,64 @@ mod tests {
             json[RESULT_FIELDS][macro_format::fields::NAME],
             CALLBACK_FAILED
         );
+    }
+
+    #[test]
+    /// Recovery Discard cannot release a healthy editor or a pending Save; failure still owns the original draft and operation guard.
+    fn recovery_discard_requires_failed_placement_and_settled_save() {
+        let mut state = ConfigureState {
+            occupied: true,
+            original: Some(draft()),
+            ..ConfigureState::default()
+        };
+        assert!(state.require_recovery_discard(None).is_err());
+        state.recovery_error = Some(CALLBACK_FAILED.into());
+        assert!(state.require_recovery_discard(None).is_ok());
+        state.begin(draft()).unwrap();
+        assert!(state.require_recovery_discard(None).is_err());
+        assert!(state.require_operation().is_err());
+        assert_eq!(state.original.as_ref().unwrap().name, NAME);
+        state.settle(&ConfigureResult::failure());
+        assert!(state.require_recovery_discard(None).is_ok());
+        state.reserve_recovery_discard(None).unwrap();
+        assert!(state.begin(draft()).is_err());
+        assert!(state.require_operation().is_err());
+    }
+
+    #[test]
+    /// A settled but previously unknown Save cannot be discarded until its exact authoritative receipt has been observed.
+    fn recovery_discard_requires_the_observed_save_receipt() {
+        let mut state = ConfigureState {
+            occupied: true,
+            original: Some(draft()),
+            recovery_error: Some(CALLBACK_FAILED.into()),
+            ..ConfigureState::default()
+        };
+        let attempt = state.begin(draft()).unwrap().attempt_id;
+        state.claim(attempt).unwrap();
+        state
+            .complete(ConfigureCompletion {
+                attempt_id: attempt,
+                result: ConfigureResult::failure(),
+                library: None,
+            })
+            .unwrap();
+        assert!(state.require_recovery_discard(None).is_err());
+        assert!(state
+            .require_recovery_discard(Some(attempt + ATTEMPT_INCREMENT))
+            .is_err());
+        assert!(state.require_recovery_discard(Some(attempt)).is_ok());
+        let newer = state.begin(draft()).unwrap().attempt_id;
+        assert!(state.require_recovery_discard(Some(attempt)).is_err());
+        state.claim(newer).unwrap();
+        state
+            .complete(ConfigureCompletion {
+                attempt_id: newer,
+                result: ConfigureResult::failure(),
+                library: None,
+            })
+            .unwrap();
+        assert!(state.require_recovery_discard(Some(attempt)).is_err());
+        assert!(state.require_recovery_discard(Some(newer)).is_ok());
     }
 }

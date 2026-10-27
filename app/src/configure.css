@@ -1,3 +1,22 @@
+.configure-placement-recovery {
+  flex-shrink: 0;
+  max-height: 65dvh;
+  overflow: auto;
+  padding: var(--space-panel);
+  border-bottom: 1px solid var(--danger);
+  background: var(--surface);
+}
+.configure-placement-recovery p {
+  margin: 0 0 var(--space-inline);
+}
+.configure-placement-recovery button {
+  margin: var(--space-label);
+  min-height: var(--control-size);
+  padding: var(--space-control) var(--space-inline);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--surface);
+}
 .configure-window {
   height: 100dvh;
   display: flex;

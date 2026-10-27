@@ -1,3 +1,7 @@
+use crate::configure_placement::{
+    self, Display as ConfigureDisplay, PlacementDesktop, Rect as ConfigureRect,
+    Size as ConfigureSize,
+};
 use crate::session::Session;
 use crate::session_control::{ControlRequest as ControlJob, QueuedControl};
 use crate::shortcuts::{
@@ -20,8 +24,8 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromRect, HDC, HMONITOR,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, HDC,
+    HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
@@ -41,19 +45,20 @@ use windows_sys::Win32::UI::Shell::{
     DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
-    GetSystemMetrics, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId,
-    KillTimer, PeekMessageW, PostThreadMessageW, SetTimer, SetWindowLongW, SetWindowPlacement,
-    SetWindowPos, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE,
-    HHOOK, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
-    LLKHF_INJECTED, MA_NOACTIVATE, MSG, MSLLHOOKSTRUCT, PBT_APMSUSPEND, PM_NOREMOVE,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    USER_TIMER_MINIMUM, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP, WM_CANCELMODE,
-    WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCLBUTTONDBLCLK,
-    WM_NCLBUTTONDOWN, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER, WS_EX_NOACTIVATE, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    CallNextHookEx, DispatchMessageW, GetClientRect, GetCursorPos, GetForegroundWindow,
+    GetMessageW, GetSystemMetrics, GetWindowLongW, GetWindowPlacement, GetWindowRect,
+    GetWindowThreadProcessId, KillTimer, PeekMessageW, PostThreadMessageW, SetTimer,
+    SetWindowLongW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, GWL_EXSTYLE, GWL_STYLE, HHOOK, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST,
+    KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, MA_NOACTIVATE, MSG, MSLLHOOKSTRUCT,
+    PBT_APMSUSPEND, PM_NOREMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, USER_TIMER_MINIMUM, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WINDOWPLACEMENT, WM_APP, WM_CANCELMODE, WM_DISPLAYCHANGE, WM_HOTKEY, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCDESTROY, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WS_EX_NOACTIVATE, WS_MAXIMIZE,
+    WS_MAXIMIZEBOX, WS_THICKFRAME,
 };
 
 static ENGINE: OnceLock<Arc<Session>> = OnceLock::new();
@@ -929,6 +934,466 @@ fn clamp_window_bounds(bounds: RECT) -> Result<RECT, String> {
         right: left + width,
         bottom: top + height,
     })
+}
+
+/// Converts one Win32 physical rectangle into the platform-independent Configure policy shape.
+fn configure_rect(rect: RECT) -> ConfigureRect {
+    ConfigureRect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    }
+}
+
+/// Converts policy geometry back to a by-value Win32 rectangle without DPI reinterpretation.
+fn configure_native_rect(rect: ConfigureRect) -> RECT {
+    RECT {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    }
+}
+
+/// Reads one live window's outer physical bounds; missing native information remains an explicit error.
+fn configure_bounds(hwnd: isize) -> Result<ConfigureRect, String> {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: caller supplies an application-owned live HWND; rect is writable initialized local output storage.
+    if unsafe { GetWindowRect(hwnd as HWND, &mut rect) } == 0 {
+        return Err(WINDOW_BOUNDS_ERROR.into());
+    }
+    Ok(configure_rect(rect))
+}
+
+/// Copies the current work/full bounds from an OS-owned monitor; no monitor handles escape this synchronous call.
+fn configure_monitor(monitor: HMONITOR) -> Result<ConfigureDisplay, String> {
+    // SAFETY: MONITORINFO permits zero initialization after its documented size is supplied.
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = size_of::<MONITORINFO>() as u32;
+    // SAFETY: monitor is supplied by the OS; info points to correctly sized writable local storage.
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return Err(WINDOW_WORK_AREA_ERROR.into());
+    }
+    const PRIMARY_MONITOR_FLAG: u32 = 1;
+    Ok(ConfigureDisplay {
+        bounds: configure_rect(info.rcMonitor),
+        work: configure_rect(info.rcWork),
+        primary: info.dwFlags & PRIMARY_MONITOR_FLAG != 0,
+    })
+}
+
+/// Collects only readable monitors; a failed monitor does not hide otherwise reachable displays.
+unsafe extern "system" fn configure_monitor_callback(
+    monitor: HMONITOR,
+    _: HDC,
+    _: *mut RECT,
+    output: LPARAM,
+) -> i32 {
+    if let Ok(display) = configure_monitor(monitor) {
+        // SAFETY: the synchronous enumerator exclusively borrows this Vec until all callbacks return.
+        unsafe { &mut *(output as *mut Vec<ConfigureDisplay>) }.push(display);
+    }
+    1
+}
+
+/// Enumerates displays, using direct nearest/primary queries when enumeration is unavailable or incomplete.
+pub(crate) fn configure_displays(owner: isize) -> Result<Vec<ConfigureDisplay>, String> {
+    let mut displays: Vec<ConfigureDisplay> = Vec::new();
+    // SAFETY: callback uses this uniquely borrowed Vec synchronously and retains no pointer.
+    let enumerated = unsafe {
+        EnumDisplayMonitors(
+            null_mut(),
+            std::ptr::null(),
+            Some(configure_monitor_callback),
+            &mut displays as *mut _ as LPARAM,
+        )
+    };
+    if enumerated == 0 || displays.is_empty() {
+        for (window, policy) in [
+            (owner, MONITOR_DEFAULTTONEAREST),
+            (0, MONITOR_DEFAULTTOPRIMARY),
+        ] {
+            // SAFETY: owner is an application HWND; null/invalid handles yield an OS fallback or a checked metadata error.
+            if let Ok(display) =
+                configure_monitor(unsafe { MonitorFromWindow(window as HWND, policy) })
+            {
+                if !displays
+                    .iter()
+                    .any(|existing| existing.bounds == display.bounds)
+                {
+                    displays.push(display);
+                }
+            }
+        }
+    }
+    if displays.is_empty() {
+        return Err(WINDOW_WORK_AREA_ERROR.into());
+    }
+    Ok(displays)
+}
+
+/// Resolves a still-current display and its DPI, rejecting stale geometry rather than applying the wrong conversion.
+fn configure_display_dpi(display: &ConfigureDisplay) -> Result<u32, String> {
+    let bounds = configure_native_rect(display.bounds);
+    // SAFETY: initialized bounds are borrowed synchronously; returned monitor remains OS-owned.
+    let monitor = unsafe { MonitorFromRect(&bounds, MONITOR_DEFAULTTONEAREST) };
+    let current = configure_monitor(monitor)?;
+    if current.bounds != display.bounds || current.work != display.work {
+        return Err(WINDOW_WORK_AREA_ERROR.into());
+    }
+    let mut x = BASE_DPI;
+    let mut y = BASE_DPI;
+    // SAFETY: OS-owned monitor; initialized writable DPI outputs are not retained.
+    if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } < 0 || x == 0 {
+        return Err(WINDOW_WORK_AREA_ERROR.into());
+    }
+    Ok(x)
+}
+
+/// Converts trusted logical content to a decorated physical size using this editor's styles and the destination's DPI.
+fn configure_frame_size(
+    editor: isize,
+    content: ContentSize,
+    dpi: u32,
+) -> Result<ConfigureSize, String> {
+    let scale = f64::from(dpi) / f64::from(BASE_DPI);
+    let mut frame = RECT {
+        left: 0,
+        top: 0,
+        right: (content.width * scale).ceil() as i32,
+        bottom: (content.height * scale).ceil() as i32,
+    };
+    // SAFETY: the editor HWND is live and owned; getters return style values without retaining borrowed memory.
+    let style = unsafe { GetWindowLongW(editor as HWND, GWL_STYLE) } as u32;
+    let extended = unsafe { GetWindowLongW(editor as HWND, GWL_EXSTYLE) } as u32;
+    // SAFETY: frame is initialized local storage; style values and destination DPI describe this decorated editor.
+    if unsafe { AdjustWindowRectExForDpi(&mut frame, style, 0, extended, dpi) } == 0 {
+        return Err(WINDOW_STYLE_ERROR.into());
+    }
+    Ok(ConfigureSize {
+        width: frame.right - frame.left,
+        height: frame.bottom - frame.top,
+    })
+}
+
+/// Reads the existing editor's logical content size so display recovery preserves resizing and never reloads its form.
+fn configure_content_size(editor: isize) -> Result<ContentSize, String> {
+    let mut client = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: live owned editor; client is writable initialized output storage.
+    if unsafe { GetClientRect(editor as HWND, &mut client) } == 0 {
+        return Err(WINDOW_BOUNDS_ERROR.into());
+    }
+    // SAFETY: the editor remains alive for the synchronous recovery operation.
+    let dpi = unsafe { GetDpiForWindow(editor as HWND) };
+    if dpi == 0 {
+        return Err(WINDOW_BOUNDS_ERROR.into());
+    }
+    let scale = f64::from(dpi) / f64::from(BASE_DPI);
+    Ok(ContentSize {
+        width: f64::from(client.right - client.left) / scale,
+        height: f64::from(client.bottom - client.top) / scale,
+    })
+}
+
+/// Native Configure adapter; handles are borrowed only during one event-thread opening/recovery operation.
+struct ConfigureDesktop {
+    owner: isize,
+    editor: isize,
+    content: ContentSize,
+}
+
+impl PlacementDesktop for ConfigureDesktop {
+    /// Reads the main frame at each placement pass; unavailable geometry invokes the policy's primary fallback.
+    fn owner(&self) -> Option<ConfigureRect> {
+        configure_bounds(self.owner).ok()
+    }
+    /// Refreshes monitor/work-area information for every placement pass.
+    fn displays(&self) -> Result<Vec<ConfigureDisplay>, String> {
+        configure_displays(self.owner)
+    }
+    /// Converts the preferred size and existing minimum at the destination's effective DPI, including decorations.
+    fn sizes(&self, display: &ConfigureDisplay) -> Result<(ConfigureSize, ConfigureSize), String> {
+        let dpi = configure_display_dpi(display)?;
+        let minimum = ContentSize {
+            width: crate::configure::MIN_WIDTH,
+            height: crate::configure::MIN_HEIGHT,
+        };
+        Ok((
+            configure_frame_size(self.editor, self.content, dpi)?,
+            configure_frame_size(self.editor, minimum, dpi)?,
+        ))
+    }
+    /// Applies the frame twice to settle cross-monitor DPI notifications, then verifies actual work-area containment and minimum content.
+    fn apply(&self, frame: ConfigureRect, display: &ConfigureDisplay) -> Result<(), String> {
+        const DPI_SETTLE_PASSES: usize = 2;
+        for _ in 0..DPI_SETTLE_PASSES {
+            // SAFETY: live owned editor, signed physical pixels, and explicit flags forbid activation and stacking changes.
+            if unsafe {
+                SetWindowPos(
+                    self.editor as HWND,
+                    null_mut(),
+                    frame.left,
+                    frame.top,
+                    frame.right - frame.left,
+                    frame.bottom - frame.top,
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+                )
+            } == 0
+            {
+                return Err(WINDOW_MOVE_ERROR.into());
+            }
+        }
+        configure_display_dpi(display)?;
+        let actual = configure_bounds(self.editor)?;
+        let content = configure_content_size(self.editor)?;
+        if !configure_contains(display.work, actual)
+            || content.width < crate::configure::MIN_WIDTH
+            || content.height < crate::configure::MIN_HEIGHT
+        {
+            return Err(configure_placement::PLACEMENT_FAILED.into());
+        }
+        Ok(())
+    }
+}
+
+/// Returns whether a valid decorated frame lies wholly inside one usable work area.
+fn configure_contains(work: ConfigureRect, frame: ConfigureRect) -> bool {
+    frame.valid()
+        && frame.left >= work.left
+        && frame.top >= work.top
+        && frame.right <= work.right
+        && frame.bottom <= work.bottom
+}
+
+/// Places an owned Configure window before showing it, or recovers the same resized window without activating it.
+pub fn place_configure(owner: isize, editor: isize, initial: bool) -> Result<(), String> {
+    let content = if initial {
+        ContentSize {
+            width: crate::configure::WIDTH,
+            height: crate::configure::HEIGHT,
+        }
+    } else {
+        configure_content_size(editor)?
+    };
+    configure_placement::place(&ConfigureDesktop {
+        owner,
+        editor,
+        content,
+    })?;
+    Ok(())
+}
+
+/// Checks actual current editor bounds against current usable areas after a display/work-area/DPI change.
+pub fn configure_reachable(owner: isize, editor: isize) -> Result<bool, String> {
+    let frame = configure_bounds(editor)?;
+    Ok(configure_placement::reachable(
+        frame,
+        &configure_displays(owner)?,
+    ))
+}
+
+/// Shows the already-positioned editor without activation, preserving external foreground focus during recovery.
+pub fn show_configure(editor: isize) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOMOVE;
+    // SAFETY: owned live editor; showing retains its verified geometry and never changes foreground or z-order.
+    if unsafe {
+        SetWindowPos(
+            editor as HWND,
+            null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_SHOWWINDOW
+                | SWP_NOMOVE
+                | SWP_NOSIZE
+                | SWP_NOACTIVATE
+                | SWP_NOZORDER
+                | SWP_NOOWNERZORDER,
+        )
+    } == 0
+    {
+        return Err(WINDOW_MOVE_ERROR.into());
+    }
+    Ok(())
+}
+
+/// Reports whether an owned native window currently has foreground focus, without requesting activation.
+pub fn configure_has_focus(hwnd: isize) -> bool {
+    // SAFETY: by-value comparison with an OS-owned foreground HWND; no pointers are dereferenced.
+    unsafe { GetForegroundWindow() == hwnd as HWND }
+}
+
+#[cfg(feature = "native-checks")]
+/// Creates a disposable native focus stand-in on its event thread; only the integration harness receives its owned handle.
+pub(crate) fn create_configure_focus_fixture() -> Result<isize, String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, SetForegroundWindow, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    };
+    const CLASS: &str = "STATIC";
+    const TITLE: &str = "Configure focus preservation check";
+    const ORIGIN: i32 = 100;
+    const SIZE: i32 = 200;
+    let class: Vec<u16> = CLASS.encode_utf16().chain(std::iter::once(0)).collect();
+    let title: Vec<u16> = TITLE.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: OS-owned STATIC class, initialized terminated strings, no borrowed creation context; handle is owned by this same-thread check.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            ORIGIN,
+            ORIGIN,
+            SIZE,
+            SIZE,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            null_mut(),
+        )
+    };
+    if hwnd.is_null() {
+        return Err(WINDOW_MOVE_ERROR.into());
+    }
+    // SAFETY: foreground request targets only the check-owned live disposable HWND.
+    unsafe {
+        SetForegroundWindow(hwnd);
+    }
+    Ok(hwnd as isize)
+}
+
+#[cfg(feature = "native-checks")]
+/// Releases only the disposable focus stand-in on the thread that created it; no production command accepts this handle.
+pub(crate) fn destroy_configure_focus_fixture(hwnd: isize) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
+    // SAFETY: this feature-only caller owns the HWND and dispatches destruction on its creating event thread.
+    if unsafe { DestroyWindow(hwnd as HWND) } == 0 {
+        return Err(WINDOW_MOVE_ERROR.into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "native-checks")]
+/// Sends a work-area-change notification only to a disposable integration editor, exercising the actual native observer.
+pub(crate) fn notify_configure_check(editor: isize) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    };
+    const NOTIFICATION_TIMEOUT_MS: u32 = 1000;
+    const NOTIFICATION_FAILED: &str = "Could not send Configure check notification";
+    let mut result = 0;
+    // SAFETY: the explicit harness owns this live editor; WM_SETTINGCHANGE requires synchronous delivery, and null lParam denotes no settings string.
+    if unsafe {
+        SendMessageTimeoutW(
+            editor as HWND,
+            WM_SETTINGCHANGE,
+            0,
+            0,
+            SMTO_ABORTIFHUNG,
+            NOTIFICATION_TIMEOUT_MS,
+            &mut result,
+        )
+    } == 0
+    {
+        return Err(NOTIFICATION_FAILED.into());
+    }
+    Ok(())
+}
+
+const CONFIGURE_DISPLAY_SUBCLASS: usize = 47;
+const CONFIGURE_DISPLAY_MESSAGE: u32 = WM_APP + 47;
+const CONFIGURE_WATCH_FAILED: &str = "Could not observe Configure display changes";
+
+/// Same-thread observer coalesces topology notifications; its native subclass owns one Rc until destruction.
+struct ConfigureDisplayObserver {
+    notify: Box<dyn Fn()>,
+    queued: Cell<bool>,
+}
+
+/// Installs display/work-area/DPI observation on a live editor's event thread, retaining only an owned callback.
+pub fn watch_configure_displays(editor: isize, notify: impl Fn() + 'static) -> Result<(), String> {
+    let observer = Rc::new(ConfigureDisplayObserver {
+        notify: Box::new(notify),
+        queued: Cell::new(false),
+    });
+    let owned = Rc::into_raw(observer);
+    // SAFETY: live same-thread editor; the static subclass owns this Rc until WM_NCDESTROY.
+    if unsafe {
+        SetWindowSubclass(
+            editor as HWND,
+            Some(configure_display_message),
+            CONFIGURE_DISPLAY_SUBCLASS,
+            owned as usize,
+        )
+    } == 0
+    {
+        // SAFETY: installation failed; the native callback never acquired the strong reference.
+        drop(unsafe { Rc::from_raw(owned) });
+        return Err(CONFIGURE_WATCH_FAILED.into());
+    }
+    Ok(())
+}
+
+/// Forwards native notifications first, then schedules one recovery check after DPI/default processing has settled.
+unsafe extern "system" fn configure_display_message(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _: usize,
+    data: usize,
+) -> LRESULT {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        PostMessageW, WM_DPICHANGED, WM_SETTINGCHANGE,
+    };
+    // SAFETY: installed on this owning thread; clone before any native forwarding can reentrantly destroy the editor.
+    let observer = unsafe {
+        Rc::increment_strong_count(data as *const ConfigureDisplayObserver);
+        Rc::from_raw(data as *const ConfigureDisplayObserver)
+    };
+    if message == CONFIGURE_DISPLAY_MESSAGE {
+        observer.queued.set(false);
+        (observer.notify)();
+        return 0;
+    }
+    if message == WM_NCDESTROY {
+        // SAFETY: remove only this installed same-thread subclass; local Rc keeps callback data alive through return.
+        if unsafe {
+            RemoveWindowSubclass(
+                hwnd,
+                Some(configure_display_message),
+                CONFIGURE_DISPLAY_SUBCLASS,
+            )
+        } != 0
+        {
+            // SAFETY: successful removal releases the subclass's owned reference exactly once.
+            drop(unsafe { Rc::from_raw(data as *const ConfigureDisplayObserver) });
+        }
+    }
+    // SAFETY: forwards unchanged by-value arguments through the remaining native subclass chain.
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if matches!(message, WM_DISPLAYCHANGE | WM_SETTINGCHANGE | WM_DPICHANGED)
+        && !observer.queued.replace(true)
+    {
+        // SAFETY: queues a scalar message to this live editor; no borrowed data escapes native dispatch.
+        if unsafe { PostMessageW(hwnd, CONFIGURE_DISPLAY_MESSAGE, 0, 0) } == 0 {
+            observer.queued.set(false);
+            (observer.notify)();
+        }
+    }
+    result
 }
 
 /// Owns native registration requests on the same message thread that installed the hooks.

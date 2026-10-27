@@ -40,6 +40,10 @@ import { useNativeSession } from './native-session';
 import { SessionControls } from './session-controls';
 import { SESSION_COMMAND } from './session-contract';
 import { useNativeRename } from './native-rename';
+import {
+  ConfigureRecoveryControls,
+  useConfigureRecovery,
+} from './configure-recovery-controls';
 
 const NATIVE_TRANSPORT: LibraryTransport = {
   /** @param receive Revisioned state subscriber. @returns Native event listener cleanup. */
@@ -93,13 +97,16 @@ export function LiveLibraryApp({
   const mounted = useRef(false);
   const session = useSessionPresentation();
   const { controller: windowController, view } = useCompactWindow();
+  const recovery = useConfigureRecovery();
   const configure = useNativeConfigure(
     /** @param completion Authoritative native save receipt. @returns Nothing; applies metadata before announcing success. */
     (completion: ConfigureCompletion) => controller.configured(completion),
     /** @param reason Failed result query. @returns Nothing; reports uncertainty without claiming that disk persistence failed. */
     (reason: unknown) =>
       windowController.report(`${CONFIGURE_TEXT.uncertain} ${String(reason)}`),
+    recovery.controller.dismissed,
   );
+  const configureBusy = configure.busy || recovery.snapshot.occupied;
   const desiredCompact = isCompactPhase(session.phase);
   const presentation = {
     ...presentedLibrary(snapshot, session, view),
@@ -180,7 +187,7 @@ export function LiveLibraryApp({
       void nativeSession.controller.request(command);
       return;
     }
-    if (configure.busy) return;
+    if (configureBusy) return;
     if (request.action === ACTION.play) {
       void nativeSession.controller.play(request.macroId);
       return;
@@ -214,6 +221,7 @@ export function LiveLibraryApp({
   return (
     <div className="app-layout">
       <div className="product-column">
+        <ConfigureRecoveryControls controller={recovery.controller} />
         {import.meta.env.DEV && !compact && (
           <div className="development-toggle">
             <button
@@ -234,7 +242,7 @@ export function LiveLibraryApp({
           </div>
         )}
         <LibraryView
-          snapshot={{ ...presentation, confirmationOpen: configure.busy }}
+          snapshot={{ ...presentation, confirmationOpen: configureBusy }}
           rename={rename}
           onSelect={select}
           onAction={action}

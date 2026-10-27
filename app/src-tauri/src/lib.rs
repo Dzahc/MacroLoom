@@ -2,6 +2,8 @@
 mod app_mode;
 mod configure;
 mod configure_model;
+mod configure_placement;
+mod configure_recovery;
 mod input;
 mod library_commands;
 pub mod macro_format;
@@ -113,12 +115,17 @@ fn desktop_builder_with_library(
             configure::configure_submit,
             configure::configure_status,
             configure::close_configure,
+            configure_recovery::configure_recovery_status,
+            configure_recovery::retry_configure_placement,
+            configure_recovery::discard_configure_placement,
             presentation::presentation_snapshot,
             presentation::preview_presentation,
             presentation::open_presentation_preview,
             presentation::set_window_view
         ])
 }
+#[cfg(feature = "native-checks")]
+mod configure_window_tests;
 #[cfg(feature = "native-checks")]
 mod preview_window_tests;
 #[cfg(feature = "native-checks")]
@@ -135,4 +142,11 @@ pub fn check_development_preview() {
 pub fn check_session_controls() {
     presentation::require_preview().expect("Session checks require development library mode");
     windows::check_session_controls();
+}
+
+#[cfg(feature = "native-checks")]
+/// Runs the isolated real-WebView Configure placement/recovery check with its own repository and no native input hooks.
+pub fn check_configure_placement() {
+    presentation::require_preview().expect("Configure checks require development library mode");
+    configure_window_tests::run();
 }
