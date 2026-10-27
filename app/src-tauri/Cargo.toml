@@ -22,6 +22,11 @@ name = "session-control-check"
 path = "src/bin/session-control-check.rs"
 required-features = ["native-checks"]
 
+[[bin]]
+name = "configure-placement-check"
+path = "src/bin/configure-placement-check.rs"
+required-features = ["native-checks"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -16,6 +16,9 @@ export const CONFIGURE_COMMAND = {
   submit: 'configure_submit',
   status: 'configure_status',
   close: 'close_configure',
+  recoveryStatus: 'configure_recovery_status',
+  retryPlacement: 'retry_configure_placement',
+  discardPlacement: 'discard_configure_placement',
 } as const;
 export const CONFIGURE_EVENT = {
   closed: 'configure-closed',
@@ -97,6 +100,15 @@ export type ConfigureStatus = Readonly<{
   completion: ConfigureCompletion | null;
 }>;
 export const CONFIGURE_TEXT = {
+  placementRecovery: 'Configure needs a visible display',
+  placementSaved: 'The last Save completed successfully.',
+  placementNotSaved: 'The last Save did not complete:',
+  placementRetained:
+    'Your edits are retained in the open editor. Retry to bring it back, or Discard to close it without another save.',
+  placementPending:
+    'Wait for Save to finish before discarding. Retry only moves the editor.',
+  placementDiscard: 'Discard Configure draft',
+  placementRetry: 'Retry Configure placement',
   title: 'Configure macro',
   name: 'Name',
   speed: 'Playback speed',

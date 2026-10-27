@@ -16,10 +16,10 @@ pub const CONFIGURE_CLOSED_EVENT: &str = "configure-closed";
 const MAIN_WINDOW: &str = "main";
 const EDITOR_URL: &str = "index.html?configure";
 const EDITOR_TITLE: &str = "MacroLoom — Configure macro";
-const WIDTH: f64 = 480.0;
-const HEIGHT: f64 = 620.0;
-const MIN_WIDTH: f64 = 360.0;
-const MIN_HEIGHT: f64 = 300.0;
+pub const WIDTH: f64 = 480.0;
+pub const HEIGHT: f64 = 620.0;
+pub const MIN_WIDTH: f64 = 360.0;
+pub const MIN_HEIGHT: f64 = 300.0;
 const LOCK_FAILED: &str = "Configure state is unavailable; restart MacroLoom";
 const INVALID_CALLER: &str = "Configure command is unavailable in this window";
 const SAVED_LIBRARY_DELIVERY_FAILED: &str = "Saved library update delivery failed";
@@ -147,11 +147,13 @@ fn create_window(app: &AppHandle) -> Result<(), String> {
             .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
             .resizable(true)
             .minimizable(false)
+            .visible(false)
+            .focused(false)
             .build()
             .map_err(|error| error.to_string())?;
-    if let Err(error) = main.set_enabled(false) {
+    if let Err(error) = crate::configure_recovery::open(app) {
         let _ = editor.destroy();
-        return Err(error.to_string());
+        return Err(error);
     }
     Ok(())
 }
@@ -310,6 +312,8 @@ fn reset(app: &AppHandle) {
         state.pending = None;
         state.exit_requested = false;
         state.save_succeeded = false;
+        state.recovery_error = None;
+        state.discard_requested = false;
     }
     if let Some(main) = app.get_webview_window(MAIN_WINDOW) {
         if let Err(error) = main.set_enabled(true) {
