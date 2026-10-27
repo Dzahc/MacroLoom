@@ -65,6 +65,13 @@ export class ConfigureRecoveryController {
     };
   };
 
+  /** @returns Nothing; authoritative native dismissal releases presentation ownership and invalidates older replies before focus restoration. */
+  dismissed = (): void => {
+    if (this.disposed) return;
+    this.revision += NEXT_REVISION;
+    this.update(EMPTY);
+  };
+
   /** @returns Polling cleanup that invalidates late responses; reconnect supports React's effect remounts. */
   connect(): () => void {
     this.disposed = false;

@@ -358,6 +358,12 @@ mod tests {
             right: -1600,
             ..SMALL_WORK
         };
+        const EXPECTED_PRIMARY_FRAME: Rect = Rect {
+            left: 710,
+            top: 210,
+            right: 1210,
+            bottom: 870,
+        };
         assert_eq!(
             fit(Some(OWNER), SMALL_WORK, DESIRED, MINIMUM).unwrap(),
             EXPECTED
@@ -365,12 +371,7 @@ mod tests {
         assert!(fit(Some(OWNER), TOO_SMALL, DESIRED, MINIMUM).is_err());
         assert_eq!(
             fit(None, PRIMARY, DESIRED, MINIMUM).unwrap(),
-            Rect {
-                left: 710,
-                top: 210,
-                right: 1210,
-                bottom: 870
-            }
+            EXPECTED_PRIMARY_FRAME
         );
     }
 

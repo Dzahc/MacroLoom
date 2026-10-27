@@ -26,6 +26,13 @@ const DEFERRED_NOT_READY = 'Deferred response not registered';
 const NO_DELIVERIES = 0;
 const ONE_DELIVERY = 1;
 const SAVE_ATTEMPT = 1;
+const DISMISSED: ConfigureRecoveryStatus = {
+  occupied: false,
+  needed: false,
+  pending: false,
+  message: '',
+  completion: null,
+};
 
 void test('pending and unavailable status cannot authorize draft Discard' /** @returns Completion checking native-status-driven availability without changing the retained draft. */, async () => {
   let status = { ...RETAINED, pending: true };
@@ -145,4 +152,35 @@ void test('Discard carries the exact authoritative save receipt presented to the
   await controller.discard();
   assert.equal(observed, SAVE_ATTEMPT);
   assert.equal(controller.getSnapshot().occupied, false);
+});
+
+void test('native dismissal releases recovery ownership immediately and ignores an older occupied query' /** @returns Completion verifying focus availability does not depend on the next recovery poll. */, async () => {
+  let delayed = false;
+  /** Throws until the native response callback has been installed. */
+  let deliver: (status: ConfigureRecoveryStatus) => void = (): void => {
+    throw new Error(DEFERRED_NOT_READY);
+  };
+  const oldStatus = new Promise<ConfigureRecoveryStatus>(
+    /** @param resolve Deferred native recovery reply. */ (resolve) => {
+      deliver = resolve;
+    },
+  );
+  const controller = new ConfigureRecoveryController({
+    /** @returns Occupied native state or a delayed query from before dismissal. */
+    status: () => (delayed ? oldStatus : Promise.resolve(RETAINED)),
+    /** @returns Unchanged editor ownership; unused in this close regression. */
+    retry: () => Promise.resolve(RECOVERED),
+    /** @returns Native dismissal snapshot; only the actual close event releases the tested interlock. */
+    discard: () => Promise.resolve(DISMISSED),
+  });
+  await controller.refresh();
+  delayed = true;
+  const reading = controller.refresh();
+  controller.dismissed();
+  assert.equal(controller.getSnapshot().occupied, false);
+  assert.equal(controller.getSnapshot().needed, false);
+  deliver(RETAINED);
+  await reading;
+  assert.equal(controller.getSnapshot().occupied, false);
+  assert.equal(controller.getSnapshot().needed, false);
 });

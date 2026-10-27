@@ -13,6 +13,7 @@ use tauri::{webview::PageLoadEvent, AppHandle, Manager, WebviewWindow};
 
 const TIMEOUT: Duration = Duration::from_secs(45);
 const POLL: Duration = Duration::from_millis(50);
+const FOCUS_TIMEOUT: Duration = Duration::from_secs(2);
 const CHANNEL_CAPACITY: usize = 1;
 const MAIN: &str = "main";
 const SUCCESS: i32 = 0;
@@ -20,7 +21,6 @@ const FAILURE: i32 = 1;
 const OFFSET: i32 = 60;
 const OFFSCREEN: i32 = 30_000;
 const FIXTURE: &str = r#"{"schemaVersion":1,"id":"68833c94-3d18-4fb2-8a59-0cc72382b616","name":"Configure placement fixture","createdAt":"2026-09-28T21:32:08Z","updatedAt":"2026-09-28T21:32:08Z","recording":{"platform":"windows","coordinateSpace":"screen_physical_pixels","keyboardLayout":"00000409","displays":[{"x":0,"y":0,"width":1920,"height":1080,"scaleFactor":1.0}]},"durationMs":0,"playback":{"speed":1.0,"repeatMode":"once","totalRuns":1,"intervalMs":0},"events":[{"atMs":0,"type":"key_up","key":"KeyA","native":{"scanCode":30,"virtualKey":65,"extended":false}}]}"#;
-const OPEN: &str = "window.__TAURI_INTERNALS__.invoke('open_configure',{macroId:'68833c94-3d18-4fb2-8a59-0cc72382b616'}).catch(e => document.body.dataset.configureCheckError=String(e))";
 const MAIN_READY: &str = "!!document.querySelector('.macro-library')";
 const NAME_SELECTED: &str = "document.activeElement?.id === 'configure-name' && document.activeElement.selectionStart === 0 && document.activeElement.selectionEnd === document.activeElement.value.length";
 const EDIT_NAME: &str = "(()=>{const e=document.querySelector('#configure-name'); const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;set.call(e,'Retained after display recovery');e.dispatchEvent(new Event('input',{bubbles:true}));return e.value==='Retained after display recovery'})()";
@@ -46,6 +46,19 @@ const LIBRARY_FAILED: &str = "Isolated Configure fixture library";
 const MAIN_FAILED: &str = "Loaded native main window";
 const BUILD_FAILED: &str = "Native Configure integration app builds";
 const CHECK_FAILED: &str = "Real Configure checks must pass";
+const FOCUS_NOT_RESTORED: &str = "Configure dismissal did not restore the enabled opening control before recovery polling resumed";
+const SELECT_MACRO: &str = "document.querySelector('.macro-row-select').click()";
+const MACRO_READY: &str = "Boolean(document.querySelector('.macro-row-select'))";
+const CONFIGURE_READY: &str =
+    "document.querySelector('[data-action=configure]')?.disabled === false";
+const OPEN_FROM_TOOLBAR: &str = "document.querySelector('[data-action=configure]').click()";
+const CONFIGURE_FOCUSED: &str = "document.hasFocus() && document.activeElement?.matches('[data-action=configure]') && document.activeElement.disabled === false";
+/// Delays only recovery-status replies at Tauri's native callback boundary; all other commands/events retain their real timing.
+const INSTALL_RECOVERY_HOLD: &str = "(()=>{const callbacks=window.__TAURI_INTERNALS__.callbacks;const nativeGet=callbacks.get.bind(callbacks);window.configureCheckHeld=[];callbacks.get=id=>{const callback=nativeGet(id);if(!callback)return callback;return result=>{if(result && typeof result==='object' && 'occupied' in result && 'needed' in result){if(document.body.dataset.configureCheckHold==='true'){window.configureCheckHeld.push(()=>callback(result));return;}if(result.occupied)document.body.dataset.configureCheckOccupied='true';}callback(result);};};return Object.hasOwn(callbacks,'get');})()";
+const RECOVERY_OCCUPIED: &str = "document.body.dataset.configureCheckOccupied === 'true'";
+const HOLD_RECOVERY: &str =
+    "(()=>{document.body.dataset.configureCheckHold='true';return true;})()";
+const RELEASE_RECOVERY: &str = "(()=>{document.body.dataset.configureCheckHold='false';delete document.body.dataset.configureCheckOccupied;window.configureCheckHeld.splice(0).forEach(deliver=>deliver());return true;})()";
 
 /// Executes a boolean observation in a real WebView; malformed/failed/abandoned evaluations are failures.
 fn evaluate(window: &WebviewWindow, expression: &str) -> Result<bool, String> {
@@ -63,10 +76,18 @@ fn evaluate(window: &WebviewWindow, expression: &str) -> Result<bool, String> {
 }
 
 /// Polls real DOM/native state on a worker, leaving the event loop available for WebView2 initialization and callbacks.
-fn wait(mut ready: impl FnMut() -> Result<bool, String>) -> Result<(), String> {
+fn wait(ready: impl FnMut() -> Result<bool, String>) -> Result<(), String> {
+    wait_with_timeout(TIMEOUT, ready)
+}
+
+/// Polls an exact assertion with a bounded deadline; focused regressions need not wait for the full application watchdog.
+fn wait_with_timeout(
+    timeout: Duration,
+    mut ready: impl FnMut() -> Result<bool, String>,
+) -> Result<(), String> {
     let started = Instant::now();
     while !ready()? {
-        if started.elapsed() > TIMEOUT {
+        if started.elapsed() > timeout {
             return Err(TIMED_OUT.into());
         }
         std::thread::sleep(POLL);
@@ -111,6 +132,13 @@ fn check_displays(app: &AppHandle, main: &WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// Waits for the real main controls and installs the fixture's delayed-reply transport before any editor opens.
+fn prepare_main(main: &WebviewWindow) -> Result<(), String> {
+    wait(|| evaluate(main, MAIN_READY))?;
+    evaluate(main, INSTALL_RECOVERY_HOLD)?;
+    Ok(())
+}
+
 /// Moves the owned main window to a real display before invoking the production opening command and checking initial focus.
 fn open_on_display(
     app: &AppHandle,
@@ -123,7 +151,7 @@ fn open_on_display(
     ))
     .map_err(|error| error.to_string())?;
     main.set_focus().map_err(|error| error.to_string())?;
-    main.eval(OPEN).map_err(|error| error.to_string())?;
+    open_from_toolbar(main)?;
     eprintln!("Configure native check: opening on {:?}", display);
     let editor = editor(app, main)?;
     eprintln!("Configure native check: editor created; waiting for selected Name input");
@@ -133,6 +161,15 @@ fn open_on_display(
         editor.scale_factor().map_err(|error| error.to_string())?
     );
     Ok(editor)
+}
+
+/// Uses the production selection and opening controls so the actual dismissal handler records its focus origin.
+fn open_from_toolbar(main: &WebviewWindow) -> Result<(), String> {
+    wait(|| evaluate(main, MACRO_READY))?;
+    main.eval(SELECT_MACRO).map_err(|error| error.to_string())?;
+    wait(|| evaluate(main, CONFIGURE_READY))?;
+    main.eval(OPEN_FROM_TOOLBAR)
+        .map_err(|error| error.to_string())
 }
 
 /// Moving the main frame after opening must preserve the editor's independently chosen placement.
@@ -189,12 +226,23 @@ fn check_cancel(
     main: &WebviewWindow,
     editor: &WebviewWindow,
 ) -> Result<(), String> {
+    wait(|| evaluate(main, RECOVERY_OCCUPIED))?;
+    evaluate(main, HOLD_RECOVERY)?;
+    editor.set_focus().map_err(|error| error.to_string())?;
     evaluate(editor, CANCEL)?;
     wait(|| Ok(app.get_webview_window(CONFIGURE_WINDOW).is_none()))?;
+    check_dismissal_focus(main)?;
+    evaluate(main, RELEASE_RECOVERY)?;
+    Ok(())
+}
+
+/// Requires browser focus on the enabled opening button while stale recovery ownership cannot be corrected by a poll.
+fn check_dismissal_focus(main: &WebviewWindow) -> Result<(), String> {
     if !main.is_enabled().map_err(|error| error.to_string())? {
         return Err(CANCEL_DISABLED_OWNER.into());
     }
-    Ok(())
+    wait_with_timeout(FOCUS_TIMEOUT, || evaluate(main, CONFIGURE_FOCUSED))
+        .map_err(|reason| format!("{FOCUS_NOT_RESTORED}: {reason}"))
 }
 
 /// Moves only this disposable editor offscreen, then sends a real work-area notification through its native subclass.
@@ -295,8 +343,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 let main = app.get_webview_window(MAIN).expect(MAIN_FAILED);
                 eprintln!("Configure native check: waiting for main library DOM");
-                let result =
-                    wait(|| evaluate(&main, MAIN_READY)).and_then(|_| check_displays(&app, &main));
+                let result = prepare_main(&main).and_then(|_| check_displays(&app, &main));
                 match result {
                     Ok(()) => app.exit(SUCCESS),
                     Err(error) => {

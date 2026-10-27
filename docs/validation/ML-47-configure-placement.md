@@ -76,7 +76,7 @@ manual observations remain outstanding; no display settings were changed.
 
 ## Completion gate and review
 
-Final completion command: `npm.cmd --prefix app run verify`.
+Initial implementation completion command: `npm.cmd --prefix app run verify`.
 Result on October 26, 2026: **PASS**, exit 0, all 14 checks passed. This includes
 112 frontend/tooling tests, 147 Rust unit tests plus 22 repository tests, 33
 Python quality fixtures, and 938 index/worktree function checks with no scores
@@ -92,3 +92,35 @@ Independent Standards review: zero findings. Spec review: one P2 uncertain-save
 dismissal finding, fixed with the displayed authoritative receipt and native
 attempt check; follow-up found zero remaining specification findings. The final
 completion gate ran after that fix. Verification is also recorded in ML-47.
+
+## Review follow-up: expected geometry and dismissal focus
+
+- Extracted the primary-display expected rectangle into the named
+  `EXPECTED_PRIMARY_FRAME` test constant, without changing runtime placement.
+- Native dismissal now clears recovery presentation ownership synchronously and
+  invalidates older status/action replies. The receipt query still completes
+  before ordinary controls become available.
+- Focus restoration runs in a layout effect after React commits enabled controls.
+  A pending focus request is reset on the next opening and cannot replay when a
+  recovery poll arrives. The existing document-focus check preserves external
+  foreground focus.
+- The actual Windows check now selects the fixture macro and opens Configure
+  through its toolbar button. It observes an occupied recovery reply, holds later
+  replies at the native callback boundary, then uses the form's Cancel and requires
+  the actual enabled Configure button to receive focus before replies resume.
+  Other commands/events continue through the real native bridge.
+- Before the fix, that check failed at dismissal. Targeted diagnostics also
+  captured a correct toolbar origin and active main document with a still-disabled
+  button at the old animation-frame focus attempt. After the fix, the expanded
+  native check passed three consecutive runs on both 100%/175% displays. The
+  controller regression confirms delayed occupied replies cannot reclaim closed
+  editor ownership. All temporary focus diagnostics were removed.
+
+Follow-up completion command: `npm.cmd --prefix app run verify`.
+Result: **PASS**, exit 0, all 14 checks passed, including 113 frontend/tooling
+tests, 147 Rust unit tests, 22 repository tests, 33 Python quality fixtures, and
+971 index/worktree function checks at complexity ≤10. The expanded native-checks
+Clippy command above also passed. The follow-up log is
+`.quality-output/ML-47-review-fixes-verify.log`; the seven existing interactive
+unit-test exclusions and outstanding hardware observations remain as documented
+above.

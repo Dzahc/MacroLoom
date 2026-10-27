@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -41,21 +42,23 @@ function restoreFocus(request: LibraryAction | null): void {
   );
 }
 
-/** @param completed Native authoritative completion subscriber. @param failed Recovery failure reporter. @returns Singleton opening callback and modal availability; listeners disconnect on teardown. */
+/** @param completed Native authoritative completion subscriber. @param failed Recovery failure reporter. @param onDismissed Synchronously releases recovery presentation ownership before restoring the opening control. @returns Singleton opening callback and modal availability; listeners disconnect on teardown. */
 export function useNativeConfigure(
   completed: (completion: ConfigureCompletion) => void,
   failed: (reason: unknown) => void,
+  onDismissed: () => void,
 ) {
   const [busy, setBusy] = useState(false);
+  const [focusRequest, setFocusRequest] = useState<LibraryAction | null>(null);
   const ready = useRef<Promise<void> | null>(null);
   const origin = useRef<LibraryAction | null>(null);
   const opening = useRef(false);
   const accept = useEffectEvent(completed);
   const report = useEffectEvent(failed);
+  const releaseRecovery = useEffectEvent(onDismissed);
   useEffect(
     /** Subscribes before opening an editor and cleans up registrations that complete after teardown. */ () => {
       let disposed = false;
-      let focusFrame: number | undefined;
       const cleanups: (() => void)[] = [];
       /** @returns Native completion after dismissal; disconnected owners ignore late delivery, and querying never submits a save. */
       async function reconcile() {
@@ -72,6 +75,7 @@ export function useNativeConfigure(
           CONFIGURE_EVENT.closed,
           /** Releases the view interlock and restores the initiating actual control. */ () => {
             if (disposed) return;
+            releaseRecovery();
             const dismissed = origin.current;
             void reconcile()
               .catch(
@@ -86,15 +90,7 @@ export function useNativeConfigure(
                   if (disposed) return;
                   opening.current = false;
                   setBusy(false);
-                  if (focusFrame !== undefined)
-                    cancelAnimationFrame(focusFrame);
-                  focusFrame = requestAnimationFrame(
-                    /** Restores the initiating control after disabled attributes update, without stealing external focus. */
-                    () => {
-                      if (!disposed && !opening.current)
-                        restoreFocus(dismissed);
-                    },
-                  );
+                  setFocusRequest(dismissed);
                 },
               );
           },
@@ -111,7 +107,6 @@ export function useNativeConfigure(
       /** Disconnects subscribers and prevents late receipt delivery; the native lifecycle retains ownership during Save. */
       return () => {
         disposed = true;
-        if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
         cleanups.forEach(
           /** @param cleanup Native listener release. @returns Nothing. */ (
             cleanup,
@@ -121,6 +116,12 @@ export function useNativeConfigure(
     },
     [],
   );
+  useLayoutEffect(
+    /** Restores the opening control only after React commits enabled controls; ordinary polling cannot replay the request. */ () => {
+      if (!busy && focusRequest && !opening.current) restoreFocus(focusRequest);
+    },
+    [busy, focusRequest],
+  );
   const open = useCallback(
     /** @param request Available Configure request. @returns Completion of native creation; failures release presentation availability and propagate for feedback. */ async (
       request: LibraryAction,
@@ -128,6 +129,7 @@ export function useNativeConfigure(
       if (!('macroId' in request) || opening.current) return;
       opening.current = true;
       origin.current = request;
+      setFocusRequest(null);
       setBusy(true);
       try {
         await ready.current;

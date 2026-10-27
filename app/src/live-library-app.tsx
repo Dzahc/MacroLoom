@@ -97,14 +97,15 @@ export function LiveLibraryApp({
   const mounted = useRef(false);
   const session = useSessionPresentation();
   const { controller: windowController, view } = useCompactWindow();
+  const recovery = useConfigureRecovery();
   const configure = useNativeConfigure(
     /** @param completion Authoritative native save receipt. @returns Nothing; applies metadata before announcing success. */
     (completion: ConfigureCompletion) => controller.configured(completion),
     /** @param reason Failed result query. @returns Nothing; reports uncertainty without claiming that disk persistence failed. */
     (reason: unknown) =>
       windowController.report(`${CONFIGURE_TEXT.uncertain} ${String(reason)}`),
+    recovery.controller.dismissed,
   );
-  const recovery = useConfigureRecovery();
   const configureBusy = configure.busy || recovery.snapshot.occupied;
   const desiredCompact = isCompactPhase(session.phase);
   const presentation = {
