@@ -17,25 +17,35 @@ import {
 import { ACTION, SOURCE, type LibraryAction } from './library-model';
 
 const FOCUS_TARGET = {
-  toolbar: `[data-action="${ACTION.configure}"]`,
+  toolbar: `.library-toolbar [data-action="${ACTION.configure}"]`,
   rows: '[data-macro-id]',
+  shortcut: '.macro-row.selected [data-configure-id]:not(:disabled)',
   fallback: '.macro-library',
 } as const;
 const LISTENER_FAILED = 'Configure dismissal listener registration failed';
+
+/** @param request Explicit macro opening request. @returns Its still-available selected-row shortcut, or the original context-menu row; identity matching avoids interpolating file data into selectors. */
+function originControl(
+  request: LibraryAction & { macroId: string },
+): HTMLElement | null {
+  const selector =
+    request.source === SOURCE.row ? FOCUS_TARGET.shortcut : FOCUS_TARGET.rows;
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>(selector)).find(
+      /** @param control Mounted opening surface. @returns Whether its stable macro identity matches the original Configure request. */
+      (control) =>
+        control.dataset.configureId === request.macroId ||
+        control.dataset.macroId === request.macroId,
+    ) ?? null
+  );
+}
 
 /** @param request Original opening control. @returns Nothing; restores actual control focus after the native owner is enabled. */
 function restoreFocus(request: LibraryAction | null): void {
   if (!request || !document.hasFocus()) return;
   let target = document.querySelector<HTMLElement>(FOCUS_TARGET.toolbar);
   if ('macroId' in request && request.source !== SOURCE.toolbar) {
-    target =
-      Array.from(
-        document.querySelectorAll<HTMLElement>(FOCUS_TARGET.rows),
-      ).find(
-        /** @param row Mounted library row. @returns Whether its stable identity opened Configure. */ (
-          row,
-        ) => row.dataset.macroId === request.macroId,
-      ) ?? null;
+    target = originControl(request);
   }
   (target ?? document.querySelector<HTMLElement>(FOCUS_TARGET.fallback))?.focus(
     { preventScroll: true },

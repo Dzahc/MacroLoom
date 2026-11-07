@@ -260,7 +260,9 @@ svg {
   position: relative;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--rename-pencil-size) max-content;
+  grid-template-columns:
+    minmax(0, 1fr) repeat(2, var(--rename-pencil-size))
+    max-content;
   align-items: center;
   min-height: var(--macro-row-control-size);
   gap: var(--space-control);
