@@ -46,6 +46,19 @@ const EXPECTED_COUNTDOWN = '3.0 s';
 const ONE_PENCIL = 1;
 const FIRST_INDEX = 0;
 const PENCIL_PATTERN = new RegExp(`data-action="${ACTION.rename}"`, 'g');
+const CONFIGURE_SHORTCUT_PATTERN = /<button[^>]*data-configure-id[^>]*>/g;
+const ONE_SHORTCUT = 1;
+const CONFIGURE_BLOCKERS: readonly Partial<LibrarySnapshot>[] = [
+  { loading: true },
+  { phase: PHASE.saving },
+  { phase: PHASE.recording },
+  { phase: PHASE.playing },
+  { phase: PHASE.interval },
+  { phase: PHASE.stopping },
+  { renameSaving: true },
+  { confirmationOpen: true },
+  { deleting: OTHER.id },
+];
 const DURATION_CASES = [
   [0, '00:00'],
   [TIME.millisecond - 1, '00:00'],
@@ -461,6 +474,50 @@ void test('selected row has a separate rename pencil while other rows reserve em
     /<button[^>]*data-macro-id[^>]*>(?:(?!<\/button>)[\s\S])*<button/,
   );
   assert.doesNotMatch(render(snapshot(), pencilEditor()), PENCIL_PATTERN);
+});
+
+/** Configure follows the pencil before duration; every normal row keeps both slots even with no selection. */
+void test('only the selected row exposes Configure and all rows reserve its space after Rename', () => {
+  const markup = render(snapshot({ selectedId: SELECTED.id }), pencilEditor());
+  assert.equal(
+    [...markup.matchAll(CONFIGURE_SHORTCUT_PATTERN)].length,
+    ONE_SHORTCUT,
+  );
+  assert.equal(
+    [...markup.matchAll(/class="macro-configure-slot"/g)].length,
+    SAMPLE_MACROS.length,
+  );
+  assert.match(
+    markup,
+    /macro-rename-slot[^]*?macro-configure-slot[^]*?macro-duration/,
+  );
+  assert.doesNotMatch(
+    render(snapshot(), pencilEditor()),
+    CONFIGURE_SHORTCUT_PATTERN,
+  );
+  const rename = pencilEditor();
+  rename.open(SELECTED);
+  assert.doesNotMatch(
+    render(snapshot({ macros: [SELECTED], selectedId: SELECTED.id }), rename),
+    CONFIGURE_SHORTCUT_PATTERN,
+  );
+});
+
+/** Inspection stays available on read-only storage while all toolbar exclusion states disable the row shortcut too. */
+void test('row Configure uses toolbar availability and remains a labelled native button', () => {
+  for (const changes of [{ writable: false }, ...CONFIGURE_BLOCKERS]) {
+    const state = snapshot({ selectedId: SELECTED.id, ...changes });
+    const shortcut = render(state).match(CONFIGURE_SHORTCUT_PATTERN)?.[
+      FIRST_INDEX
+    ];
+    assert.ok(shortcut);
+    assert.ok(shortcut.includes(`aria-label="${LABEL.configure}"`));
+    assert.equal(
+      /\sdisabled=/.test(shortcut),
+      !canRequest(state, ACTION.configure),
+    );
+    assert.doesNotMatch(shortcut, /tabindex=/);
+  }
 });
 
 /** Disabled pencils use a native disabled button and put their reason only on the icon-sized, non-focusable hover wrapper. */

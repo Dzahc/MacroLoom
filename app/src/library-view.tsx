@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { ActionIcon } from './action-icon';
 import { RenameEditor } from './rename-editor';
 import { RenamePencil } from './rename-pencil';
+import { ConfigureShortcut } from './configure-shortcut';
 import { restoreRenameFocus } from './rename-focus';
 import type { RenameBinding } from './rename-contract';
 import { useRenameShortcut } from './rename-shortcut';
@@ -299,6 +300,15 @@ function MacroRow({
                 snapshot={props.snapshot}
                 macroId={macro.id}
                 editorAvailable={Boolean(props.rename)}
+                onAction={props.onAction}
+              />
+            )}
+          </span>
+          <span className="macro-configure-slot">
+            {selected && (
+              <ConfigureShortcut
+                snapshot={props.snapshot}
+                macroId={macro.id}
                 onAction={props.onAction}
               />
             )}
